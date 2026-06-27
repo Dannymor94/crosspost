@@ -23,24 +23,31 @@ from crosspost.orchestrator.task import JSONIdempotencyStore, new_publication_id
 _BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen", "yandex"}
 
 
-def build_adapter(channel: str, store):
+async def build_adapter(channel: str, store):
     """Собрать API-адаптер канала из runtime/.env.
 
     Единственная точка, знающая про конкретные клиенты. Тяжёлые SDK
     (telethon/vkbottle) импортируются ЛЕНИВО внутри ветки — не тащим в шапку,
     тесты остаются лёгкими. Браузерные каналы тут не появляются (post-MVP).
+
+    Корутина: для telegram поднимаем реальный клиент (await start()) ещё до
+    публикации — отсюда async.
     """
     cfg = load_config()
 
     if channel == "telegram":
         from telethon import TelegramClient
+        from telethon.sessions import StringSession
 
-        # userbot: сессия — файл (TG_SESSION_PATH); коннект/логин — при smoke (шаг 5).
-        client = TelegramClient(
-            cfg.get("TG_SESSION_PATH", "runtime/sessions/telegram.session"),
-            int(cfg["TG_API_ID"]),
-            cfg["TG_API_HASH"],
-        )
+        # userbot на StringSession: грузим сохранённую сессию из TG_SESSION_PATH,
+        # стартуем (разовый интерактив телефон/код при первом запуске),
+        # сохраняем строку обратно — повторные запуски кода не попросят.
+        session_path = Path(cfg.get("TG_SESSION_PATH", "runtime/sessions/telegram.session"))
+        session_str = session_path.read_text().strip() if session_path.exists() else None
+        client = TelegramClient(StringSession(session_str), int(cfg["TG_API_ID"]), cfg["TG_API_HASH"])
+        await client.start()
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_text(client.session.save())
         return TelegramAdapter(client, target=cfg["TG_TARGET_CHANNEL"], store=store)
 
     if channel == "vk":
@@ -65,7 +72,7 @@ async def _run(content: CanonicalContent, channels: list[str], store) -> int:
             print(f"✗ {ch}: тип {content.type.value} не поддерживается")
             failures += 1
             continue
-        adapter = build_adapter(ch, store)
+        adapter = await build_adapter(ch, store)
         result = await adapter.publish(content, publication_id=publication_id)
         mark = "✓" if result.error is None else "✗"
         print(f"{mark} {ch}: {result.status.value}"

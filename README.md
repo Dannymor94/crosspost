@@ -50,7 +50,8 @@ make smoke                        # реальная отправка в TG+ВК
 - [x] **Telegram-адаптер** (Telethon): рендер + `send_file` + квитанция `message_id`, под TDD
 - [x] **ВК-адаптер**: многошаговая загрузка фото (`getWallUploadServer → upload → saveWallPhoto → wall.post`), квитанция `post_id`, под TDD
 - [x] **CLI `build_adapter()`**: сборка TG/ВК из `runtime/.env`, ленивые импорты SDK, отсев браузерных каналов
-- [ ] Smoke: реальный коннект Telethon (разовый логин) + живой VK-клиент; `make smoke` постит в оба канала
+- [x] **Smoke-проводка**: реальный коннект Telethon (`await start()` + StringSession в `TG_SESSION_PATH`, разовый логин), живой VK-клиент через `vkbottle`; `make smoke` зависит от `install-mvp`
+- [ ] Прогон `make smoke` с реальными ключами (`SETUP.md`) → первый настоящий пост в оба канала
 
 Тесты ядра и адаптеров — **на моках площадок** (mock-first), реальные ключи нужны только для `make smoke`. На текущий момент: 11 тестов зелёные.
 
