@@ -43,6 +43,7 @@ npm-debug.log*
 # ── ОКРУЖЕНИЕ / IDE / ОС ──────────────────────────────────────
 .vscode/
 .idea/
+.claude/
 .DS_Store
 Thumbs.db
 
