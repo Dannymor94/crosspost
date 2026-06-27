@@ -1,0 +1,40 @@
+[project]
+name = "crosspost"
+version = "0.1.0"
+description = "Локальный кросс-постинг: один контент -> несколько каналов. Граница API/браузер."
+requires-python = ">=3.11"
+# Базовое ядро MVP: только то, что нужно для API-тира из CLI. Без веба/очереди/браузера.
+dependencies = [
+    "pydantic>=2.6",
+    "python-dotenv>=1.0",
+    "telethon>=1.34",   # Telegram (userbot)
+    "vkbottle>=4.3",    # ВКонтакте; при желании заменить на сырой requests
+    "httpx>=0.27",      # Telegraph и прочие REST
+]
+
+[project.optional-dependencies]
+# Ставить по мере выхода за границу MVP.
+browser = ["playwright>=1.43"]                              # браузерный тир (эпик 5)
+infra   = ["celery>=5.3", "redis>=5.0", "sqlalchemy>=2.0",  # очередь+БД (эпик 3, post-MVP)
+           "alembic>=1.13", "psycopg[binary]>=3.1"]
+web     = ["fastapi>=0.110", "uvicorn>=0.29"]               # веб-интерфейс (эпик 4)
+crypto  = ["cryptography>=42.0"]                            # vault (эпик 6)
+youtube = ["google-api-python-client>=2.0",                 # YouTube Data API
+           "google-auth-oauthlib>=1.2"]
+dev     = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

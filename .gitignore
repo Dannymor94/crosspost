@@ -1,0 +1,53 @@
+# ── СЕКРЕТЫ И RUNTIME (несущая защита) ────────────────────────
+# Вся изменяемая и секретная дата живёт под runtime/ — игнорируем целиком
+runtime/
+
+# Подстраховка на случай, если что-то создалось вне runtime/
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+vault/
+vault.key
+*.key
+*.pem
+profiles/
+media_tmp/
+*.db
+*.sqlite
+*.sqlite3
+proxies.txt
+secrets/
+
+# ── PYTHON ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── NODE (фронтенд формы) ─────────────────────────────────────
+node_modules/
+.next/
+dist/
+*.log
+npm-debug.log*
+
+# ── ОКРУЖЕНИЕ / IDE / ОС ──────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── PLAYWRIGHT ────────────────────────────────────────────────
+# трейсы/скриншоты отладки могут содержать ленты и личные данные
+playwright-report/
+test-results/
+*.trace.zip
