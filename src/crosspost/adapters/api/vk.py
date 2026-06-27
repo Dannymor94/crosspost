@@ -1,13 +1,14 @@
-"""ВК-адаптер (VK API). Эпик 2. wall.post + многошаговая загрузка фото.
+"""ВК-адаптер (VK API через vkbottle). Эпик 2.
 
-Публикация на стену: photos.getWallUploadServer -> POST файла на upload-сервер
--> photos.saveWallPhoto -> wall.post. Квитанция — post_id из wall.post.
+Публикация на стену сообщества:
+  PhotoWallUploader(api).upload(path, group_id=...) -> "photo{owner_id}_{id}"
+  (uploader сам проходит photos.getWallUploadServer -> POST файла ->
+   photos.saveWallPhoto и отдаёт готовую attachment-строку),
+  затем api.wall.post(...) -> post_id. Квитанция — post_id (НЕ id фото).
 
 Идемпотентность: пропустить, если (publication_id, channel) уже done.
-SDK/HTTP импортируются ЛЕНИВО внутри метода (как Telethon в telegram.py),
-чтобы импорт модуля/тестов оставался лёгким.
-
-Статус: КАРКАС. publish ещё не реализован (красный тест test_vk.py).
+vkbottle импортируется ЛЕНИВО внутри publish (как и инъекция клиента в
+telegram.py — тяжёлый SDK не тащим в шапку, тесты остаются лёгкими).
 """
 from __future__ import annotations
 
@@ -19,12 +20,10 @@ from crosspost.orchestrator.task import IdempotencyStore
 class VKAdapter:
     channel = "vk"
 
-    def __init__(self, api, target: str, store: IdempotencyStore, *, upload_photo=None) -> None:
-        self._api = api              # VK API client (mockable); реальный — vkbottle, импорт отложен
-        self._target = int(target)   # owner_id стены (группа: отрицательный)
+    def __init__(self, api, target: str, store: IdempotencyStore) -> None:
+        self._api = api              # vkbottle API (инжектится; реальный строится в build_adapter)
+        self._target = int(target)   # owner_id стены (сообщество: отрицательный)
         self._store = store
-        # callable(upload_url, path) -> {server, photo, hash}; по умолчанию httpx (ленивый импорт)
-        self._upload_photo = upload_photo
 
     async def publish(
         self,
@@ -36,22 +35,17 @@ class VKAdapter:
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        # 1) получить адрес upload-сервера (группа: group_id положительный)
-        server = await self._api.photos.getWallUploadServer(group_id=abs(self._target))
+        from vkbottle import PhotoWallUploader  # ленивый импорт SDK
 
-        # 2) залить файл на upload-сервер -> {server, photo, hash}
-        uploaded = await self._upload(server.upload_url, content.media_paths[0])
-
-        # 3) сохранить фото на стене -> объект с owner_id/id для attachment
-        saved = await self._api.photos.saveWallPhoto(
-            server=uploaded["server"],
-            photo=uploaded["photo"],
-            hash=uploaded["hash"],
+        # 1) загрузка фото: uploader сам делает многошаговый upload и
+        #    возвращает готовую attachment-строку "photo{owner_id}_{id}"
+        uploader = PhotoWallUploader(self._api)
+        attachment = await uploader.upload(
+            str(content.media_paths[0]),
+            group_id=abs(self._target),
         )
-        photo = saved[0]
-        attachment = f"photo{photo.owner_id}_{photo.id}"
 
-        # 4) опубликовать запись -> post_id (квитанция, НЕ id фото)
+        # 2) публикация записи -> post_id (квитанция, НЕ id фото)
         posted = await self._api.wall.post(
             owner_id=self._target,
             message=content.text,
@@ -61,17 +55,6 @@ class VKAdapter:
         external_id = str(posted.post_id)
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
-
-    async def _upload(self, upload_url: str, path) -> dict:
-        """POST файла на upload-сервер ВК. httpx импортируется лениво (тесты лёгкие)."""
-        if self._upload_photo is not None:
-            return await self._upload_photo(upload_url, path)
-        import httpx
-
-        async with httpx.AsyncClient() as http:
-            with open(path, "rb") as f:
-                resp = await http.post(upload_url, files={"photo": f})
-        return resp.json()
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека
