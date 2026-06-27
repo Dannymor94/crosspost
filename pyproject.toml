@@ -3,6 +3,7 @@ name = "crosspost"
 version = "0.1.0"
 description = "Локальный кросс-постинг: один контент -> несколько каналов. Граница API/браузер."
 requires-python = ">=3.11"
+license = { text = "MIT" }
 # Базовое ядро MVP: только то, что нужно для API-тира из CLI. Без веба/очереди/браузера.
 dependencies = [
     "pydantic>=2.6",
