@@ -41,8 +41,10 @@ class TelegramAdapter:
             caption=caption,
         )
 
-        # 4) квитанция — message_id; помечаем (publication_id, channel) как done
-        external_id = str(sent.id)
+        # 4) квитанция — message_id первого сообщения (у альбома send_file возвращает список;
+        #    первое сообщение несёт caption и его id показывается при шаринге альбома).
+        msg = sent[0] if isinstance(sent, list) else sent
+        external_id = str(msg.id)
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
 
