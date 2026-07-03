@@ -51,6 +51,14 @@
 - [ ] **[СТАРТ] TG-адаптер (Telethon)** — постинг от лица канала, `StringSession`
   - Приёмка: пост уходит; вернулась квитанция; повторный вызов с тем же `publication_id` не создаёт дубль (дедуп по внутреннему ключу, не по `external_id`)
 - [ ] VK-адаптер — `wall.post` + загрузка фото через wall upload server
+  > **Развилка (отложено, post-MVP-0):** community-токен не грузит фото (VKAPIError 27,
+  > проверено `PhotoWallUploader` + `PhotoToAlbumUploader`). Сейчас ВК постит текстом
+  > (`VK_PHOTO_UPLOAD_ENABLED=false`) — для MVP-0 достаточно. Два пути на будущее:
+  > - **A. User-токен (API-тир):** добить OAuth-поток `wall+photos+offline`; фото остаётся
+  >   в API-тире — чисто, стабильно, предпочтительно.
+  > - **B. Playwright (браузерный тир):** если user-токен недостижим — перенести ВК-фото
+  >   в эпик 5 (вместе с Дзен/IG/WhatsApp). Тянет profile/лок/verify-before-retry/
+  >   health-check и риск аккаунта. Не раньше MVP-2.
 - [ ] Telegraph-адаптер — публикация статьи (`type=article`)
 - [ ] YouTube-адаптер — Data API, заливка видео (`type=reel`); учесть суточную квоту
 
