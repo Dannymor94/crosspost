@@ -75,10 +75,10 @@ class VKAdapter:
         """Загрузить фото, вернуть attachment-строку "photo{owner}_{id}".
 
         Попытка 1: PhotoWallUploader (photos.getWallUploadServer).
-        Попытка 2: PhotoAlbumUploader (photos.getUploadServer + group_id).
+        Попытка 2: PhotoToAlbumUploader (photos.getUploadServer, album_id=-group_id).
         Обе — community-токеном. Если ни одна не прошла → VKPhotoUploadError.
         """
-        from vkbottle import PhotoAlbumUploader, PhotoWallUploader
+        from vkbottle import PhotoToAlbumUploader, PhotoWallUploader
         from vkbottle.exception_factory import VKAPIError
 
         group_id = abs(self._target)
@@ -90,25 +90,24 @@ class VKAdapter:
         except VKAPIError as e:
             wall_error = f"PhotoWallUploader (getWallUploadServer): {e}"
 
-        # Попытка 2 — getUploadServer (альбом сообщества)
-        # wall_album_id = -group_id — служебный альбом стены сообщества
+        # Попытка 2 — getUploadServer (альбом стены сообщества, album_id=-group_id).
+        # PhotoToAlbumUploader.upload(album_id, paths_like, group_id=) -> list[str]
+        # где каждый элемент — готовая attachment-строка "photo{owner}_{id}".
         try:
-            album_uploader = PhotoAlbumUploader(self._api)
-            photos = await album_uploader.upload(
+            album_uploader = PhotoToAlbumUploader(self._api)
+            attachments = await album_uploader.upload(
+                -group_id,   # wall album id = -group_id
                 path,
-                album_id=-group_id,  # wall album id
                 group_id=group_id,
             )
-            # upload() возвращает список объектов фото; берём первое
-            photo = photos[0] if isinstance(photos, list) else photos
-            return f"photo{photo.owner_id}_{photo.id}"
+            return attachments[0]
         except VKAPIError as e:
-            album_error = f"PhotoAlbumUploader (getUploadServer): {e}"
+            album_error = f"PhotoToAlbumUploader (getUploadServer): {e}"
 
         raise VKPhotoUploadError(
             "Загрузка фото не прошла ни одним из методов community-токеном.\n"
             f"  1) {wall_error}\n"
-            f"  2) {album_error}\n"
+            f"  2) {album_error}\n"  # type: ignore[possibly-undefined]
             "Варианты: установите VK_PHOTO_UPLOAD_ENABLED=false (текстовый пост) "
             "или переключитесь на user-токен с правами photos."
         )
