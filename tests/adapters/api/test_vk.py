@@ -1,13 +1,11 @@
-"""Тесты ВК-адаптера (фаза 0, шаг 3 — переписан под РЕАЛЬНЫЙ vkbottle).
+"""Тесты ВК-адаптера.
 
-Реальная форма vkbottle (сверено с исходниками vkbottle):
-  uploader = PhotoWallUploader(api)                  # конструктор берёт api
-  attachment = await uploader.upload(path, group_id=...)  # -> "photo{owner}_{id}"
-  posted = await api.wall.post(owner_id=, message=, attachments=)  # snake_case
-  external_id = posted.post_id                       # квитанция
+Реальная форма vkbottle (сверено с исходниками):
+  PhotoWallUploader(api).upload(path, group_id=...)         -> attachment str
+  PhotoAlbumUploader(api).upload(path, album_id=, group_id=) -> [photo_obj]
+  api.wall.post(owner_id=, message=, attachments=)          -> obj с .post_id
 
-Мок повторяет именно эти вызовы (не выдуманный camelCase). vkbottle подменяется
-через sys.modules — ставить пакет не нужно.
+vkbottle + vkbottle.exception_factory подменяются через sys.modules.
 """
 from __future__ import annotations
 
@@ -17,37 +15,103 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from crosspost.adapters.api.vk import VKAdapter
+from crosspost.adapters.api.vk import VKAdapter, VKPhotoUploadError
 from crosspost.adapters.base import ResultStatus
 
 
+# ── фикстуры ────────────────────────────────────────────────────────────────
+
 @pytest.fixture
 def fake_vk_api() -> AsyncMock:
-    """Мок vkbottle.API: нужен только wall.post, возвращающий объект с post_id."""
     api = AsyncMock()
     posted = AsyncMock()
-    posted.post_id = 777  # post_id — это и есть квитанция
+    posted.post_id = 777
     api.wall.post.return_value = posted
     return api
 
 
 @pytest.fixture
 def fake_vkbottle(monkeypatch) -> types.ModuleType:
-    """Подменяем vkbottle: PhotoWallUploader(api).upload(...) -> attachment-строка."""
+    """Happy path: PhotoWallUploader успешно загружает фото."""
     mod = types.ModuleType("vkbottle")
-    uploader = MagicMock(name="PhotoWallUploader()")
-    # upload — корутина, реальный возврат — готовая attachment-строка
-    uploader.upload = AsyncMock(return_value="photo-100_555")
-    mod.PhotoWallUploader = MagicMock(name="PhotoWallUploader", return_value=uploader)
+    exc_mod = types.ModuleType("vkbottle.exception_factory")
+
+    # Базовый класс ошибок VK API — для isinstance-проверок в адаптере
+    class VKAPIError(Exception):
+        pass
+
+    exc_mod.VKAPIError = VKAPIError
+
+    wall_uploader = MagicMock(name="PhotoWallUploader()")
+    wall_uploader.upload = AsyncMock(return_value="photo-100_555")
+    mod.PhotoWallUploader = MagicMock(name="PhotoWallUploader", return_value=wall_uploader)
+
+    album_uploader = MagicMock(name="PhotoAlbumUploader()")
+    album_uploader.upload = AsyncMock()  # не должен вызываться в happy path
+    mod.PhotoAlbumUploader = MagicMock(name="PhotoAlbumUploader", return_value=album_uploader)
+
     monkeypatch.setitem(sys.modules, "vkbottle", mod)
+    monkeypatch.setitem(sys.modules, "vkbottle.exception_factory", exc_mod)
     return mod
 
+
+@pytest.fixture
+def fake_vkbottle_wall_denied(monkeypatch) -> types.ModuleType:
+    """Wall-загрузка → ACCESS_DENIED; альбомная загрузка успешна."""
+    mod = types.ModuleType("vkbottle")
+    exc_mod = types.ModuleType("vkbottle.exception_factory")
+
+    class VKAPIError(Exception):
+        pass
+
+    exc_mod.VKAPIError = VKAPIError
+
+    wall_uploader = MagicMock(name="PhotoWallUploader()")
+    wall_uploader.upload = AsyncMock(side_effect=VKAPIError("ACCESS_DENIED (15)"))
+    mod.PhotoWallUploader = MagicMock(name="PhotoWallUploader", return_value=wall_uploader)
+
+    photo_obj = MagicMock()
+    photo_obj.owner_id = -100
+    photo_obj.id = 999
+    album_uploader = MagicMock(name="PhotoAlbumUploader()")
+    album_uploader.upload = AsyncMock(return_value=[photo_obj])
+    mod.PhotoAlbumUploader = MagicMock(name="PhotoAlbumUploader", return_value=album_uploader)
+
+    monkeypatch.setitem(sys.modules, "vkbottle", mod)
+    monkeypatch.setitem(sys.modules, "vkbottle.exception_factory", exc_mod)
+    return mod
+
+
+@pytest.fixture
+def fake_vkbottle_both_denied(monkeypatch) -> types.ModuleType:
+    """Обе попытки загрузки → ACCESS_DENIED."""
+    mod = types.ModuleType("vkbottle")
+    exc_mod = types.ModuleType("vkbottle.exception_factory")
+
+    class VKAPIError(Exception):
+        pass
+
+    exc_mod.VKAPIError = VKAPIError
+
+    wall_uploader = MagicMock(name="PhotoWallUploader()")
+    wall_uploader.upload = AsyncMock(side_effect=VKAPIError("ACCESS_DENIED wall"))
+    mod.PhotoWallUploader = MagicMock(name="PhotoWallUploader", return_value=wall_uploader)
+
+    album_uploader = MagicMock(name="PhotoAlbumUploader()")
+    album_uploader.upload = AsyncMock(side_effect=VKAPIError("ACCESS_DENIED album"))
+    mod.PhotoAlbumUploader = MagicMock(name="PhotoAlbumUploader", return_value=album_uploader)
+
+    monkeypatch.setitem(sys.modules, "vkbottle", mod)
+    monkeypatch.setitem(sys.modules, "vkbottle.exception_factory", exc_mod)
+    return mod
+
+
+# ── тесты ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_skips_when_already_published(
     store, publication_id, sample_post, fake_vk_api, fake_vkbottle
 ):
-    """Если (publication_id, channel) уже done — не публикуем (даже uploader не строим)."""
     store.mark_done(publication_id, "vk", external_id="999")
     adapter = VKAdapter(fake_vk_api, target="-100", store=store)
 
@@ -59,32 +123,94 @@ async def test_skips_when_already_published(
 
 
 @pytest.mark.asyncio
-async def test_publishes_and_returns_receipt(
+async def test_publishes_via_wall_uploader(
     store, publication_id, sample_post, fake_vk_api, fake_vkbottle
 ):
-    """RED: публикация грузит фото через PhotoWallUploader и постит wall.post.
-
-    Квитанция — post_id из wall.post, а attachment из загрузки уходит в пост.
-    """
+    """Happy path: PhotoWallUploader (getWallUploadServer) проходит."""
     adapter = VKAdapter(fake_vk_api, target="-100", store=store)
 
     result = await adapter.publish(sample_post, publication_id=publication_id)
 
     assert result.status is ResultStatus.DONE
-    assert result.external_id == "777"  # post_id, не id фото
+    assert result.external_id == "777"
 
-    # PhotoWallUploader(api) — конструктор получает наш api
     fake_vkbottle.PhotoWallUploader.assert_called_once_with(fake_vk_api)
-
-    # upload(path, group_id=abs(owner_id)) — реальная сигнатура
     uploader = fake_vkbottle.PhotoWallUploader.return_value
     uploader.upload.assert_awaited_once()
     assert uploader.upload.call_args.kwargs["group_id"] == 100
 
-    # attachment из загрузки уходит в wall.post, owner_id — стена сообщества
-    fake_vk_api.wall.post.assert_awaited_once()
+    fake_vkbottle.PhotoAlbumUploader.assert_not_called()  # вторая попытка не нужна
+
     post_kwargs = fake_vk_api.wall.post.call_args.kwargs
     assert post_kwargs["owner_id"] == -100
     assert post_kwargs["attachments"] == "photo-100_555"
+    assert store.is_done(publication_id, "vk")
 
-    assert store.is_done(publication_id, "vk")  # помечено done
+
+@pytest.mark.asyncio
+async def test_falls_back_to_album_uploader_on_wall_denied(
+    store, publication_id, sample_post, fake_vk_api, fake_vkbottle_wall_denied
+):
+    """Если getWallUploadServer → ACCESS_DENIED, пробуем PhotoAlbumUploader."""
+    mod = fake_vkbottle_wall_denied
+    adapter = VKAdapter(fake_vk_api, target="-100", store=store)
+
+    result = await adapter.publish(sample_post, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert result.external_id == "777"
+
+    # wall-попытка была сделана (и упала)
+    mod.PhotoWallUploader.assert_called_once_with(fake_vk_api)
+    # album-попытка сработала
+    mod.PhotoAlbumUploader.assert_called_once_with(fake_vk_api)
+    album_uploader = mod.PhotoAlbumUploader.return_value
+    album_uploader.upload.assert_awaited_once()
+    call_kwargs = album_uploader.upload.call_args.kwargs
+    assert call_kwargs["group_id"] == 100
+    assert call_kwargs["album_id"] == -100  # wall album id = -group_id
+
+    post_kwargs = fake_vk_api.wall.post.call_args.kwargs
+    assert post_kwargs["attachments"] == "photo-100_999"  # photo{owner_id}_{id}
+    assert store.is_done(publication_id, "vk")
+
+
+@pytest.mark.asyncio
+async def test_raises_explicit_error_when_both_methods_denied(
+    store, publication_id, sample_post, fake_vk_api, fake_vkbottle_both_denied
+):
+    """Если обе попытки ACCESS_DENIED → VKPhotoUploadError с явным текстом."""
+    adapter = VKAdapter(fake_vk_api, target="-100", store=store)
+
+    with pytest.raises(VKPhotoUploadError) as exc_info:
+        await adapter.publish(sample_post, publication_id=publication_id)
+
+    msg = str(exc_info.value)
+    assert "PhotoWallUploader" in msg
+    assert "PhotoAlbumUploader" in msg
+    assert "VK_PHOTO_UPLOAD_ENABLED=false" in msg  # подсказка пользователю
+
+    # wall.post не должен был вызываться — фото не загружено
+    fake_vk_api.wall.post.assert_not_called()
+    assert not store.is_done(publication_id, "vk")
+
+
+@pytest.mark.asyncio
+async def test_photo_upload_disabled_posts_text_only(
+    store, publication_id, sample_post, fake_vk_api, fake_vkbottle
+):
+    """VK_PHOTO_UPLOAD_ENABLED=false: wall.post без attachments, SDK не вызывается."""
+    adapter = VKAdapter(fake_vk_api, target="-100", store=store, photo_upload=False)
+
+    result = await adapter.publish(sample_post, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert result.external_id is not None
+    assert "photo_skipped" in result.external_id  # явная пометка в квитанции
+
+    fake_vkbottle.PhotoWallUploader.assert_not_called()
+    fake_vkbottle.PhotoAlbumUploader.assert_not_called()
+
+    post_kwargs = fake_vk_api.wall.post.call_args.kwargs
+    assert "attachments" not in post_kwargs  # чистый текстовый пост
+    assert store.is_done(publication_id, "vk")

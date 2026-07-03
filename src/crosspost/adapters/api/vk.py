@@ -1,14 +1,20 @@
 """ВК-адаптер (VK API через vkbottle). Эпик 2.
 
-Публикация на стену сообщества:
-  PhotoWallUploader(api).upload(path, group_id=...) -> "photo{owner_id}_{id}"
-  (uploader сам проходит photos.getWallUploadServer -> POST файла ->
-   photos.saveWallPhoto и отдаёт готовую attachment-строку),
-  затем api.wall.post(...) -> post_id. Квитанция — post_id (НЕ id фото).
+Публикация на стену сообщества.
 
-Идемпотентность: пропустить, если (publication_id, channel) уже done.
-vkbottle импортируется ЛЕНИВО внутри publish (как и инъекция клиента в
-telegram.py — тяжёлый SDK не тащим в шапку, тесты остаются лёгкими).
+Загрузка фото — цепочка двух попыток (обе с токеном сообщества):
+  1. PhotoWallUploader  — внутри вызывает photos.getWallUploadServer.
+     Работает с user-токеном; с community-токеном VK может вернуть ACCESS_DENIED.
+  2. PhotoAlbumUploader — внутри вызывает photos.getUploadServer (загрузка в альбом
+     сообщества, group_id). Attachment берётся из первого сохранённого фото.
+     Проверяем, доступен ли этот метод community-токену.
+
+Если обе попытки дали VKAPIError → VKPhotoUploadError с явным текстом (не стек).
+Если VK_PHOTO_UPLOAD_ENABLED=false → пропускаем фото, постим только текст.
+
+Квитанция — post_id из wall.post.
+Идемпотентность: пропустить если (publication_id, channel) уже done.
+vkbottle импортируется ЛЕНИВО внутри publish.
 """
 from __future__ import annotations
 
@@ -17,13 +23,25 @@ from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
 
 
+class VKPhotoUploadError(Exception):
+    """Ни один метод загрузки фото не прошёл с текущим токеном."""
+
+
 class VKAdapter:
     channel = "vk"
 
-    def __init__(self, api, target: str, store: IdempotencyStore) -> None:
-        self._api = api              # vkbottle API (инжектится; реальный строится в build_adapter)
+    def __init__(
+        self,
+        api,
+        target: str,
+        store: IdempotencyStore,
+        *,
+        photo_upload: bool = True,
+    ) -> None:
+        self._api = api              # vkbottle API
         self._target = int(target)   # owner_id стены (сообщество: отрицательный)
         self._store = store
+        self._photo_upload = photo_upload
 
     async def publish(
         self,
@@ -31,30 +49,69 @@ class VKAdapter:
         *,
         publication_id: str,
     ) -> ChannelResult:
-        # идемпотентность — дедуп по внутреннему ключу, не по external_id
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        from vkbottle import PhotoWallUploader  # ленивый импорт SDK
+        attachment: str | None = None
+        if self._photo_upload and content.media_paths:
+            attachment = await self._upload_photo(str(content.media_paths[0]))
 
-        # 1) загрузка фото: uploader сам делает многошаговый upload и
-        #    возвращает готовую attachment-строку "photo{owner_id}_{id}"
-        uploader = PhotoWallUploader(self._api)
-        attachment = await uploader.upload(
-            str(content.media_paths[0]),
-            group_id=abs(self._target),
-        )
-
-        # 2) публикация записи -> post_id (квитанция, НЕ id фото)
         posted = await self._api.wall.post(
             owner_id=self._target,
             message=content.text,
-            attachments=attachment,
+            **({"attachments": attachment} if attachment else {}),
         )
 
         external_id = str(posted.post_id)
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
+
+        status = ResultStatus.DONE
+        if not attachment and content.media_paths:
+            # фото было, но загрузка отключена флагом — фиксируем в квитанции
+            external_id += ":photo_skipped"
+        return ChannelResult(self.channel, status, external_id=external_id)
+
+    async def _upload_photo(self, path: str) -> str:
+        """Загрузить фото, вернуть attachment-строку "photo{owner}_{id}".
+
+        Попытка 1: PhotoWallUploader (photos.getWallUploadServer).
+        Попытка 2: PhotoAlbumUploader (photos.getUploadServer + group_id).
+        Обе — community-токеном. Если ни одна не прошла → VKPhotoUploadError.
+        """
+        from vkbottle import PhotoAlbumUploader, PhotoWallUploader
+        from vkbottle.exception_factory import VKAPIError
+
+        group_id = abs(self._target)
+
+        # Попытка 1 — getWallUploadServer
+        try:
+            uploader = PhotoWallUploader(self._api)
+            return await uploader.upload(path, group_id=group_id)
+        except VKAPIError as e:
+            wall_error = f"PhotoWallUploader (getWallUploadServer): {e}"
+
+        # Попытка 2 — getUploadServer (альбом сообщества)
+        # wall_album_id = -group_id — служебный альбом стены сообщества
+        try:
+            album_uploader = PhotoAlbumUploader(self._api)
+            photos = await album_uploader.upload(
+                path,
+                album_id=-group_id,  # wall album id
+                group_id=group_id,
+            )
+            # upload() возвращает список объектов фото; берём первое
+            photo = photos[0] if isinstance(photos, list) else photos
+            return f"photo{photo.owner_id}_{photo.id}"
+        except VKAPIError as e:
+            album_error = f"PhotoAlbumUploader (getUploadServer): {e}"
+
+        raise VKPhotoUploadError(
+            "Загрузка фото не прошла ни одним из методов community-токеном.\n"
+            f"  1) {wall_error}\n"
+            f"  2) {album_error}\n"
+            "Варианты: установите VK_PHOTO_UPLOAD_ENABLED=false (текстовый пост) "
+            "или переключитесь на user-токен с правами photos."
+        )
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека

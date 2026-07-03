@@ -54,7 +54,8 @@ async def build_adapter(channel: str, store):
         from vkbottle import API
 
         api = API(token=cfg["VK_ACCESS_TOKEN"])
-        return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store)
+        photo_upload = cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true").lower() != "false"
+        return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
