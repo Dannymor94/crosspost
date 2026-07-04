@@ -51,14 +51,16 @@
 - [ ] **[СТАРТ] TG-адаптер (Telethon)** — постинг от лица канала, `StringSession`
   - Приёмка: пост уходит; вернулась квитанция; повторный вызов с тем же `publication_id` не создаёт дубль (дедуп по внутреннему ключу, не по `external_id`)
 - [ ] VK-адаптер — `wall.post` + загрузка фото через wall upload server
-  > **Развилка (отложено, post-MVP-0):** community-токен не грузит фото (VKAPIError 27,
-  > проверено `PhotoWallUploader` + `PhotoToAlbumUploader`). Сейчас ВК постит текстом
-  > (`VK_PHOTO_UPLOAD_ENABLED=false`) — для MVP-0 достаточно. Два пути на будущее:
-  > - **A. User-токен (API-тир):** добить OAuth-поток `wall+photos+offline`; фото остаётся
-  >   в API-тире — чисто, стабильно, предпочтительно.
-  > - **B. Playwright (браузерный тир):** если user-токен недостижим — перенести ВК-фото
-  >   в эпик 5 (вместе с Дзен/IG/WhatsApp). Тянет profile/лок/verify-before-retry/
-  >   health-check и риск аккаунта. Не раньше MVP-2.
+  > **⛔ ЗАБЛОКИРОВАНО платформой (проверено вживую, post-MVP-0).**
+  > - Community-токен: фото — ошибка 27, текст — ошибка 214 (нет прав постить на стену).
+  > - User-токен: официальный OAuth-поток id.vk.com / Web-приложение не отдаёт Implicit-токен.
+  > - VK-мессенджер: публичного API для постинга не обнаружено.
+  > Код `VKAdapter` готов и покрыт тестами — ждёт рабочий токен/доступ.
+  > **MVP-0 закрывается на Telegram.** Возврат к ВК — отдельной задачей после MVP:
+  > - **A. Standalone-приложение (API-тир):** зарегистрировать Standalone-app в VK, получить
+  >   user-токен с `wall+photos+offline` через Device Code или PKCE — остаётся API-тиром.
+  > - **B. Playwright (браузерный тир):** перенести ВК вместе с эпиком 5 (WhatsApp/Instagram/
+  >   Дзен/Яндекс). Тянет profile/лок/verify-before-retry/health-check. Не раньше MVP-2.
 - [ ] Telegraph-адаптер — публикация статьи (`type=article`)
 - [ ] YouTube-адаптер — Data API, заливка видео (`type=reel`); учесть суточную квоту
 

@@ -22,7 +22,7 @@ mvp: install-mvp test
 # Финиш MVP-0: реальная отправка в TG+ВК с ключами из runtime/.env.
 # Зависит от install-mvp: иначе `python -m crosspost` падает с "No module named crosspost".
 smoke: install-mvp
-	python -m crosspost post --type post --text "smoke test" --image runtime/sample.jpg --to telegram,vk
+	python -m crosspost post --type post --text "smoke test" --image runtime/sample.jpg --to telegram
 
 # Post-MVP:
 up:
