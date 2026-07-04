@@ -18,6 +18,20 @@ _KNOWN_KEYS = [
 ]
 
 
+_FALSY = {"false", "0", "no", "off", ""}
+
+
+def parse_bool(value: str, default: bool = True) -> bool:
+    """Разобрать строковое значение флага из .env в bool.
+
+    "false"/"0"/"no"/"off"/"" → False.  Всё остальное → True.
+    Регистронезависимо. default используется только если value is None.
+    """
+    if value is None:
+        return default
+    return value.strip().lower() not in _FALSY
+
+
 def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Прочитать .env (+ окружение) в dict. Отсутствие файла — не ошибка."""
     cfg: dict[str, str] = {}

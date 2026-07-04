@@ -13,7 +13,7 @@ from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter
-from crosspost.config import load_config
+from crosspost.config import load_config, parse_bool
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import validate
@@ -54,7 +54,7 @@ async def build_adapter(channel: str, store):
         from vkbottle import API
 
         api = API(token=cfg["VK_ACCESS_TOKEN"])
-        photo_upload = cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true").lower() != "false"
+        photo_upload = parse_bool(cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true"))
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
     if channel in _BROWSER_CHANNELS:

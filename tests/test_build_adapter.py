@@ -88,6 +88,27 @@ async def test_builds_vk_adapter(store, fake_vkbottle):
     fake_vkbottle.API.assert_called_once()  # VK-сессия собрана без сети
 
 
+async def test_vk_photo_upload_disabled_when_flag_is_false(store, fake_vkbottle, monkeypatch, fake_cfg):
+    """VK_PHOTO_UPLOAD_ENABLED=false (строка из .env) → adapter.photo_upload == False."""
+    fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "false"
+    monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))
+
+    adapter = await cli.build_adapter("vk", store)
+
+    assert isinstance(adapter, VKAdapter)
+    assert adapter._photo_upload is False
+
+
+async def test_vk_photo_upload_enabled_when_flag_is_true(store, fake_vkbottle, monkeypatch, fake_cfg):
+    """VK_PHOTO_UPLOAD_ENABLED=true (строка из .env) → adapter.photo_upload == True."""
+    fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "true"
+    monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))
+
+    adapter = await cli.build_adapter("vk", store)
+
+    assert adapter._photo_upload is True
+
+
 async def test_unknown_channel_raises_clear_error(store):
     with pytest.raises(ValueError, match="неизвестн"):
         await cli.build_adapter("myspace", store)
