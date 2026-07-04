@@ -12,7 +12,8 @@ import asyncio
 from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
-from crosspost.adapters.api.vk import VKAdapter
+from crosspost.adapters.api.vk import VKAdapter           # "vk_api" — ждёт рабочий токен
+from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.config import load_config, parse_bool
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
@@ -24,14 +25,11 @@ _BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen", "yandex"}
 
 
 async def build_adapter(channel: str, store):
-    """Собрать API-адаптер канала из runtime/.env.
+    """Собрать адаптер канала из runtime/.env.
 
-    Единственная точка, знающая про конкретные клиенты. Тяжёлые SDK
-    (telethon/vkbottle) импортируются ЛЕНИВО внутри ветки — не тащим в шапку,
-    тесты остаются лёгкими. Браузерные каналы тут не появляются (post-MVP).
-
-    Корутина: для telegram поднимаем реальный клиент (await start()) ещё до
-    публикации — отсюда async.
+    "vk"     → VKBrowserAdapter (браузерный тир; API-путь заблокирован платформой).
+    "vk_api" → VKAdapter (API-тир, ждёт рабочий токен — оставлен для будущего).
+    Тяжёлые SDK импортируются ЛЕНИВО внутри ветки.
     """
     cfg = load_config()
 
@@ -51,15 +49,22 @@ async def build_adapter(channel: str, store):
         return TelegramAdapter(client, target=cfg["TG_TARGET_CHANNEL"], store=store)
 
     if channel == "vk":
-        from vkbottle import API
+        # Браузерный тир: API заблокирован (err 27/214), работаем через Playwright.
+        profiles_dir = cfg.get("BROWSER_PROFILES_DIR", "runtime/browser_profiles")
+        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        group_id = abs(int(cfg["VK_GROUP_ID"]))
+        return VKBrowserAdapter(group_id, profiles_dir, store, headless=headless)
 
+    if channel == "vk_api":
+        # API-тир ВК — оставлен на случай появления рабочего user-токена.
+        from vkbottle import API
         api = API(token=cfg["VK_ACCESS_TOKEN"])
         photo_upload = parse_bool(cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true"))
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
-            f"{channel}: браузерный канал вне MVP-0 — здесь только API-тир (telegram, vk)"
+            f"{channel}: браузерный канал вне текущего scope — реализован только vk"
         )
     raise ValueError(f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk)")
 

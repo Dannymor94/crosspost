@@ -20,6 +20,7 @@ import pytest
 from crosspost import __main__ as cli
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter
+from crosspost.adapters.browser.vk import VKBrowserAdapter
 
 
 @pytest.fixture
@@ -80,31 +81,40 @@ async def test_builds_telegram_adapter_starts_and_persists_session(store, fake_c
     assert Path(fake_cfg["TG_SESSION_PATH"]).read_text() == "SAVED_STRING_SESSION"
 
 
-async def test_builds_vk_adapter(store, fake_vkbottle):
+async def test_builds_vk_browser_adapter(store):
+    """'vk' → VKBrowserAdapter (браузерный тир, API заблокирован платформой)."""
     adapter = await cli.build_adapter("vk", store)
+
+    assert isinstance(adapter, VKBrowserAdapter)
+    assert adapter.channel == "vk"
+
+
+async def test_builds_vk_api_adapter(store, fake_vkbottle):
+    """'vk_api' → VKAdapter (API-тир, ждёт рабочий токен)."""
+    adapter = await cli.build_adapter("vk_api", store)
 
     assert isinstance(adapter, VKAdapter)
     assert adapter.channel == "vk"
-    fake_vkbottle.API.assert_called_once()  # VK-сессия собрана без сети
+    fake_vkbottle.API.assert_called_once()
 
 
-async def test_vk_photo_upload_disabled_when_flag_is_false(store, fake_vkbottle, monkeypatch, fake_cfg):
-    """VK_PHOTO_UPLOAD_ENABLED=false (строка из .env) → adapter.photo_upload == False."""
+async def test_vk_api_photo_upload_disabled_when_flag_is_false(store, fake_vkbottle, monkeypatch, fake_cfg):
+    """VK_PHOTO_UPLOAD_ENABLED=false → VKAdapter.photo_upload == False (канал vk_api)."""
     fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "false"
     monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))
 
-    adapter = await cli.build_adapter("vk", store)
+    adapter = await cli.build_adapter("vk_api", store)
 
     assert isinstance(adapter, VKAdapter)
     assert adapter._photo_upload is False
 
 
-async def test_vk_photo_upload_enabled_when_flag_is_true(store, fake_vkbottle, monkeypatch, fake_cfg):
-    """VK_PHOTO_UPLOAD_ENABLED=true (строка из .env) → adapter.photo_upload == True."""
+async def test_vk_api_photo_upload_enabled_when_flag_is_true(store, fake_vkbottle, monkeypatch, fake_cfg):
+    """VK_PHOTO_UPLOAD_ENABLED=true → VKAdapter.photo_upload == True (канал vk_api)."""
     fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "true"
     monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))
 
-    adapter = await cli.build_adapter("vk", store)
+    adapter = await cli.build_adapter("vk_api", store)
 
     assert adapter._photo_upload is True
 
