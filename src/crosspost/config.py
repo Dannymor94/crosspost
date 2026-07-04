@@ -14,7 +14,7 @@ DEFAULT_ENV_PATH = Path("runtime/.env")
 # Ключи API-тира MVP-0 — их разрешено брать прямо из окружения, даже без файла.
 _KNOWN_KEYS = [
     "TG_API_ID", "TG_API_HASH", "TG_TARGET_CHANNEL", "TG_SESSION_PATH",
-    "VK_ACCESS_TOKEN", "VK_GROUP_ID",
+    "VK_ACCESS_TOKEN", "VK_GROUP_ID", "VK_PHOTO_UPLOAD_ENABLED",
 ]
 
 
