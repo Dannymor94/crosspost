@@ -16,7 +16,9 @@ from crosspost.content.canonical import CanonicalContent
 class ResultStatus(str, Enum):
     DONE = "done"
     FAILED = "failed"
-    SKIPPED = "skipped"  # идемпотентность: уже опубликовано
+    SKIPPED = "skipped"      # идемпотентность: уже опубликовано
+    SUBMITTED = "submitted"  # fire-and-forget: ушло на модерацию (Яндекс Бизнес)
+    NEEDS_RELOGIN = "needs_relogin"  # сессия протухла — нужен ручной логин
 
 
 @dataclass(frozen=True)

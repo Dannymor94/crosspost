@@ -1,28 +1,29 @@
 """Минимальная обвязка браузерного тира. Эпик 5.
 
-Одна функция: запустить Playwright с персистентным профилем и отдать страницу.
+Предоставляет:
+  open_page()     — контекст-менеджер: браузер с PERSISTENT профилем, лок, закрытие.
+  is_logged_in()  — helper: проверить авторизацию по URL и/или наличию DOM-маркера.
+
 Профиль хранится в BROWSER_PROFILES_DIR/{channel}/ — один профиль на канал,
 изолированный, с сохранёнными cookies/sessionStorage. Залогинился один раз —
 следующие запуски идут без повторного логина.
 
-Лок (user, channel) — asyncio.Lock на экземпляр адаптера. Один адаптер =
-одна задача в момент времени (CLAUDE.md инвариант 5). Мультиюзер и персистентный
-хранилище локов — post-MVP.
+Паттерн verify_before_retry:
+  Адаптер вызывает собственный _find_existing_card(page, text) ПЕРЕД отправкой.
+  Если карточка найдена — возвращает DONE/SUBMITTED без дублирования.
+  Это закрывает окно «послали → упали до mark_done» (CLAUDE.md инвариант 2).
 
-Playwright импортируется ЛЕНИВО внутри open_page() — не тянем пакет на уровне
-CLI-импорта (браузерный тир не входит в install-mvp).
+Лок (user, channel) — asyncio.Lock на имя канала. Мультиюзер — post-MVP.
+Playwright импортируется ЛЕНИВО внутри open_page() — не тянем в шапку CLI.
 """
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from contextlib import asynccontextmanager
 
-
-# Лок на уровне модуля — один слот на (channel-имя). При мультиюзере заменить
-# на dict[(user_id, channel)] -> Lock, но это post-MVP.
 _channel_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -42,7 +43,7 @@ async def open_page(
     """Поднять браузер с персистентным профилем, вернуть страницу.
 
     Использовать как:
-        async with open_page("vk", cfg["BROWSER_PROFILES_DIR"]) as page:
+        async with open_page("yandex", cfg["BROWSER_PROFILES_DIR"]) as page:
             await page.goto(...)
 
     Контекст гасится после выхода из блока. Лок удерживается всё время.
@@ -59,7 +60,6 @@ async def open_page(
             context = await pw.chromium.launch_persistent_context(
                 str(profile_path),
                 headless=headless,
-                # базовые настройки против детекции бота
                 locale="ru-RU",
                 timezone_id="Europe/Moscow",
             )
@@ -68,3 +68,28 @@ async def open_page(
                 yield page
             finally:
                 await context.close()
+
+
+async def is_logged_in(
+    page,
+    *,
+    reject_url_fragments: tuple[str, ...] = (),
+    require_selector: str | None = None,
+    timeout: int = 5_000,
+) -> bool:
+    """Проверить авторизацию по URL и/или DOM-маркеру.
+
+    reject_url_fragments — если любой из фрагментов есть в текущем URL,
+      считаем пользователя НЕ залогиненным (напр. "passport", "login").
+    require_selector — если указан, проверяем его наличие в DOM.
+    """
+    url: str = page.url
+    for fragment in reject_url_fragments:
+        if fragment in url:
+            return False
+    if require_selector:
+        try:
+            await page.wait_for_selector(require_selector, timeout=timeout)
+        except Exception:
+            return False
+    return True

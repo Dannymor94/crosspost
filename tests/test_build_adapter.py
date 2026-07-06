@@ -21,6 +21,7 @@ from crosspost import __main__ as cli
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter
 from crosspost.adapters.browser.vk import VKBrowserAdapter
+from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 
 
 @pytest.fixture
@@ -33,6 +34,8 @@ def fake_cfg(tmp_path) -> dict[str, str]:
         "TG_SESSION_PATH": str(tmp_path / "sessions" / "tg.session"),
         "VK_ACCESS_TOKEN": "vk-token",
         "VK_GROUP_ID": "100",
+        "YANDEX_ORG_ID": "org999",
+        "BROWSER_PROFILES_DIR": str(tmp_path / "profiles"),
     }
 
 
@@ -117,6 +120,15 @@ async def test_vk_api_photo_upload_enabled_when_flag_is_true(store, fake_vkbottl
     adapter = await cli.build_adapter("vk_api", store)
 
     assert adapter._photo_upload is True
+
+
+async def test_builds_yandex_browser_adapter(store):
+    """'yandex' → YandexBrowserAdapter."""
+    adapter = await cli.build_adapter("yandex", store)
+
+    assert isinstance(adapter, YandexBrowserAdapter)
+    assert adapter.channel == "yandex"
+    assert adapter._org_id == "org999"
 
 
 async def test_unknown_channel_raises_clear_error(store):

@@ -12,8 +12,9 @@ import asyncio
 from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
-from crosspost.adapters.api.vk import VKAdapter           # "vk_api" — ждёт рабочий токен
+from crosspost.adapters.api.vk import VKAdapter               # "vk_api" — ждёт рабочий токен
 from crosspost.adapters.browser.vk import VKBrowserAdapter
+from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 from crosspost.config import load_config, parse_bool
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
@@ -21,7 +22,7 @@ from crosspost.content.validation import validate
 from crosspost.orchestrator.task import JSONIdempotencyStore, new_publication_id
 
 # Браузерный тир (post-MVP) — в API-фабрику не пускаем (граница API↔браузер).
-_BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen", "yandex"}
+_BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen"}  # yandex реализован отдельной веткой
 
 
 async def build_adapter(channel: str, store):
@@ -62,11 +63,19 @@ async def build_adapter(channel: str, store):
         photo_upload = parse_bool(cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true"))
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
+    if channel == "yandex":
+        profiles_dir = cfg.get("BROWSER_PROFILES_DIR", "runtime/browser_profiles")
+        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        org_id = cfg["YANDEX_ORG_ID"]
+        return YandexBrowserAdapter(org_id, profiles_dir, store, headless=headless)
+
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
-            f"{channel}: браузерный канал вне текущего scope — реализован только vk"
+            f"{channel}: браузерный канал пока не реализован (реализованы: vk, yandex)"
         )
-    raise ValueError(f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk)")
+    raise ValueError(
+        f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk, yandex, vk_api)"
+    )
 
 
 async def _run(content: CanonicalContent, channels: list[str], store) -> int:
