@@ -35,7 +35,7 @@ def fake_cfg(tmp_path) -> dict[str, str]:
         "VK_ACCESS_TOKEN": "vk-token",
         "VK_GROUP_ID": "100",
         "YANDEX_ORG_ID": "org999",
-        "BROWSER_PROFILES_DIR": str(tmp_path / "profiles"),
+        "BROWSER_PROFILES_DIR": str(tmp_path / "browser_profiles"),
     }
 
 

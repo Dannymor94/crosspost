@@ -31,7 +31,8 @@ from crosspost.orchestrator.task import IdempotencyStore
 # Все в одном месте — при редизайне Яндекса менять только здесь.
 
 # URL
-_POSTS_URL = "https://yandex.ru/sprav/{org_id}/posts"
+_POSTS_URL = "https://yandex.ru/sprav/{org_id}/p/edit/posts/"
+_STORIES_URL = "https://yandex.ru/sprav/{org_id}/p/edit/stories/"  # для type=story (post-MVP)
 
 # Маркеры авторизации / неавторизации
 _LOGIN_URL_FRAGMENTS = ("passport.yandex", "auth/login", "accounts/login")
@@ -41,6 +42,17 @@ _CABINET_SELECTOR = 'a[href*="/sprav/"], [data-testid*="org"], nav'
 _TEXT_PLACEHOLDER = "Расскажите о событиях, акциях и новостях"
 _CREATE_BUTTON_NAME = "Создать"
 _PHOTO_BUTTON_NAME = "Добавить"
+# Кнопка публикации поста. На странице несколько кнопок «Создать…»
+# («Создать событие», «Создать историю») — частичный матч по имени ловит все три
+# (strict mode violation). Берём ровно нашу: семантический класс, а фолбэком —
+# точное имя (exact=True отсекает «событие»/«историю»).
+_SUBMIT_BUTTON_SELECTOR = "button.PostAddForm-Submit"
+
+# Превью загруженного фото. Яндекс рисует его как DIV с background-image
+# (avatars.mds.yandex.net/...), НЕ как <img src="blob:...">.
+#   контейнер:  div.PostAddForm-Photos (он же PostPhotosCollection)
+#   одно фото:  div.PostPhotosCollection-Photo (style: background-image: url(...))
+_PHOTO_PREVIEW_SELECTOR = ".PostPhotosCollection-Photo"
 
 # Карточки публикаций (список ниже формы)
 _CARD_TEXT_SELECTOR = "article, [class*='post'], [class*='card'], [class*='item']"
@@ -58,13 +70,11 @@ class YandexBrowserAdapter:
     def __init__(
         self,
         org_id: str,
-        profiles_dir: str | Path,
         store: IdempotencyStore,
         *,
         headless: bool = False,
     ) -> None:
         self._org_id = org_id
-        self._profiles_dir = profiles_dir
         self._store = store
         self._headless = headless
 
@@ -78,7 +88,7 @@ class YandexBrowserAdapter:
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        async with open_page(self.channel, self._profiles_dir, headless=self._headless) as page:
+        async with open_page(self.channel, headless=self._headless) as page:
             # 2) переходим в раздел Публикации
             url = _POSTS_URL.format(org_id=self._org_id)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)
@@ -113,8 +123,8 @@ class YandexBrowserAdapter:
             if content.media_paths:
                 await self._attach_photos(page, content.media_paths[:4])
 
-            # 7) нажать «Создать»
-            await page.get_by_role("button", name=_CREATE_BUTTON_NAME).click()
+            # 7) нажать «Создать» (ровно кнопку публикации поста)
+            await self._click_create(page)
 
             # 8) VERIFY: ждём появления карточки с нашим текстом
             external_id = await self._wait_for_card(page, content.text)
@@ -124,6 +134,18 @@ class YandexBrowserAdapter:
         return ChannelResult(self.channel, ResultStatus.SUBMITTED, external_id=external_id)
 
     # ── внутренние методы ────────────────────────────────────────────────────
+
+    async def _click_create(self, page) -> None:
+        """Нажать ровно кнопку публикации поста, не «Создать событие/историю».
+
+        Сперва семантический класс button.PostAddForm-Submit (одна кнопка формы).
+        Если её нет — точное имя get_by_role(..., exact=True): «Создать» без хвоста.
+        """
+        submit = page.locator(_SUBMIT_BUTTON_SELECTOR)
+        if await submit.count() > 0:
+            await submit.first.click()
+            return
+        await page.get_by_role("button", name=_CREATE_BUTTON_NAME, exact=True).click()
 
     async def _find_card(self, page, text: str) -> bool:
         """Найти карточку с данным текстом в списке публикаций (verify-before-retry)."""
@@ -149,10 +171,7 @@ class YandexBrowserAdapter:
         file_input = page.locator('input[type="file"]').first
         if await file_input.count() > 0:
             await file_input.set_input_files(abs_paths)
-            await page.wait_for_selector(
-                '[class*="preview"], [class*="thumb"], img[src*="blob"]',
-                timeout=_FILE_UPLOAD_TIMEOUT,
-            )
+            await self._wait_for_photos(page, len(abs_paths))
             return
 
         # Запасной путь: expect_file_chooser при клике на «Добавить»
@@ -160,8 +179,18 @@ class YandexBrowserAdapter:
             await page.get_by_role("button", name=_PHOTO_BUTTON_NAME).click()
         fc = await fc_info.value
         await fc.set_files(abs_paths)
-        await page.wait_for_selector(
-            '[class*="preview"], [class*="thumb"], img[src*="blob"]',
+        await self._wait_for_photos(page, len(abs_paths))
+
+    async def _wait_for_photos(self, page, count: int) -> None:
+        """Дождаться, пока Яндекс отрисует превью всех загруженных фото.
+
+        Превью — div.PostPhotosCollection-Photo (background-image), не <img>.
+        Ждём появления хотя бы одного, затем что их число == count.
+        """
+        await page.wait_for_selector(_PHOTO_PREVIEW_SELECTOR, timeout=_FILE_UPLOAD_TIMEOUT)
+        await page.wait_for_function(
+            "([sel, n]) => document.querySelectorAll(sel).length >= n",
+            arg=[_PHOTO_PREVIEW_SELECTOR, count],
             timeout=_FILE_UPLOAD_TIMEOUT,
         )
 

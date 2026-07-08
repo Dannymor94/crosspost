@@ -36,13 +36,11 @@ class VKBrowserAdapter:
     def __init__(
         self,
         group_id: int,
-        profiles_dir: str | Path,
         store: IdempotencyStore,
         *,
         headless: bool = False,
     ) -> None:
         self._group_id = group_id          # положительное число (без минуса)
-        self._profiles_dir = profiles_dir
         self._store = store
         self._headless = headless
 
@@ -56,7 +54,7 @@ class VKBrowserAdapter:
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        async with open_page(self.channel, self._profiles_dir, headless=self._headless) as page:
+        async with open_page(self.channel, headless=self._headless) as page:
             group_url = _GROUP_URL.format(group_id=self._group_id)
             await page.goto(group_url, wait_until="domcontentloaded")
 

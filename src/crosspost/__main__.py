@@ -1,6 +1,7 @@
 """CLI кросс-постинга — точка входа MVP-0.
 
     python -m crosspost post --type post --text "..." --image a.jpg --to telegram,vk
+    python -m crosspost login --channel yandex
 
 Синхронно, состояние в JSON. Без очереди/веба/БД/браузера (см. MILESTONES.md).
 Статус: КАРКАС. Сборка адаптеров и реальная отправка — задача фазы 0 (см. PLAN.md).
@@ -23,6 +24,21 @@ from crosspost.orchestrator.task import JSONIdempotencyStore, new_publication_id
 
 # Браузерный тир (post-MVP) — в API-фабрику не пускаем (граница API↔браузер).
 _BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen"}  # yandex реализован отдельной веткой
+
+# Каналы, поддерживающие ручной логин через браузер.
+_LOGIN_SUPPORTED = {"yandex", "vk"}
+
+# Точка входа для ручного логина: открываем страницу канала, она сама редиректнет на паспорт.
+_LOGIN_ENTRY_URLS: dict[str, str] = {
+    "yandex": "https://yandex.ru/sprav/",
+    "vk": "https://vk.com/",
+}
+
+# Маркеры «ещё не вошёл» в URL — если после Enter они остались, вход не завершён.
+_LOGIN_REJECT_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "yandex": ("passport.yandex", "auth/login"),
+    "vk": ("vk.com/login", "id.vk.com"),
+}
 
 
 async def build_adapter(channel: str, store):
@@ -51,10 +67,9 @@ async def build_adapter(channel: str, store):
 
     if channel == "vk":
         # Браузерный тир: API заблокирован (err 27/214), работаем через Playwright.
-        profiles_dir = cfg.get("BROWSER_PROFILES_DIR", "runtime/browser_profiles")
         headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
         group_id = abs(int(cfg["VK_GROUP_ID"]))
-        return VKBrowserAdapter(group_id, profiles_dir, store, headless=headless)
+        return VKBrowserAdapter(group_id, store, headless=headless)
 
     if channel == "vk_api":
         # API-тир ВК — оставлен на случай появления рабочего user-токена.
@@ -64,10 +79,9 @@ async def build_adapter(channel: str, store):
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
     if channel == "yandex":
-        profiles_dir = cfg.get("BROWSER_PROFILES_DIR", "runtime/browser_profiles")
         headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
         org_id = cfg["YANDEX_ORG_ID"]
-        return YandexBrowserAdapter(org_id, profiles_dir, store, headless=headless)
+        return YandexBrowserAdapter(org_id, store, headless=headless)
 
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
@@ -76,6 +90,53 @@ async def build_adapter(channel: str, store):
     raise ValueError(
         f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk, yandex, vk_api)"
     )
+
+
+async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
+    """Открыть браузер для ручного логина в канал.
+
+    Держит браузер открытым, пока пользователь не подтвердит вход (Enter).
+    ПОСЛЕ подтверждения экспортирует storageState (куки + localStorage) в файл —
+    именно этот файл, а не persistent-профиль, publish использует как сессию.
+    """
+    from crosspost.adapters.browser.base_browser import (
+        is_logged_in,
+        login_context,
+        storage_state_path,
+    )
+
+    if channel not in _LOGIN_SUPPORTED:
+        print(f"login: канал {channel!r} не поддерживает браузерный логин")
+        print(f"Доступно: {', '.join(sorted(_LOGIN_SUPPORTED))}")
+        return 1
+
+    url = _LOGIN_ENTRY_URLS[channel]
+    reject = _LOGIN_REJECT_FRAGMENTS.get(channel, ())
+    wait = _input or input
+
+    async def _prompt(msg: str) -> None:
+        print(msg)
+        await asyncio.get_event_loop().run_in_executor(None, wait)
+
+    print(f"Открываю браузер для {channel} ({url}) ...")
+    async with login_context(channel, headless=False) as (page, save_state):
+        await page.goto(url, wait_until="domcontentloaded")
+        print("\nВойдите в аккаунт в открывшемся браузере.")
+        print("ВАЖНО: не закрывайте браузер вручную. Дождитесь РАБОЧЕГО кабинета,")
+        await _prompt("затем вернитесь сюда и нажмите Enter. →")
+
+        # Подтверждение: пока URL выглядит как страница логина — не сохраняем,
+        # держим браузер открытым и просим войти ещё раз.
+        while not await is_logged_in(page, reject_url_fragments=reject):
+            print("\n⚠ Похоже, вход ещё не завершён (открыта страница логина).")
+            await _prompt("Завершите вход, дождитесь кабинета и нажмите Enter ещё раз. →")
+
+        # Вошли — экспортируем сессию ДО закрытия контекста.
+        state_file = await save_state()
+
+    print(f"\n✓ Сессия {channel} сохранена: {state_file}")
+    print("Теперь `crosspost post --to " + channel + "` пойдёт без повторного логина.")
+    return 0
 
 
 async def _run(content: CanonicalContent, channels: list[str], store) -> int:
@@ -100,6 +161,7 @@ async def _run(content: CanonicalContent, channels: list[str], store) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="crosspost")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
     p = sub.add_parser("post", help="опубликовать контент в каналы")
     p.add_argument("--type", required=True, choices=[t.value for t in ContentType])
     p.add_argument("--text", default="")
@@ -107,7 +169,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--image", action="append", default=[], help="путь к медиа (можно несколько)")
     p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk")
     p.add_argument("--state", default="runtime/state.json")
+
+    lg = sub.add_parser("login", help="ручной логин в браузерный канал")
+    lg.add_argument("--channel", required=True, help=f"канал: {', '.join(sorted(_LOGIN_SUPPORTED))}")
+
     args = parser.parse_args(argv)
+
+    if args.cmd == "login":
+        cfg = load_config()
+        return asyncio.run(_run_login(args.channel, cfg))
 
     content = CanonicalContent(
         type=ContentType(args.type),

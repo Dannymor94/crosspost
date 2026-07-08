@@ -26,7 +26,6 @@ from crosspost.adapters.base import ResultStatus
 def adapter(store, tmp_path) -> VKBrowserAdapter:
     return VKBrowserAdapter(
         group_id=12345,
-        profiles_dir=tmp_path / "profiles",
         store=store,
         headless=True,
     )

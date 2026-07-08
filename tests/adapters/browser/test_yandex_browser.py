@@ -26,11 +26,15 @@ from crosspost.content.canonical import CanonicalContent, ContentType
 
 # ── вспомогательные фабрики ─────────────────────────────────────────────────
 
+_SUBMIT_SELECTOR = "button.PostAddForm-Submit"
+
+
 def _make_page(
     *,
     card_exists: bool = False,
     card_text: str = "",
     post_href: str = "",
+    submit_by_class: bool = True,
 ) -> AsyncMock:
     page = AsyncMock()
     page.url = "https://yandex.ru/sprav/123/posts"
@@ -58,11 +62,17 @@ def _make_page(
         filtered.first.locator = MagicMock(return_value=inner_link)
         loc.filter = MagicMock(return_value=filtered)
 
-        loc.count = AsyncMock(return_value=1)
+        # Кнопка сабмита по классу: есть → count 1 (кликаем локатор),
+        # нет → count 0 (адаптер уходит на фолбэк get_by_role exact=True).
+        if selector == _SUBMIT_SELECTOR:
+            loc.count = AsyncMock(return_value=1 if submit_by_class else 0)
+        else:
+            loc.count = AsyncMock(return_value=1)
         loc.set_input_files = AsyncMock()
         return loc
 
-    page.locator = _locator
+    # MagicMock-обёртка, чтобы фиксировать вызовы locator(selector)
+    page.locator = MagicMock(side_effect=_locator)
 
     # get_by_placeholder / get_by_role
     field = AsyncMock()
@@ -85,7 +95,6 @@ def _make_page(
 def _make_adapter(store, tmp_path, **kwargs) -> YandexBrowserAdapter:
     return YandexBrowserAdapter(
         org_id="123456",
-        profiles_dir=tmp_path / "profiles",
         store=store,
         headless=True,
         **kwargs,
@@ -156,13 +165,17 @@ async def test_verify_before_retry_returns_submitted(store, publication_id, tmp_
 
 
 @pytest.mark.asyncio
-async def test_publishes_text_and_returns_submitted(store, publication_id, sample_post, tmp_path):
-    """Нормальная публикация (без фото): статус SUBMITTED, mark_done."""
+async def test_publishes_text_and_returns_submitted(store, publication_id, tmp_path):
+    """Нормальная публикация БЕЗ фото: статус SUBMITTED, mark_done.
+
+    Без медиа _wait_for_photos не вызывается → wait_for_function один раз (карточка).
+    """
     adapter = _make_adapter(store, tmp_path)
+    text_only = CanonicalContent(type=ContentType.POST, text="Привет", media_paths=[])
     page = _make_page(card_exists=False)
 
     with _patch_open_page(page), _patch_logged_in(True):
-        result = await adapter.publish(sample_post, publication_id=publication_id)
+        result = await adapter.publish(text_only, publication_id=publication_id)
 
     assert result.status is ResultStatus.SUBMITTED
     assert result.external_id is not None
@@ -172,14 +185,36 @@ async def test_publishes_text_and_returns_submitted(store, publication_id, sampl
     page.get_by_placeholder.assert_called_once_with(
         "Расскажите о событиях, акциях и новостях"
     )
-    # кнопка «Создать» нажата
-    page.get_by_role.assert_called_with("button", name="Создать")
+    # кнопка публикации нажата ровно по семантическому классу (не частичный матч имени)
+    submit_calls = [c for c in page.locator.call_args_list if c.args[0] == "button.PostAddForm-Submit"]
+    assert submit_calls, "ожидали клик по button.PostAddForm-Submit"
+    # get_by_role для «Создать» не дёргался — не рискуем strict mode violation
+    assert not any(
+        c.args[:1] == ("button",) and c.kwargs.get("name") == "Создать"
+        for c in page.get_by_role.call_args_list
+    )
+    # ровно один wait_for_function — ожидание карточки (фото нет)
     page.wait_for_function.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_publishes_with_photo_uses_file_input(store, publication_id, sample_post, tmp_path):
-    """Публикация с фото: set_input_files вызван с абсолютным путём."""
+async def test_create_button_fallback_uses_exact_name(store, publication_id, tmp_path):
+    """Если класса PostAddForm-Submit нет → get_by_role('button', 'Создать', exact=True)."""
+    adapter = _make_adapter(store, tmp_path)
+    text_only = CanonicalContent(type=ContentType.POST, text="Привет", media_paths=[])
+    page = _make_page(card_exists=False, submit_by_class=False)
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(text_only, publication_id=publication_id)
+
+    assert result.status is ResultStatus.SUBMITTED
+    # exact=True обязателен — иначе матчатся «Создать событие»/«Создать историю»
+    page.get_by_role.assert_called_with("button", name="Создать", exact=True)
+
+
+@pytest.mark.asyncio
+async def test_publishes_with_photo_waits_for_photo_collection(store, publication_id, sample_post, tmp_path):
+    """Публикация с фото: ждём превью по .PostPhotosCollection-Photo (не img/blob)."""
     adapter = _make_adapter(store, tmp_path)
     page = _make_page(card_exists=False)
 
@@ -187,13 +222,14 @@ async def test_publishes_with_photo_uses_file_input(store, publication_id, sampl
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
     assert result.status is ResultStatus.SUBMITTED
-    # wait_for_selector с preview-селектором вызывается сразу после set_input_files —
-    # его наличие в page.mock_calls подтверждает, что путь загрузки фото был пройден.
+    # ожидание превью идёт по новому селектору Яндекса — div.PostPhotosCollection-Photo
     preview_calls = [
         c for c in page.mock_calls
-        if "wait_for_selector" in str(c) and "preview" in str(c)
+        if "wait_for_selector" in str(c) and "PostPhotosCollection-Photo" in str(c)
     ]
-    assert preview_calls, "ожидали вызов wait_for_selector с preview-селектором после загрузки фото"
+    assert preview_calls, "ожидали wait_for_selector('.PostPhotosCollection-Photo') после загрузки фото"
+    # старый селектор больше не используется
+    assert not [c for c in page.mock_calls if "blob" in str(c) or "thumb" in str(c)]
 
 
 @pytest.mark.asyncio
