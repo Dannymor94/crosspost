@@ -15,6 +15,7 @@ from pathlib import Path
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter               # "vk_api" — ждёт рабочий токен
 from crosspost.adapters.browser.vk import VKBrowserAdapter
+from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 from crosspost.config import load_config, parse_bool
 from crosspost.content.canonical import CanonicalContent, ContentType
@@ -26,18 +27,20 @@ from crosspost.orchestrator.task import JSONIdempotencyStore, new_publication_id
 _BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen"}  # yandex реализован отдельной веткой
 
 # Каналы, поддерживающие ручной логин через браузер.
-_LOGIN_SUPPORTED = {"yandex", "vk"}
+_LOGIN_SUPPORTED = {"yandex", "vk", "vk_wall"}
 
 # Точка входа для ручного логина: открываем страницу канала, она сама редиректнет на паспорт.
 _LOGIN_ENTRY_URLS: dict[str, str] = {
     "yandex": "https://yandex.ru/sprav/",
     "vk": "https://vk.com/",
+    "vk_wall": "https://vk.com/",
 }
 
 # Маркеры «ещё не вошёл» в URL — если после Enter они остались, вход не завершён.
 _LOGIN_REJECT_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "yandex": ("passport.yandex", "auth/login"),
     "vk": ("vk.com/login", "id.vk.com"),
+    "vk_wall": ("vk.com/login", "id.vk.com"),
 }
 
 
@@ -83,12 +86,17 @@ async def build_adapter(channel: str, store):
         org_id = cfg["YANDEX_ORG_ID"]
         return YandexBrowserAdapter(org_id, store, headless=headless)
 
+    if channel == "vk_wall":
+        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        screen_name = cfg.get("VK_GROUP_SCREEN_NAME", cfg.get("VK_GROUP_URL", "medithou"))
+        return VKWallBrowserAdapter(screen_name, store, headless=headless)
+
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
-            f"{channel}: браузерный канал пока не реализован (реализованы: vk, yandex)"
+            f"{channel}: браузерный канал пока не реализован (реализованы: vk, yandex, vk_wall)"
         )
     raise ValueError(
-        f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk, yandex, vk_api)"
+        f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk, yandex, vk_api, vk_wall)"
     )
 
 

@@ -19,6 +19,7 @@ CAPABILITIES: dict[str, set[T]] = {
     "instagram": {T.POST, T.REEL, T.STORY},
     "dzen":      {T.ARTICLE, T.POST},
     "yandex":    {T.POST},
+    "vk_wall":   {T.POST},
 }
 
 
