@@ -15,6 +15,7 @@ from pathlib import Path
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter               # "vk_api" — ждёт рабочий токен
 from crosspost.adapters.browser.vk import VKBrowserAdapter
+from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 from crosspost.config import load_config, parse_bool
@@ -90,6 +91,12 @@ async def build_adapter(channel: str, store):
         headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
         screen_name = cfg.get("VK_GROUP_SCREEN_NAME", cfg.get("VK_GROUP_URL", "medithou"))
         return VKWallBrowserAdapter(screen_name, store, headless=headless)
+
+    if channel == "vk_channel":
+        # «Пост в канал» — мессенджер-composer. Сессия переиспользуется из vk_wall.
+        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        channel_id = cfg["VK_CHANNEL_ID"]
+        return VKChannelBrowserAdapter(channel_id, store, headless=headless)
 
     if channel in _BROWSER_CHANNELS:
         raise ValueError(

@@ -20,6 +20,7 @@ CAPABILITIES: dict[str, set[T]] = {
     "dzen":      {T.ARTICLE, T.POST},
     "yandex":    {T.POST},
     "vk_wall":   {T.POST},
+    "vk_channel": {T.POST},
 }
 
 

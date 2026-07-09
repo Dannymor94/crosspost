@@ -70,6 +70,7 @@ async def open_page(
     channel: str,
     *,
     headless: bool = False,
+    session_channel: str | None = None,
 ) -> AsyncGenerator:
     """PUBLISH: свежий контекст с загруженным storageState (если файл есть).
 
@@ -79,13 +80,19 @@ async def open_page(
     Сессию НЕ берём из persistent-профиля (он не «прилипает») — берём из
     storage_state_path(channel). Если файла нет — контекст пустой, is_logged_in
     вернёт False → адаптер отдаст NEEDS_RELOGIN.
+
+    session_channel — переопределяет, из какого канала брать storageState-файл.
+    Нужно для каналов, разделяющих один аккаунт: vk_channel постит через сессию
+    vk_wall (тот же аккаунт ВК), не заставляя логиниться дважды. Лок берётся
+    по session_channel — одна сессия, одна задача в момент времени.
     """
     from playwright.async_api import async_playwright  # ленивый импорт
 
-    state_path = storage_state_path(channel)
+    session_key = session_channel or channel
+    state_path = storage_state_path(session_key)
     storage_state = str(state_path) if state_path.exists() else None
 
-    lock = _lock_for(channel)
+    lock = _lock_for(session_key)
     async with lock:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=headless)
