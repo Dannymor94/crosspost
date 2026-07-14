@@ -3,15 +3,16 @@
 Идемпотентность — по внутреннему publication_id, сгенерированному ДО отправки.
 Источник истины — (publication_id, channel). external_id тут НЕ участвует.
 """
+
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     NEW = "new"
     QUEUED = "queued"
     ATTEMPTING = "attempting"

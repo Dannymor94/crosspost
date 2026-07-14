@@ -4,22 +4,23 @@
 ДО очереди. Без неё UI предложит бессмыслицу (reel -> Telegraph).
 TODO: уточнить по мере реализации адаптеров.
 """
+
 from __future__ import annotations
 
 from crosspost.content.canonical import ContentType as T
 
 CAPABILITIES: dict[str, set[T]] = {
     # API-тир
-    "telegram":  {T.POST, T.ARTICLE, T.REEL, T.STORY},
-    "vk":        {T.POST, T.ARTICLE, T.REEL, T.STORY},
-    "youtube":   {T.REEL},
+    "telegram": {T.POST, T.ARTICLE, T.REEL, T.STORY},
+    "vk": {T.POST, T.ARTICLE, T.REEL, T.STORY},
+    "youtube": {T.REEL},
     "telegraph": {T.ARTICLE},
     # браузерный тир
-    "whatsapp":  {T.POST, T.STORY},
+    "whatsapp": {T.POST, T.STORY},
     "instagram": {T.POST, T.REEL, T.STORY},
-    "dzen":      {T.ARTICLE, T.POST},
-    "yandex":    {T.POST},
-    "vk_wall":   {T.POST},
+    "dzen": {T.ARTICLE, T.POST},
+    "yandex": {T.POST},
+    "vk_wall": {T.POST},
     "vk_channel": {T.POST},
 }
 

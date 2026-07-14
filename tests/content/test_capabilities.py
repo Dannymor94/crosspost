@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from crosspost.content.canonical import ContentType as T
-from crosspost.content.capabilities import supports, channels_for
+from crosspost.content.capabilities import channels_for, supports
 
 
 def test_youtube_rejects_post_accepts_reel():

@@ -14,6 +14,7 @@ API-путь заблокирован платформой (err 27/214) — ра
 Все СЕЛЕКТОРЫ — константы в начале файла. Приоритет data-testid (стабильны у ВК),
 CSS-классы vkit-* НЕ используем (генерённые).
 """
+
 from __future__ import annotations
 
 import re
@@ -39,13 +40,15 @@ _LOGIN_URL_FRAGMENTS = ("vk.com/login", "id.vk.com")
 # (подтверждено диагностикой: "Войти" и форма входа не найдены на живой залогиненной странице)
 
 # Шаг 1: открытие формы поста
-_CREATE_BUTTON_NAME = "Создать"          # шапка: get_by_role("button", exact=True)
+_CREATE_BUTTON_NAME = "Создать"  # шапка: get_by_role("button", exact=True)
 # Пункт меню «Пост» — ВК не использует role=menuitem, ищем по тексту.
 # re.compile(r"^Пост$") отсекает «Пост в канал», «Пост в историю» и т.д.
 _POST_MENU_ITEM_RE = re.compile(r"^Пост$")
 # Селектор контейнера меню «Создать» — ждём его появления перед кликом по пункту.
 # Если data-testid не совпадёт — падаем в лог с видимыми элементами меню (debug).
-_CREATE_MENU_SELECTOR = '[role="menu"], [data-testid*="menu"], [class*="ActionSheet"], [class*="Dropdown"]'
+_CREATE_MENU_SELECTOR = (
+    '[role="menu"], [data-testid*="menu"], [class*="ActionSheet"], [class*="Dropdown"]'
+)
 
 # Шаг 1: модалка и поля
 _MODAL_SELECTOR = '[data-testid="posting_modal_box"]'
@@ -54,7 +57,7 @@ _FILE_INPUT_SELECTOR = 'input[type="file"][multiple]'
 
 # Шаг 1: ожидание превью фото в модалке (img появляется после загрузки)
 # fallback: ждём исчезновения плейсхолдера или появления любого img в модалке
-_PHOTO_PREVIEW_SELECTOR = f'{_MODAL_SELECTOR} img'
+_PHOTO_PREVIEW_SELECTOR = f"{_MODAL_SELECTOR} img"
 _PHOTO_PLACEHOLDER = "Добавьте фото или видео"
 
 # Шаг 1 → Шаг 2
@@ -66,7 +69,7 @@ _NEXT_BUTTON_SELECTOR = '[data-testid="posting_base_screen_next"]'
 _PUBLISH_BUTTON_TODO = None  # заглушка — логируем, что дошли до шага 2
 
 # Ожидание появления поста в ленте (verify после публикации)
-_POST_IN_FEED_SELECTOR = '[data-post-id], .wall_post_cont'
+_POST_IN_FEED_SELECTOR = "[data-post-id], .wall_post_cont"
 
 # Таймауты (мс)
 _NAV_TIMEOUT = 15_000
@@ -74,8 +77,6 @@ _MODAL_TIMEOUT = 10_000
 _PHOTO_TIMEOUT = 15_000
 _POST_APPEAR_TIMEOUT = 20_000
 # ─────────────────────────────────────────────────────────────────────────────
-
-
 
 
 class VKWallBrowserAdapter:
@@ -88,7 +89,7 @@ class VKWallBrowserAdapter:
         *,
         headless: bool = False,
     ) -> None:
-        self._screen_name = screen_name   # напр. "medithou"
+        self._screen_name = screen_name  # напр. "medithou"
         self._store = store
         self._headless = headless
 
@@ -120,9 +121,7 @@ class VKWallBrowserAdapter:
 
             # 4) verify-before-retry: пост уже есть в ленте — не дублируем
             if await self._find_post(page, content.text):
-                self._store.mark_done(
-                    publication_id, self.channel, external_id="posted:recovered"
-                )
+                self._store.mark_done(publication_id, self.channel, external_id="posted:recovered")
                 return ChannelResult(
                     self.channel, ResultStatus.DONE, external_id="posted:recovered"
                 )
@@ -175,7 +174,7 @@ class VKWallBrowserAdapter:
         """Загрузить фото через скрытый input[type=file][multiple] внутри модалки."""
         abs_paths = [str(p.resolve()) for p in paths]
         # file-input внутри модалки
-        file_input = page.locator(f'{_MODAL_SELECTOR} {_FILE_INPUT_SELECTOR}').first
+        file_input = page.locator(f"{_MODAL_SELECTOR} {_FILE_INPUT_SELECTOR}").first
         if await file_input.count() > 0:
             await file_input.set_input_files(abs_paths)
         else:
@@ -257,7 +256,7 @@ class VKWallBrowserAdapter:
 
         # Попытка извлечь wall-id из первого поста в ленте
         try:
-            post = page.locator('[data-post-id]').first
+            post = page.locator("[data-post-id]").first
             post_id = await post.get_attribute("data-post-id") or ""
             if post_id:
                 return f"wall{post_id}"

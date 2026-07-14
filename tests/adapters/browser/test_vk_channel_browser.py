@@ -12,6 +12,7 @@
   - переиспользование сессии vk_wall (session_channel)
   - build_adapter('vk_channel')
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -19,12 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.adapters.base import ResultStatus
+from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.content.canonical import CanonicalContent, ContentType
 
-
 # ── вспомогательные фабрики ─────────────────────────────────────────────────
+
 
 def _make_page(*, file_input_exists: bool = True) -> AsyncMock:
     page = AsyncMock()
@@ -91,6 +92,7 @@ def _patch_open_page(page, calls: list | None = None):
         if calls is not None:
             calls.append((args, kwargs))
         yield page
+
     return patch("crosspost.adapters.browser.vk_channel.open_page", _fake)
 
 
@@ -102,6 +104,7 @@ def _patch_logged_in(value: bool):
 
 
 # ── тесты ────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post):
@@ -144,7 +147,11 @@ async def test_publishes_text_only(store, publication_id):
     assert goto_calls, "ожидали goto на vk.com/im/channels/{id}"
 
     # ввод в contenteditable composer
-    composer_calls = [c for c in page.locator.call_args_list if "ComposerInput" in str(c) or "contenteditable" in str(c)]
+    composer_calls = [
+        c
+        for c in page.locator.call_args_list
+        if "ComposerInput" in str(c) or "contenteditable" in str(c)
+    ]
     assert composer_calls, "ожидали обращение к composer contenteditable"
 
 
@@ -174,8 +181,9 @@ async def test_reuses_vk_wall_session(store, publication_id):
     # open_page вызван с session_channel="vk_wall" (переиспользование сессии)
     assert calls, "open_page не вызван"
     _, kwargs = calls[0]
-    assert kwargs.get("session_channel") == "vk_wall", \
+    assert kwargs.get("session_channel") == "vk_wall", (
         f"ожидали session_channel='vk_wall', получили {kwargs}"
+    )
 
 
 @pytest.mark.asyncio
@@ -189,8 +197,7 @@ async def test_clicks_send_button_not_enter(store, publication_id):
         result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.DONE
-    send_calls = [c for c in page.locator.call_args_list
-                  if "Отправить сообщение" in str(c)]
+    send_calls = [c for c in page.locator.call_args_list if "Отправить сообщение" in str(c)]
     assert send_calls, "ожидали locator('button[aria-label=\"Отправить сообщение\"]')"
 
 
@@ -206,6 +213,7 @@ async def test_no_false_done_when_post_not_in_history(store, publication_id):
         if "PostsHistory" in selector or "Post" in selector:
             raise TimeoutError("PostsHistory пуст")
         return AsyncMock()
+
     page.wait_for_selector = AsyncMock(side_effect=_wait_for_selector)
 
     with _patch_open_page(page), _patch_logged_in(True):

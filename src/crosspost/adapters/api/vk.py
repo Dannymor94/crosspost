@@ -16,6 +16,7 @@
 Идемпотентность: пропустить если (publication_id, channel) уже done.
 vkbottle импортируется ЛЕНИВО внутри publish.
 """
+
 from __future__ import annotations
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
@@ -38,8 +39,8 @@ class VKAdapter:
         *,
         photo_upload: bool = True,
     ) -> None:
-        self._api = api              # vkbottle API
-        self._target = int(target)   # owner_id стены (сообщество: отрицательный)
+        self._api = api  # vkbottle API
+        self._target = int(target)  # owner_id стены (сообщество: отрицательный)
         self._store = store
         self._photo_upload = photo_upload
 
@@ -96,7 +97,7 @@ class VKAdapter:
         try:
             album_uploader = PhotoToAlbumUploader(self._api)
             attachments = await album_uploader.upload(
-                -group_id,   # wall album id = -group_id
+                -group_id,  # wall album id = -group_id
                 path,
                 group_id=group_id,
             )
@@ -107,7 +108,7 @@ class VKAdapter:
         raise VKPhotoUploadError(
             "Загрузка фото не прошла ни одним из методов community-токеном.\n"
             f"  1) {wall_error}\n"
-            f"  2) {album_error}\n"  # type: ignore[possibly-undefined]
+            f"  2) {album_error}\n"
             "Варианты: установите VK_PHOTO_UPLOAD_ENABLED=false (текстовый пост) "
             "или переключитесь на user-токен с правами photos."
         )

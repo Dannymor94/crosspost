@@ -3,6 +3,7 @@
 login_context патчится в base_browser; ввод пользователя — через _input.
 Источник сессии — storageState-файл: login экспортирует его через save_state().
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -77,10 +78,12 @@ async def test_login_reprompts_when_still_on_login_page():
     save_state = AsyncMock(return_value=Path("/x/yandex_state.json"))
 
     # первый Enter → всё ещё passport; второй Enter → уже кабинет
-    urls = iter([
-        "https://passport.yandex.ru/auth",   # проверка после 1-го Enter → не залогинен
-        "https://yandex.ru/sprav/123",        # проверка после 2-го Enter → залогинен
-    ])
+    urls = iter(
+        [
+            "https://passport.yandex.ru/auth",  # проверка после 1-го Enter → не залогинен
+            "https://yandex.ru/sprav/123",  # проверка после 2-го Enter → залогинен
+        ]
+    )
     inputs = []
 
     def fake_input():

@@ -10,20 +10,20 @@ open_page и is_logged_in патчатся; page — AsyncMock.
   - публикация с фото: set_input_files вызван, ждём превью
   - клик «Далее» обязателен (двухшаговая форма)
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.adapters.base import ResultStatus
+from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.content.canonical import CanonicalContent, ContentType
 
-
 # ── вспомогательные фабрики ─────────────────────────────────────────────────
+
 
 def _make_page(
     *,
@@ -94,6 +94,7 @@ def _patch_open_page(page):
     @asynccontextmanager
     async def _fake(*args, **kwargs):
         yield page
+
     return patch("crosspost.adapters.browser.vk_wall.open_page", _fake)
 
 
@@ -105,6 +106,7 @@ def _patch_logged_in(value: bool):
 
 
 # ── тесты ────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post):
@@ -174,18 +176,20 @@ async def test_publishes_text_only(store, publication_id):
     assert page.get_by_text.called, "ожидали get_by_text(re.compile('^Пост$'), exact=True)"
     text_arg = page.get_by_text.call_args_list[0].args[0]
     import re as _re
-    assert isinstance(text_arg, _re.Pattern) or str(text_arg) == "Пост", \
+
+    assert isinstance(text_arg, _re.Pattern) or str(text_arg) == "Пост", (
         f"ожидали regex ^Пост$, получили {text_arg!r}"
+    )
 
     # модалка ожидалась
     page.wait_for_selector.assert_called()
-    modal_calls = [c for c in page.wait_for_selector.call_args_list
-                   if "posting_modal_box" in str(c)]
+    modal_calls = [
+        c for c in page.wait_for_selector.call_args_list if "posting_modal_box" in str(c)
+    ]
     assert modal_calls, "ожидали wait_for_selector('[data-testid=\"posting_modal_box\"]')"
 
     # «Далее» нажат
-    next_calls = [c for c in page.locator.call_args_list
-                  if "posting_base_screen_next" in str(c)]
+    next_calls = [c for c in page.locator.call_args_list if "posting_base_screen_next" in str(c)]
     assert next_calls, "ожидали клик по [data-testid='posting_base_screen_next']"
 
 
@@ -206,10 +210,14 @@ async def test_publishes_with_photo_calls_set_input_files(store, publication_id,
 
     # превью ожидалось
     page.wait_for_selector.assert_called()
-    preview_calls = [c for c in page.wait_for_selector.call_args_list
-                     if "img" in str(c) or "photo" in str(c).lower()]
-    assert preview_calls or page.wait_for_function.called, \
+    preview_calls = [
+        c
+        for c in page.wait_for_selector.call_args_list
+        if "img" in str(c) or "photo" in str(c).lower()
+    ]
+    assert preview_calls or page.wait_for_function.called, (
         "ожидали wait_for_selector или wait_for_function для превью фото"
+    )
 
 
 @pytest.mark.asyncio
@@ -229,10 +237,7 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
     assert result.status is ResultStatus.DONE
 
     # page.locator должен быть вызван с селектором кнопки «Далее»
-    next_calls = [
-        c for c in page.locator.call_args_list
-        if "posting_base_screen_next" in str(c)
-    ]
+    next_calls = [c for c in page.locator.call_args_list if "posting_base_screen_next" in str(c)]
     assert next_calls, (
         "ожидали page.locator('[data-testid=\"posting_base_screen_next\"]') — "
         f"реальные вызовы: {[str(c) for c in page.locator.call_args_list]}"

@@ -6,6 +6,7 @@
 Статус: КАРКАС. publish ещё не реализован — на это указывает первый красный тест
 (tests/adapters/api/test_telegram.py). Реализовать в фазе A под TDD.
 """
+
 from __future__ import annotations
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
@@ -17,8 +18,8 @@ class TelegramAdapter:
     channel = "telegram"
 
     def __init__(self, client, target: str, store: IdempotencyStore) -> None:
-        self._client = client          # Telethon TelegramClient
-        self._target = target          # канал назначения
+        self._client = client  # Telethon TelegramClient
+        self._target = target  # канал назначения
         self._store = store
 
     async def publish(

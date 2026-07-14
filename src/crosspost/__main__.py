@@ -6,6 +6,7 @@
 Синхронно, состояние в JSON. Без очереди/веба/БД/браузера (см. MILESTONES.md).
 Статус: КАРКАС. Сборка адаптеров и реальная отправка — задача фазы 0 (см. PLAN.md).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,7 @@ import asyncio
 from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
-from crosspost.adapters.api.vk import VKAdapter               # "vk_api" — ждёт рабочий токен
+from crosspost.adapters.api.vk import VKAdapter  # "vk_api" — ждёт рабочий токен
 from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
@@ -63,7 +64,9 @@ async def build_adapter(channel: str, store):
         # сохраняем строку обратно — повторные запуски кода не попросят.
         session_path = Path(cfg.get("TG_SESSION_PATH", "runtime/sessions/telegram.session"))
         session_str = session_path.read_text().strip() if session_path.exists() else None
-        client = TelegramClient(StringSession(session_str), int(cfg["TG_API_ID"]), cfg["TG_API_HASH"])
+        client = TelegramClient(
+            StringSession(session_str), int(cfg["TG_API_ID"]), cfg["TG_API_HASH"]
+        )
         await client.start()
         session_path.parent.mkdir(parents=True, exist_ok=True)
         session_path.write_text(client.session.save())
@@ -78,6 +81,7 @@ async def build_adapter(channel: str, store):
     if channel == "vk_api":
         # API-тир ВК — оставлен на случай появления рабочего user-токена.
         from vkbottle import API
+
         api = API(token=cfg["VK_ACCESS_TOKEN"])
         photo_upload = parse_bool(cfg.get("VK_PHOTO_UPLOAD_ENABLED", "true"))
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
@@ -117,7 +121,6 @@ async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
     from crosspost.adapters.browser.base_browser import (
         is_logged_in,
         login_context,
-        storage_state_path,
     )
 
     if channel not in _LOGIN_SUPPORTED:
@@ -166,11 +169,28 @@ async def _run(content: CanonicalContent, channels: list[str], store) -> int:
         adapter = await build_adapter(ch, store)
         result = await adapter.publish(content, publication_id=publication_id)
         mark = "✓" if result.error is None else "✗"
-        print(f"{mark} {ch}: {result.status.value}"
-              + (f" (id={result.external_id})" if result.external_id else "")
-              + (f" — {result.error}" if result.error else ""))
+        print(
+            f"{mark} {ch}: {result.status.value}"
+            + (f" (id={result.external_id})" if result.external_id else "")
+            + (f" — {result.error}" if result.error else "")
+        )
         failures += int(result.error is not None)
     return failures
+
+
+async def _run_with_sqlite(
+    content: CanonicalContent, channels: list[str], *, profile_id: int
+) -> int:
+    """Запуск публикации с SQLiteIdempotencyStore (дефолтный путь)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from crosspost.db.engine import create_engine_and_tables
+    from crosspost.db.sqlite_store import SQLiteIdempotencyStore
+
+    engine = await create_engine_and_tables()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        store = SQLiteIdempotencyStore(session, profile_id=profile_id)
+        return await _run(content, channels, store)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -183,10 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--title", default=None)
     p.add_argument("--image", action="append", default=[], help="путь к медиа (можно несколько)")
     p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk")
-    p.add_argument("--state", default="runtime/state.json")
+    p.add_argument("--state", default=None, help="путь к JSON-стору (устарело; умолч. → SQLite)")
+    p.add_argument("--profile", type=int, default=1, help="profile_id в БД (умолч. 1)")
 
     lg = sub.add_parser("login", help="ручной логин в браузерный канал")
-    lg.add_argument("--channel", required=True, help=f"канал: {', '.join(sorted(_LOGIN_SUPPORTED))}")
+    lg.add_argument(
+        "--channel", required=True, help=f"канал: {', '.join(sorted(_LOGIN_SUPPORTED))}"
+    )
 
     args = parser.parse_args(argv)
 
@@ -201,8 +224,13 @@ def main(argv: list[str] | None = None) -> int:
         media_paths=[Path(x) for x in args.image],
     )
     channels = [c.strip() for c in args.to.split(",") if c.strip()]
-    store = JSONIdempotencyStore(args.state)
-    return asyncio.run(_run(content, channels, store))
+
+    if args.state:
+        # обратная совместимость: явный --state → JSONIdempotencyStore
+        store = JSONIdempotencyStore(args.state)
+        return asyncio.run(_run(content, channels, store))
+
+    return asyncio.run(_run_with_sqlite(content, channels, profile_id=args.profile))
 
 
 if __name__ == "__main__":

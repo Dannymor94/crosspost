@@ -1,4 +1,5 @@
 """Валидация CanonicalContent по типу. Эпик 1. TODO: дополнить правила."""
+
 from __future__ import annotations
 
 from crosspost.content.canonical import CanonicalContent, ContentType

@@ -7,6 +7,7 @@
 
 vkbottle + vkbottle.exception_factory подменяются через sys.modules.
 """
+
 from __future__ import annotations
 
 import sys
@@ -18,8 +19,8 @@ import pytest
 from crosspost.adapters.api.vk import VKAdapter, VKPhotoUploadError
 from crosspost.adapters.base import ResultStatus
 
-
 # ── фикстуры ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def fake_vk_api() -> AsyncMock:
@@ -106,6 +107,7 @@ def fake_vkbottle_both_denied(monkeypatch) -> types.ModuleType:
 
 # ── тесты ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_skips_when_already_published(
     store, publication_id, sample_post, fake_vk_api, fake_vkbottle
@@ -166,7 +168,7 @@ async def test_falls_back_to_album_uploader_on_wall_denied(
     album_uploader.upload.assert_awaited_once()
     call_args = album_uploader.upload.call_args
     # upload(album_id, paths_like, group_id=) — первые два позиционные
-    assert call_args.args[0] == -100        # album_id = -group_id (wall album)
+    assert call_args.args[0] == -100  # album_id = -group_id (wall album)
     assert call_args.kwargs["group_id"] == 100
 
     post_kwargs = fake_vk_api.wall.post.call_args.kwargs

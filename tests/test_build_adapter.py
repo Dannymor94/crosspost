@@ -8,6 +8,7 @@ Mock-first: конфиг и SDK (telethon/vkbottle) мокаются через 
 TG_SESSION_PATH, чтобы повторные запуски не просили код. Поэтому build_adapter
 теперь корутина.
 """
+
 from __future__ import annotations
 
 import sys
@@ -101,7 +102,9 @@ async def test_builds_vk_api_adapter(store, fake_vkbottle):
     fake_vkbottle.API.assert_called_once()
 
 
-async def test_vk_api_photo_upload_disabled_when_flag_is_false(store, fake_vkbottle, monkeypatch, fake_cfg):
+async def test_vk_api_photo_upload_disabled_when_flag_is_false(
+    store, fake_vkbottle, monkeypatch, fake_cfg
+):
     """VK_PHOTO_UPLOAD_ENABLED=false → VKAdapter.photo_upload == False (канал vk_api)."""
     fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "false"
     monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))
@@ -112,7 +115,9 @@ async def test_vk_api_photo_upload_disabled_when_flag_is_false(store, fake_vkbot
     assert adapter._photo_upload is False
 
 
-async def test_vk_api_photo_upload_enabled_when_flag_is_true(store, fake_vkbottle, monkeypatch, fake_cfg):
+async def test_vk_api_photo_upload_enabled_when_flag_is_true(
+    store, fake_vkbottle, monkeypatch, fake_cfg
+):
     """VK_PHOTO_UPLOAD_ENABLED=true → VKAdapter.photo_upload == True (канал vk_api)."""
     fake_cfg["VK_PHOTO_UPLOAD_ENABLED"] = "true"
     monkeypatch.setattr(cli, "load_config", lambda *a, **k: dict(fake_cfg))

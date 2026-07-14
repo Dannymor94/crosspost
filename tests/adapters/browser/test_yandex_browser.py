@@ -11,18 +11,17 @@ page — AsyncMock с нужными методами.
   - публикация с фото → set_input_files вызван с абсолютными путями
   - external_id из числового href / fallback "submitted"
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 from crosspost.adapters.base import ResultStatus
+from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 from crosspost.content.canonical import CanonicalContent, ContentType
-
 
 # ── вспомогательные фабрики ─────────────────────────────────────────────────
 
@@ -48,9 +47,7 @@ def _make_page(
 
         # .all() — список карточек
         card_mock = AsyncMock()
-        card_mock.inner_text = AsyncMock(
-            return_value=card_text if card_exists else "другой пост"
-        )
+        card_mock.inner_text = AsyncMock(return_value=card_text if card_exists else "другой пост")
         loc.all = AsyncMock(return_value=[card_mock])
 
         # .filter(has_text=...).first
@@ -105,6 +102,7 @@ def _patch_open_page(page):
     @asynccontextmanager
     async def _fake(*args, **kwargs):
         yield page
+
     return patch("crosspost.adapters.browser.yandex.open_page", _fake)
 
 
@@ -116,6 +114,7 @@ def _patch_logged_in(value: bool):
 
 
 # ── тесты ────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post, tmp_path):
@@ -182,11 +181,11 @@ async def test_publishes_text_and_returns_submitted(store, publication_id, tmp_p
     assert store.is_done(publication_id, "yandex")
 
     # текст вставлен в поле
-    page.get_by_placeholder.assert_called_once_with(
-        "Расскажите о событиях, акциях и новостях"
-    )
+    page.get_by_placeholder.assert_called_once_with("Расскажите о событиях, акциях и новостях")
     # кнопка публикации нажата ровно по семантическому классу (не частичный матч имени)
-    submit_calls = [c for c in page.locator.call_args_list if c.args[0] == "button.PostAddForm-Submit"]
+    submit_calls = [
+        c for c in page.locator.call_args_list if c.args[0] == "button.PostAddForm-Submit"
+    ]
     assert submit_calls, "ожидали клик по button.PostAddForm-Submit"
     # get_by_role для «Создать» не дёргался — не рискуем strict mode violation
     assert not any(
@@ -213,7 +212,9 @@ async def test_create_button_fallback_uses_exact_name(store, publication_id, tmp
 
 
 @pytest.mark.asyncio
-async def test_publishes_with_photo_waits_for_photo_collection(store, publication_id, sample_post, tmp_path):
+async def test_publishes_with_photo_waits_for_photo_collection(
+    store, publication_id, sample_post, tmp_path
+):
     """Публикация с фото: ждём превью по .PostPhotosCollection-Photo (не img/blob)."""
     adapter = _make_adapter(store, tmp_path)
     page = _make_page(card_exists=False)
@@ -224,10 +225,13 @@ async def test_publishes_with_photo_waits_for_photo_collection(store, publicatio
     assert result.status is ResultStatus.SUBMITTED
     # ожидание превью идёт по новому селектору Яндекса — div.PostPhotosCollection-Photo
     preview_calls = [
-        c for c in page.mock_calls
+        c
+        for c in page.mock_calls
         if "wait_for_selector" in str(c) and "PostPhotosCollection-Photo" in str(c)
     ]
-    assert preview_calls, "ожидали wait_for_selector('.PostPhotosCollection-Photo') после загрузки фото"
+    assert preview_calls, (
+        "ожидали wait_for_selector('.PostPhotosCollection-Photo') после загрузки фото"
+    )
     # старый селектор больше не используется
     assert not [c for c in page.mock_calls if "blob" in str(c) or "thumb" in str(c)]
 

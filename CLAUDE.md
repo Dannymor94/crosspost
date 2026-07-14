@@ -7,13 +7,17 @@
 
 ## ▶ СЕЙЧАС (обновляй по вехам)
 
-**Фокус: MVP-0 — walking skeleton.** CLI постит в **Telegram** + **ВК (браузер)**, синхронно, состояние в JSON-файле.
-ВК переведён в браузерный тир (API заблокирован: err 27/214). Канал `"vk"` → `VKBrowserAdapter` (Playwright).
-`"vk_api"` → `VKAdapter` (API-тир, ждёт рабочий токен, оставлен).
-Инфраструктура браузерного тира (health-check/релогин/планировщик/vault) — **НЕ ТРОГАТЬ**, это post-MVP.
-Готовность MVP-0 = `make smoke` постит в Telegram (+ ВК после ручного логина в браузере).
+**Фокус: Итерация 1 (Слой 1) — UI подключения каналов, админский пульт владельца (React + FastAPI).**
 
-Порядок: см. `MILESTONES.md` (что входит в MVP и где жёсткий стоп) и `PLAN.md` (шаги).
+Слой 0 закрыт:
+- 0.1 SQLite-схема (5 таблиц, async SQLAlchemy, Alembic)
+- 0.2 Vault (Fernet, VAULT_KEY из env, blob всегда шифртекст)
+- 0.3 ProfileRepository (CRUD профилей, connections, credentials; жёсткая изоляция по profile_id)
+- 0.4 validate_connection (декларативный реестр валидаторов, api/browser, запись в logs)
+
+Рабочие каналы: Telegram (API), Яндекс (браузер), ВК-стена (браузер), ВК-канал (браузер).
+
+Порядок итераций: см. `ROADMAP.md`. Задачи/отложено: `PRD_BACKLOG.md`.
 
 ## Mock-first (критично для скорости)
 
@@ -22,11 +26,37 @@
 Реальные ключи нужны ТОЛЬКО для финального `make smoke`. Весь API-тир можно построить с нулём ключей.
 Ключи и где их брать — в `SETUP.md`.
 
+## Карта проекта (где что лежит)
+
+```
+src/crosspost/
+  adapters/
+    api/          — API-тир: telegram.py, vk.py (vk_api)
+    browser/      — браузерный тир: yandex.py, vk_wall.py, vk_channel.py, vk.py
+                    base_browser.py — open_page/login_context/storage_state_path
+    base.py       — ChannelAdapter, ChannelResult, ResultStatus
+  content/
+    canonical.py  — CanonicalContent, ContentType
+    capabilities.py — матрица канал → {ContentType}
+    validation.py — validate(content)
+  channels/
+    connection.py — ChannelConnection, ConnectionState
+  orchestrator/
+    task.py       — IdempotencyStore, Task, publication_id
+    breaker.py    — CircuitBreaker
+  config.py       — load_config() из runtime/.env
+  __main__.py     — CLI: post / login
+runtime/          — .env, state.json, browser_profiles/ (не коммитить)
+tests/            — зеркало src/, моки без реального браузера/API
+```
+
 ## Что читать когда
 
-- Делаешь задачу MVP → этого файла + `PLAN.md` достаточно.
+- Делаешь задачу → этого файла достаточно.
 - Вопрос «почему так устроено» → `PROJECT_GUIDE.md`.
-- Список задач/критерии приёмки → `PRD_BACKLOG.md`.
+- Видение продукта, целевая аудитория, ключевые сценарии → `PROJECT_OVERVIEW.md`.
+- Итерации до MVP, что входит в каждую → `ROADMAP.md`.
+- Список задач/отложено → `PRD_BACKLOG.md`.
 - Где лежит файл → `PROJECT_STRUCTURE.md`.
 Не загружать все доки разом без нужды.
 
@@ -114,3 +144,5 @@
 - Не использовать `external_id` как ключ дедупа.
 - Не держать ключ vault под `runtime/`.
 - Не дублировать сюда содержимое PROJECT_GUIDE/PRD_BACKLOG. Этот файл держать коротким.
+- **Не угадывать селекторы DOM и методы SDK.** DOM-селекторы — снимать с живой страницы (DevTools → inspect); API SDK — читать документацию или исходники, не придумывать методы из головы. Каждый неверный угадательный селектор — баг в продакшне.
+- **Ключ шифрования vault (`VAULT_KEY`) инжектируется снаружи** (env/keyring/KMS), **никогда не хранится в `runtime/` рядом с БД.** Если `VAULT_KEY` отсутствует — явная ошибка при старте, не молчаливый fallback на открытый текст. `credentials.blob` в БД всегда шифртекст (Fernet). Расшифрованные данные живут только в памяти, не логируются, не пишутся на диск.

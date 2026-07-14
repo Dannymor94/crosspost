@@ -4,25 +4,34 @@ version = "0.1.0"
 description = "Локальный кросс-постинг: один контент -> несколько каналов. Граница API/браузер."
 requires-python = ">=3.11"
 license = { text = "MIT" }
-# Базовое ядро MVP: только то, что нужно для API-тира из CLI. Без веба/очереди/браузера.
+# Версии ЗАФИКСИРОВАНЫ через ==, чтобы обновление SDK не ломало DOM-селекторы или API.
+# При обновлении: сначала обновить версию здесь, затем прогнать make smoke.
 dependencies = [
-    "pydantic>=2.6",
-    "python-dotenv>=1.0",
-    "telethon>=1.34",   # Telegram (userbot)
-    "vkbottle>=4.3",    # ВКонтакте; при желании заменить на сырой requests
-    "httpx>=0.27",      # Telegraph и прочие REST
+    "pydantic==2.13.4",
+    "python-dotenv==1.2.2",
+    "telethon==1.44.0",     # Telegram (userbot)
+    "vkbottle==4.10.0",     # ВКонтакте (API-тир, ждёт рабочий токен)
+    "httpx==0.28.1",        # Telegraph и прочие REST
+    "fastapi==0.115.12",
+    "uvicorn==0.34.3",
 ]
 
 [project.optional-dependencies]
 # Ставить по мере выхода за границу MVP.
-browser = ["playwright>=1.43"]                              # браузерный тир (эпик 5)
-infra   = ["celery>=5.3", "redis>=5.0", "sqlalchemy>=2.0",  # очередь+БД (эпик 3, post-MVP)
-           "alembic>=1.13", "psycopg[binary]>=3.1"]
-web     = ["fastapi>=0.110", "uvicorn>=0.29"]               # веб-интерфейс (эпик 4)
-crypto  = ["cryptography>=42.0"]                            # vault (эпик 6)
-youtube = ["google-api-python-client>=2.0",                 # YouTube Data API
+browser = ["playwright==1.61.0"]                              # браузерный тир (эпик 5)
+infra   = ["sqlalchemy==2.0.51", "alembic==1.18.5", "aiosqlite==0.22.1",  # БД (слой 0.1+)
+           "celery>=5.3", "redis>=5.0", "psycopg[binary]>=3.1"]          # очередь+Postgres (эпик 3)
+web     = []                                                  # fastapi/uvicorn moved to core deps
+crypto  = ["cryptography==49.0.0"]                            # vault слой 0.2 (Fernet)
+youtube = ["google-api-python-client>=2.0",                   # YouTube Data API
            "google-auth-oauthlib>=1.2"]
-dev     = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.9"]
+dev     = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.15.20",
+    "mypy==2.1.0",
+    "pre-commit>=3.7",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -39,3 +48,31 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+]
+ignore = [
+    "E501",   # line too long — ruff formatter handles it
+    "B006",   # mutable default arg — false positives on AsyncMock patterns
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["crosspost"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+# Не strict: адаптеры принимают `page` как Any (Playwright не даёт stubs на все методы).
+# Ловим реальные ошибки, не требуем 100% аннотаций на браузерный Page.
+disallow_untyped_defs = false
+check_untyped_defs = true

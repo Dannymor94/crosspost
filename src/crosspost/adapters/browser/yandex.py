@@ -18,6 +18,7 @@ Verify-before-retry (CLAUDE.md инвариант 2):
 Все СЕЛЕКТОРЫ — константы в начале файла. По тексту/роли/placeholder,
 НЕ по CSS-классам (они генерённые у Яндекса).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

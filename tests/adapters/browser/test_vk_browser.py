@@ -8,19 +8,19 @@ Playwright подменяется моком: open_page() пропатчен в 
   - verify-before-retry: пост уже в DOM → DONE без отправки
   - нормальная публикация: текст + фото → external_id из href или "posted"
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.adapters.base import ResultStatus
-
+from crosspost.adapters.browser.vk import VKBrowserAdapter
 
 # ── фикстуры ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def adapter(store, tmp_path) -> VKBrowserAdapter:
@@ -102,6 +102,7 @@ def mock_open_page_with_existing_post():
 
 # ── тесты ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post, adapter):
     """is_done → SKIPPED, браузер не открывается."""
@@ -122,6 +123,7 @@ async def test_verify_before_retry_finds_existing_post(
     # sample_post.text = "Привет" (из conftest), мок вернёт "тестовый пост" — не совпадёт.
     # Нужно пост с текстом, который есть в DOM.
     from crosspost.content.canonical import CanonicalContent, ContentType
+
     content_with_match = CanonicalContent(
         type=ContentType.POST,
         text="тестовый пост",
@@ -156,6 +158,7 @@ async def test_publishes_and_returns_wall_id(
 async def test_publishes_without_photo(store, publication_id, adapter):
     """Пост без медиа — attach_photo не вызывается."""
     from crosspost.content.canonical import CanonicalContent, ContentType
+
     text_only = CanonicalContent(type=ContentType.POST, text="только текст", media_paths=[])
     page = _make_page()
 
@@ -168,9 +171,7 @@ async def test_publishes_without_photo(store, publication_id, adapter):
 
     assert result.status is ResultStatus.DONE
     # set_input_files не вызывался (нет медиа)
-    assert not any(
-        call for call in page.mock_calls if "set_input_files" in str(call)
-    )
+    assert not any(call for call in page.mock_calls if "set_input_files" in str(call))
 
 
 @pytest.mark.asyncio

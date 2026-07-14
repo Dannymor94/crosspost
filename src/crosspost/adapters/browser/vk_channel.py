@@ -20,6 +20,7 @@
 Все СЕЛЕКТОРЫ — константы в начале файла. Приоритет data-testid / role,
 CSS-классы vkit-* НЕ используем (генерённые).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,7 +45,7 @@ _SESSION_CHANNEL = "vk_wall"
 _COMPOSER_INPUT_SELECTOR = (
     '[contenteditable="true"][data-placeholder="Новый пост"], '
     '[contenteditable="true"][role="textbox"], '
-    '.ComposerInput__input'
+    ".ComposerInput__input"
 )
 
 # Кнопка "+" (attach) слева от поля — открывает поповер вложений
@@ -67,7 +68,9 @@ _SEND_ACTIVE_CLASS = "ChannelComposer__button--submitActive"
 _SEND_LOADING_CLASS = "ChannelComposer__button--loading"
 
 # История постов канала — verify появления поста (надёжнее очистки поля)
-_POSTS_HISTORY_SELECTOR = '[class*="PostsHistory"] [data-post-id], [class*="PostsHistory"] [class*="Post"]'
+_POSTS_HISTORY_SELECTOR = (
+    '[class*="PostsHistory"] [data-post-id], [class*="PostsHistory"] [class*="Post"]'
+)
 
 # Ожидание превью прикреплённого фото в composer
 _PHOTO_PREVIEW_SELECTOR = '.ChannelComposer img, [class*="Composer"] img'
@@ -117,7 +120,7 @@ class VKChannelBrowserAdapter:
         *,
         headless: bool = False,
     ) -> None:
-        self._channel_id = channel_id   # напр. "-240033402"
+        self._channel_id = channel_id  # напр. "-240033402"
         self._store = store
         self._headless = headless
 
@@ -243,9 +246,7 @@ class VKChannelBrowserAdapter:
 
         # 3) verify: пост реально появился в истории канала
         if not await self._verify_post_appeared(page):
-            raise RuntimeError(
-                "vk_channel: пост не появился в PostsHistory после отправки"
-            )
+            raise RuntimeError("vk_channel: пост не появился в PostsHistory после отправки")
 
         return await self._extract_post_id(page)
 
@@ -255,9 +256,7 @@ class VKChannelBrowserAdapter:
         Надёжнее очистки поля: очистка бывает и без реальной отправки.
         """
         try:
-            await page.wait_for_selector(
-                _POSTS_HISTORY_SELECTOR, timeout=_SEND_TIMEOUT
-            )
+            await page.wait_for_selector(_POSTS_HISTORY_SELECTOR, timeout=_SEND_TIMEOUT)
             return True
         except Exception:
             return False
@@ -265,7 +264,7 @@ class VKChannelBrowserAdapter:
     async def _extract_post_id(self, page) -> str:
         """Попробовать вытащить id свежего поста из истории канала. Фолбэк 'posted'."""
         try:
-            post = page.locator('[data-post-id]').first
+            post = page.locator("[data-post-id]").first
             if await post.count() > 0:
                 post_id = await post.get_attribute("data-post-id") or ""
                 if post_id:

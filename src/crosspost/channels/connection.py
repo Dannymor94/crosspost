@@ -3,13 +3,14 @@
 Релогин и бан — свойство подключения, а НЕ отдельной задачи. Хранится один раз
 на (user, channel), не дублируется по задачам.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class ConnectionState(str, Enum):
+class ConnectionState(StrEnum):
     LIVE = "live"
     NEEDS_RELOGIN = "needs_relogin"
     BANNED = "banned"

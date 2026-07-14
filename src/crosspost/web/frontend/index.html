@@ -1,0 +1,1180 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crosspost · Пульт оператора</title>
+<style>
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+
+/* ── Design tokens ───────────────────────────────────────────────────────── */
+:root {
+  --bg:         #111418;
+  --bg-panel:   #181d24;
+  --bg-card:    #1e2530;
+  --bg-card-h:  #242c3a;
+  --bg-input:   #151a21;
+  --border:     #2a3347;
+  --border-f:   #3d5275;
+
+  --text-1:     #e2e8f0;
+  --text-2:     #8a9bb5;
+  --text-3:     #4f617d;
+
+  --accent:     #3b82f6;
+  --accent-h:   #2563eb;
+  --accent-dim: rgba(59,130,246,.15);
+
+  /* Status lamps */
+  --live:       #22c55e;
+  --live-bg:    rgba(34,197,94,.12);
+  --amber:      #f59e0b;
+  --amber-bg:   rgba(245,158,11,.12);
+  --grey:       #4f617d;
+  --grey-bg:    rgba(79,97,125,.12);
+  --error:      #f87171;
+  --error-bg:   rgba(248,113,113,.10);
+
+  --font-ui:    "Inter", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono:  "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+
+  --radius:     6px;
+  --radius-lg:  10px;
+  --shadow:     0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+
+  --lamp-size:  10px;
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--text-1);
+  min-height: 100dvh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#root { display: flex; min-height: 100dvh; }
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 40px;
+  max-width: 900px;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.sidebar-header {
+  padding: 24px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.logo {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.logo span {
+  color: var(--accent);
+}
+.sidebar-section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 20px 20px 8px;
+}
+
+.profile-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  color: var(--text-2);
+  font-size: 14px;
+  transition: background .1s, color .1s;
+  border-left: 2px solid transparent;
+}
+.profile-item:hover { background: var(--bg-card); color: var(--text-1); }
+.profile-item.active {
+  background: var(--accent-dim);
+  color: var(--text-1);
+  border-left-color: var(--accent);
+}
+.profile-avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-2);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.profile-item.active .profile-avatar {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+.btn-new-profile {
+  width: 100%;
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-f);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .1s, color .1s, border-color .1s;
+}
+.btn-new-profile:hover {
+  background: var(--bg-card-h);
+  color: var(--text-1);
+  border-color: var(--accent);
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -.01em;
+  margin-bottom: 4px;
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  margin-bottom: 28px;
+}
+.section-title {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 12px;
+}
+
+/* ── Status lamp ─────────────────────────────────────────────────────────── */
+.lamp {
+  display: inline-block;
+  width: var(--lamp-size);
+  height: var(--lamp-size);
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+.lamp::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.lamp.live {
+  background: var(--live);
+  box-shadow: 0 0 6px var(--live);
+}
+.lamp.live::after { box-shadow: 0 0 0 2px rgba(34,197,94,.2); }
+
+.lamp.amber {
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(245,158,11,.6);
+}
+.lamp.grey { background: var(--grey); box-shadow: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .lamp.live {
+    animation: pulse-live 2.8s ease-in-out infinite;
+  }
+  .lamp.amber {
+    animation: pulse-amber 2s ease-in-out infinite;
+  }
+}
+@keyframes pulse-live {
+  0%,100% { box-shadow: 0 0 4px var(--live); }
+  50%      { box-shadow: 0 0 10px var(--live), 0 0 20px rgba(34,197,94,.3); }
+}
+@keyframes pulse-amber {
+  0%,100% { box-shadow: 0 0 4px rgba(245,158,11,.7); }
+  50%      { box-shadow: 0 0 10px var(--amber), 0 0 18px rgba(245,158,11,.4); }
+}
+
+/* ── Channel cards ───────────────────────────────────────────────────────── */
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.channel-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow);
+  transition: border-color .15s, background .15s;
+}
+.channel-card:hover { border-color: var(--border-f); background: var(--bg-card-h); }
+.channel-card.live-card  { border-color: rgba(34,197,94,.25); }
+.channel-card.amber-card { border-color: rgba(245,158,11,.2); }
+
+.card-header {
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.card-icon {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 700;
+  color: var(--text-3); letter-spacing: .02em;
+  flex-shrink: 0; user-select: none;
+}
+.card-names { flex: 1; min-width: 0; }
+.card-title {
+  font-size: 14px; font-weight: 600; color: var(--text-1);
+  line-height: 1.25; margin-bottom: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px; color: var(--text-3);
+}
+.card-tier {
+  font-size: 9px;
+  font-family: var(--font-mono); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-3);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0; align-self: flex-start; margin-top: 1px;
+}
+
+.status-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.status-label {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-3);
+}
+.status-label.live   { color: var(--live); }
+.status-label.amber  { color: var(--amber); }
+
+.card-actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  border: 1px solid transparent;
+  line-height: 1;
+  white-space: nowrap;
+}
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.btn-primary:not(:disabled):hover { background: var(--accent-h); border-color: var(--accent-h); }
+
+.btn-ghost {
+  background: transparent; color: var(--text-2); border-color: var(--border);
+}
+.btn-ghost:not(:disabled):hover {
+  background: var(--bg-card); color: var(--text-1); border-color: var(--border-f);
+}
+
+.btn-danger {
+  background: transparent; color: var(--error); border-color: rgba(248,113,113,.3);
+}
+.btn-danger:not(:disabled):hover {
+  background: var(--error-bg); border-color: var(--error);
+}
+
+.btn-sm { padding: 5px 11px; font-size: 12px; }
+
+/* ── Forms ───────────────────────────────────────────────────────────────── */
+.form-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  max-width: 520px;
+  margin-bottom: 20px;
+}
+.form-title {
+  font-size: 15px; font-weight: 600; color: var(--text-1);
+  margin-bottom: 18px;
+}
+.form-group { margin-bottom: 16px; }
+.form-label {
+  display: block;
+  font-size: 12px; font-family: var(--font-mono); font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.form-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 12px;
+  transition: border-color .12s;
+  -webkit-appearance: none;
+}
+.form-input:focus { outline: none; border-color: var(--accent); }
+.form-input::placeholder { color: var(--text-3); }
+.form-hint {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.form-hint a, .form-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(59,130,246,.5);
+}
+.form-hint a:hover, .form-link:hover { border-bottom-style: solid; }
+
+/* ── Step tracker (multi-step login) ─────────────────────────────────────── */
+.step-track {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 20px;
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.step-dot {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--text-3);
+}
+.step-dot .dot {
+  width: 18px; height: 18px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-input); border: 1px solid var(--border);
+  font-size: 10px;
+}
+.step-dot.active { color: var(--accent); }
+.step-dot.active .dot { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.step-dot.done { color: var(--live); }
+.step-dot.done .dot { border-color: var(--live); background: var(--live-bg); color: var(--live); }
+.step-sep { flex: 1; height: 1px; background: var(--border); min-width: 8px; }
+
+/* ── Alert / message ─────────────────────────────────────────────────────── */
+.alert {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 13px; line-height: 1.5;
+  margin-top: 14px;
+}
+.alert.success { background: var(--live-bg);  color: var(--live);  border: 1px solid rgba(34,197,94,.2); }
+.alert.error   { background: var(--error-bg); color: var(--error); border: 1px solid rgba(248,113,113,.2); }
+.alert.warning { background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,158,11,.2); }
+.alert.info    { background: var(--accent-dim); color: var(--text-2); border: 1px solid rgba(59,130,246,.2); }
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  gap: 12px;
+}
+.empty-icon { font-size: 36px; opacity: .4; }
+.empty-title { font-size: 18px; font-weight: 600; color: var(--text-1); }
+.empty-body  { font-size: 14px; color: var(--text-3); max-width: 340px; line-height: 1.6; }
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.65);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-f);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: 100%;
+  max-width: 460px;
+  box-shadow: 0 24px 48px rgba(0,0,0,.6);
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px;
+}
+.modal-title { font-size: 16px; font-weight: 700; color: var(--text-1); }
+.modal-close {
+  width: 28px; height: 28px;
+  background: none; border: none;
+  color: var(--text-3); cursor: pointer;
+  border-radius: 4px; font-size: 18px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: color .1s, background .1s;
+}
+.modal-close:hover { color: var(--text-1); background: var(--bg-card); }
+
+/* ── Spinner ─────────────────────────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .spinner { animation: spin .6s linear infinite; }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  #root { flex-direction: column; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .main { padding: 20px 16px; }
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); }
+.text-3 { color: var(--text-3); }
+.mt-2 { margin-top: 8px; }
+.flex-gap { display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+// ── React from CDN (no build step) ────────────────────────────────────────
+const { createElement: h, useState, useEffect, useCallback, useRef } =
+  await import("https://esm.sh/react@18");
+const { createRoot } = await import("https://esm.sh/react-dom@18/client");
+
+// ── API helpers ────────────────────────────────────────────────────────────
+const api = {
+  async get(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
+  async post(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
+};
+
+// ── Channel monogram icons (instrument-panel style) ────────────────────────
+const CHANNEL_ICONS = {
+  telegram:   "TG",
+  vk:         "ВК",
+  vk_wall:    "ВК",
+  vk_channel: "ВК",
+  yandex:     "Я",
+  instagram:  "IG",
+  youtube:    "YT",
+  whatsapp:   "WA",
+  dzen:       "Дз",
+  telegraph:  "Tl",
+};
+
+function lampClass(state) {
+  if (state === "live") return "live";
+  if (state === "needs_relogin") return "amber";
+  return "grey";
+}
+function stateLabel(state) {
+  if (state === "live") return "LIVE";
+  if (state === "needs_relogin") return "НУЖЕН РЕ-ЛОГИН";
+  return "НЕ ПОДКЛЮЧЁН";
+}
+
+// ── Components ─────────────────────────────────────────────────────────────
+
+function Lamp({ state }) {
+  return h("span", { className: `lamp ${lampClass(state)}` });
+}
+
+function Spinner() {
+  return h("span", { className: "spinner" });
+}
+
+function Alert({ type, children }) {
+  return h("div", { className: `alert ${type}` }, children);
+}
+
+function Modal({ title, onClose, children }) {
+  // close on Escape
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return h("div", { className: "modal-backdrop", onClick: (e) => { if (e.target === e.currentTarget) onClose(); } },
+    h("div", { className: "modal", role: "dialog", "aria-modal": true, "aria-label": title },
+      h("div", { className: "modal-header" },
+        h("h2", { className: "modal-title" }, title),
+        h("button", { className: "modal-close", onClick: onClose, "aria-label": "Закрыть" }, "×"),
+      ),
+      children,
+    )
+  );
+}
+
+// ── New Profile Modal ──────────────────────────────────────────────────────
+
+function NewProfileModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setLoading(true); setErr(null);
+    try {
+      const profile = await api.post("/api/profiles", { name: trimmed });
+      onCreated(profile);
+      onClose();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return h(Modal, { title: "Новый профиль клиента", onClose },
+    h("form", { onSubmit: handleSubmit },
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "profile-name" }, "Имя клиента"),
+        h("input", {
+          id: "profile-name", ref: inputRef,
+          className: "form-input",
+          value: name, onChange: (e) => setName(e.target.value),
+          placeholder: "напр. medithou",
+          autoComplete: "off",
+        }),
+        h("p", { className: "form-hint" },
+          "Уникальное имя — используется только внутри пульта."
+        ),
+      ),
+      err && h(Alert, { type: "error" }, err),
+      h("div", { className: "flex-gap mt-2" },
+        h("button", { type: "submit", className: "btn btn-primary", disabled: loading || !name.trim() },
+          loading && h(Spinner), loading ? "Создаю…" : "Создать профиль"
+        ),
+        h("button", { type: "button", className: "btn btn-ghost", onClick: onClose }, "Отмена"),
+      ),
+    )
+  );
+}
+
+// ── Connect API channel modal ──────────────────────────────────────────────
+
+function ConnectApiModal({ channel, profileId, onClose, onDone }) {
+  const [fields, setFields] = useState(null);
+  const [values, setValues] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    api.get(`/api/channels/${channel}/fields`).then(f => {
+      setFields(f);
+      const init = {};
+      f.forEach(fd => { init[fd.name] = ""; });
+      setValues(init);
+    }).catch(() => setFields([]));
+  }, [channel]);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true); setResult(null);
+    try {
+      const res = await api.post(`/api/profiles/${profileId}/channels/${channel}/connect`, { fields: values });
+      setResult({ ok: res.state === "live", msg: res.state === "live"
+        ? "Подключено и проверено — канал активен."
+        : "Данные сохранены, но проверка не прошла. Проверьте токен." });
+      if (res.state === "live") { setTimeout(() => { onDone(res.state); onClose(); }, 1200); }
+    } catch (ex) {
+      setResult({ ok: false, msg: ex.message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const channelName = channel.replace("_", " ").toUpperCase();
+  return h(Modal, { title: `Подключить · ${channelName}`, onClose },
+    fields === null
+      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
+      : h("form", { onSubmit: handleSubmit },
+          fields.map(fd => h("div", { key: fd.name, className: "form-group" },
+            h("label", { className: "form-label", htmlFor: `field-${fd.name}` }, fd.label),
+            h("input", {
+              id: `field-${fd.name}`,
+              className: "form-input",
+              type: fd.secret ? "password" : "text",
+              value: values[fd.name] ?? "",
+              onChange: (e) => setValues(v => ({ ...v, [fd.name]: e.target.value })),
+              placeholder: fd.secret ? "•••••••••••••••••••••" : "",
+              autoComplete: "off",
+              spellCheck: false,
+            }),
+            fd.hint && h("p", { className: "form-hint" }, fd.hint),
+          )),
+          result && h(Alert, { type: result.ok ? "success" : "error" }, result.msg),
+          !result?.ok && h("div", { className: "flex-gap mt-2" },
+            h("button", {
+              type: "submit", className: "btn btn-primary",
+              disabled: loading || Object.values(values).some(v => !v.trim()),
+            },
+              loading && h(Spinner), loading ? "Проверяю…" : "Проверить и сохранить"
+            ),
+            h("button", { type: "button", className: "btn btn-ghost", onClick: onClose }, "Отмена"),
+          ),
+        )
+  );
+}
+
+// ── Telegram interactive login modal (multi-step) ──────────────────────────
+
+const TG_STEPS = [
+  { key: "form",     n: "1", label: "Приложение" },
+  { key: "phone",    n: "2", label: "Телефон" },
+  { key: "code",     n: "3", label: "Код" },
+];
+
+function StepTrack({ step }) {
+  // "password" отображается внутри шага "Код"; "done" — все готово.
+  const activeKey = step === "password" ? "code" : step;
+  const order = TG_STEPS.map(s => s.key);
+  const activeIdx = step === "done" ? order.length : order.indexOf(activeKey);
+  return h("div", { className: "step-track" },
+    TG_STEPS.flatMap((s, i) => {
+      const cls = step === "done" || i < activeIdx ? "done" : i === activeIdx ? "active" : "";
+      const dot = h("span", { key: s.key, className: `step-dot ${cls}` },
+        h("span", { className: "dot" }, cls === "done" ? "✓" : s.n),
+        h("span", null, s.label),
+      );
+      return i < TG_STEPS.length - 1 ? [dot, h("span", { key: `sep-${i}`, className: "step-sep" })] : [dot];
+    })
+  );
+}
+
+function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
+  const [fields, setFields] = useState(null);        // step-1 field defs from registry
+  const [step, setStep] = useState("form");           // form|phone|code|password|done
+  const [v, setV] = useState({ api_id: "", api_hash: "", target_channel: "", phone: "", code: "", password: "" });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [info, setInfo] = useState(null);
+  const base = `/api/profiles/${profileId}/channels/telegram/login`;
+
+  useEffect(() => {
+    api.get(`/api/channels/${channel}/fields`).then(setFields).catch(() => setFields([]));
+  }, [channel]);
+
+  const set = (k) => (e) => setV(s => ({ ...s, [k]: e.target.value }));
+
+  async function begin(e) {
+    e.preventDefault();
+    setLoading(true); setErr(null);
+    try {
+      const r = await api.post(`${base}/begin`, {
+        api_id: parseInt(v.api_id, 10),
+        api_hash: v.api_hash.trim(),
+        target_channel: v.target_channel.trim(),
+      });
+      setStep(r.step); setInfo(r.message);
+    } catch (ex) { setErr(ex.message); } finally { setLoading(false); }
+  }
+
+  async function sendCode(e) {
+    e.preventDefault();
+    setLoading(true); setErr(null);
+    try {
+      const r = await api.post(`${base}/send-code`, { phone: v.phone.trim() });
+      setStep(r.step); setInfo(r.message);
+    } catch (ex) { setErr(ex.message); } finally { setLoading(false); }
+  }
+
+  async function signIn(e) {
+    e.preventDefault();
+    setLoading(true); setErr(null);
+    try {
+      const payload = step === "password"
+        ? { password: v.password }
+        : { code: v.code.trim() };
+      const r = await api.post(`${base}/sign-in`, payload);
+      if (r.step === "done") {
+        setStep("done"); setInfo(r.message);
+        setTimeout(() => { onDone(r.state); onClose(); }, 1100);
+      } else {
+        setStep(r.step); setInfo(r.message); // "password"
+      }
+    } catch (ex) { setErr(ex.message); } finally { setLoading(false); }
+  }
+
+  async function cancel() {
+    try { await api.post(`${base}/cancel`); } catch (_) {}
+    onClose();
+  }
+
+  function renderField(name) {
+    const fd = fields?.find(f => f.name === name);
+    if (!fd) return null;
+    return h("div", { key: name, className: "form-group" },
+      h("label", { className: "form-label", htmlFor: `tg-${name}` }, fd.label),
+      h("input", {
+        id: `tg-${name}`, className: "form-input",
+        type: fd.secret ? "password" : "text",
+        value: v[name] ?? "", onChange: set(name),
+        autoComplete: "off", spellCheck: false,
+        inputMode: name === "api_id" ? "numeric" : undefined,
+        placeholder: fd.secret ? "•••••••••••••••••" : (name === "target_channel" ? "@mychannel" : ""),
+      }),
+      fd.hint && h("p", { className: "form-hint" },
+        fd.hint,
+        fd.link && [" ", h("a", { key: "l", href: fd.link, target: "_blank", rel: "noopener" }, "открыть →")],
+      ),
+    );
+  }
+
+  const cancelBtn = h("button", { type: "button", className: "btn btn-ghost", onClick: cancel }, "Отмена");
+  let body;
+
+  if (fields === null) {
+    body = h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"));
+  } else if (step === "done") {
+    body = h(Alert, { type: "success" }, info || "Telegram подключён.");
+  } else if (step === "form") {
+    body = h("form", { onSubmit: begin },
+      renderField("api_id"), renderField("api_hash"), renderField("target_channel"),
+      err && h(Alert, { type: "error" }, err),
+      h("div", { className: "flex-gap mt-2" },
+        h("button", { type: "submit", className: "btn btn-primary",
+          disabled: loading || !v.api_id.trim() || !v.api_hash.trim() || !v.target_channel.trim() },
+          loading && h(Spinner), loading ? "Готовлю вход…" : "Далее"),
+        cancelBtn,
+      ),
+    );
+  } else if (step === "phone") {
+    body = h("form", { onSubmit: sendCode },
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "tg-phone" }, "Номер телефона"),
+        h("input", { id: "tg-phone", className: "form-input", type: "tel", value: v.phone,
+          onChange: set("phone"), placeholder: "+7 900 000-00-00", autoComplete: "off", autoFocus: true }),
+        h("p", { className: "form-hint" }, "На этот номер Telegram пришлёт код подтверждения."),
+      ),
+      err && h(Alert, { type: "error" }, err),
+      h("div", { className: "flex-gap mt-2" },
+        h("button", { type: "submit", className: "btn btn-primary", disabled: loading || !v.phone.trim() },
+          loading && h(Spinner), loading ? "Отправляю…" : "Отправить код"),
+        cancelBtn,
+      ),
+    );
+  } else if (step === "code" || step === "password") {
+    body = h("form", { onSubmit: signIn },
+      step === "code" && h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "tg-code" }, "Код из Telegram"),
+        h("input", { id: "tg-code", className: "form-input", value: v.code, onChange: set("code"),
+          inputMode: "numeric", placeholder: "12345", autoComplete: "one-time-code", autoFocus: true }),
+        h("p", { className: "form-hint" }, "Код придёт в приложение Telegram на этот номер."),
+      ),
+      step === "password" && h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "tg-pw" }, "Облачный пароль (2FA)"),
+        h("input", { id: "tg-pw", className: "form-input", type: "password", value: v.password,
+          onChange: set("password"), autoComplete: "off", autoFocus: true,
+          placeholder: "•••••••••••" }),
+        h("p", { className: "form-hint" }, "У аккаунта включена двухэтапная проверка — введите облачный пароль."),
+      ),
+      err && h(Alert, { type: "error" }, err),
+      h("div", { className: "flex-gap mt-2" },
+        h("button", { type: "submit", className: "btn btn-primary",
+          disabled: loading || (step === "code" ? !v.code.trim() : !v.password) },
+          loading && h(Spinner), loading ? "Проверяю…" : (step === "password" ? "Подтвердить пароль" : "Подтвердить код")),
+        cancelBtn,
+      ),
+    );
+  }
+
+  return h(Modal, { title: `Подключить · ${title}`, onClose: cancel },
+    fields !== null && step !== "done" && h(StepTrack, { step }),
+    body,
+  );
+}
+
+// ── Channel card ───────────────────────────────────────────────────────────
+
+function ChannelCard({ ch, profileId, onRefresh }) {
+  const [validating, setValidating] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [browserStep, setBrowserStep] = useState("idle"); // idle | opening | waiting | confirming
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const state = ch.state;
+  const cardClass = `channel-card ${state === "live" ? "live-card" : state === "needs_relogin" ? "amber-card" : ""}`;
+  const bl = `/api/profiles/${profileId}/channels/${ch.channel}/browser-login`;
+
+  async function handleValidate() {
+    setValidating(true); setMsg(null);
+    try {
+      const res = await api.post(`/api/profiles/${profileId}/channels/${ch.channel}/validate`);
+      setMsg({ type: res.state === "live" ? "success" : "warning", text: res.message });
+      onRefresh();
+    } catch (ex) {
+      setMsg({ type: "error", text: ex.message });
+    } finally {
+      setValidating(false);
+    }
+  }
+
+  // Браузерный вход: шаг 1 — открыть окно (свежий пустой контекст).
+  async function handleBrowserBegin() {
+    setBrowserStep("opening"); setMsg(null);
+    try {
+      await api.post(`${bl}/begin`);
+      setBrowserStep("waiting");
+      setMsg({ type: "info", text: "Открылось окно браузера. Войдите в аккаунт до рабочего кабинета, затем нажмите «Я вошёл»." });
+    } catch (ex) {
+      setBrowserStep("idle");
+      setMsg({ type: "error", text: ex.message });
+    }
+  }
+
+  // Шаг 2 — пользователь подтвердил вход; сервер проверяет и сохраняет сессию.
+  async function handleBrowserConfirm() {
+    setBrowserStep("confirming"); setMsg(null);
+    try {
+      const res = await api.post(`${bl}/confirm`);
+      setBrowserStep("idle");
+      setMsg({ type: res.state === "live" ? "success" : "warning", text: res.message });
+      onRefresh();
+    } catch (ex) {
+      // 409 — вход ещё не виден: окно оставлено открытым, можно дожать.
+      setBrowserStep("waiting");
+      setMsg({ type: "warning", text: ex.message });
+    }
+  }
+
+  async function handleBrowserCancel() {
+    try { await api.post(`${bl}/cancel`); } catch (_) {}
+    setBrowserStep("idle"); setMsg(null);
+  }
+
+  // Сброс входа: удалить учётку канала у профиля → «не подключён».
+  async function handleDisconnect() {
+    setResetConfirm(false); setMsg(null);
+    try {
+      const res = await api.post(`/api/profiles/${profileId}/channels/${ch.channel}/disconnect`);
+      setMsg({ type: "info", text: res.message || "Вход сброшен." });
+      onRefresh();
+    } catch (ex) {
+      setMsg({ type: "error", text: ex.message });
+    }
+  }
+
+  const hasSession = state === "live" || ch.has_credential;
+  const icon = CHANNEL_ICONS[ch.channel] ?? ch.channel.slice(0, 2).toUpperCase();
+
+  return h("div", { className: cardClass },
+    h("div", { className: "card-header" },
+      h("div", { className: "card-icon", "aria-hidden": true }, icon),
+      h("div", { className: "card-names" },
+        h("div", { className: "card-title" }, ch.title || ch.channel),
+        h("div", { className: "card-id" }, `id: ${ch.channel}`),
+      ),
+      h("span", { className: "card-tier" }, ch.kind),
+    ),
+    h("div", { className: "status-row" },
+      h(Lamp, { state }),
+      h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
+    ),
+    msg && h(Alert, { type: msg.type }, msg.text),
+    h("div", { className: "card-actions" },
+      // connect / reconnect button
+      ch.kind === "api" && state !== "live"
+        ? h("button", { className: "btn btn-primary btn-sm", onClick: () => setConnecting(true) },
+            ch.has_credential ? "Переподключить" : "Подключить"
+          )
+        : null,
+      // browser: шаг 1 — открыть окно входа
+      ch.kind === "browser" && state !== "live" && browserStep === "idle"
+        ? h("button", {
+            className: "btn btn-primary btn-sm",
+            onClick: handleBrowserBegin,
+          },
+            ch.has_credential ? "Переподключить" : "Войти"
+          )
+        : null,
+      ch.kind === "browser" && browserStep === "opening"
+        ? h("button", { className: "btn btn-primary btn-sm", disabled: true },
+            h(Spinner), "Открываю окно…")
+        : null,
+      // browser: шаг 2 — подтвердить вход / отменить
+      ch.kind === "browser" && (browserStep === "waiting" || browserStep === "confirming")
+        ? h("button", {
+            className: "btn btn-primary btn-sm",
+            onClick: handleBrowserConfirm,
+            disabled: browserStep === "confirming",
+          },
+            browserStep === "confirming" && h(Spinner),
+            browserStep === "confirming" ? "Проверяю вход…" : "Я вошёл"
+          )
+        : null,
+      ch.kind === "browser" && (browserStep === "waiting" || browserStep === "confirming")
+        ? h("button", { className: "btn btn-ghost btn-sm", onClick: handleBrowserCancel }, "Отмена")
+        : null,
+      // validate button (always, when idle)
+      hasSession && browserStep === "idle" && !resetConfirm
+        ? h("button", {
+            className: "btn btn-ghost btn-sm",
+            onClick: handleValidate,
+            disabled: validating,
+          },
+            validating && h(Spinner),
+            validating ? "Проверяю…" : "Проверить"
+          )
+        : null,
+      // reset login — delete stored credentials for this channel
+      hasSession && browserStep === "idle" && !resetConfirm
+        ? h("button", {
+            className: "btn btn-danger btn-sm",
+            onClick: () => setResetConfirm(true),
+          }, "Сбросить вход")
+        : null,
+      // reset confirmation
+      resetConfirm
+        ? h("button", { className: "btn btn-danger btn-sm", onClick: handleDisconnect },
+            "Подтвердить сброс")
+        : null,
+      resetConfirm
+        ? h("button", { className: "btn btn-ghost btn-sm", onClick: () => setResetConfirm(false) },
+            "Отмена")
+        : null,
+    ),
+    resetConfirm && (ch.channel === "vk_wall" || ch.channel === "vk_channel")
+      ? h("p", { className: "form-hint", style: { marginTop: "4px" } },
+          "ВК-стена и ВК-канал делят один вход — сброс затронет оба.")
+      : null,
+    // connect modal — interactive (Telegram multi-step) vs simple API form
+    connecting && ch.kind === "api" && ch.interactive
+      ? h(TelegramLoginModal, {
+          channel: ch.channel,
+          profileId,
+          title: ch.title || ch.channel,
+          onClose: () => setConnecting(false),
+          onDone: () => { setConnecting(false); onRefresh(); },
+        })
+      : null,
+    connecting && ch.kind === "api" && !ch.interactive
+      ? h(ConnectApiModal, {
+          channel: ch.channel,
+          profileId,
+          onClose: () => setConnecting(false),
+          onDone: () => { setConnecting(false); onRefresh(); },
+        })
+      : null,
+  );
+}
+
+// ── Channels view ──────────────────────────────────────────────────────────
+
+function ChannelsView({ profile }) {
+  const [channels, setChannels] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const data = await api.get(`/api/profiles/${profile.id}/channels`);
+      setChannels(data);
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }, [profile.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return h("div", null,
+    h("div", null,
+      h("h1", { className: "page-title" }, profile.name),
+      h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ID ${profile.id}`),
+    ),
+    h("p", { className: "section-title" }, "Каналы публикации"),
+    err && h(Alert, { type: "error" }, err),
+    channels === null && !err
+      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
+      : h("div", { className: "channel-grid" },
+          channels?.map(ch => h(ChannelCard, {
+            key: ch.channel,
+            ch, profileId: profile.id,
+            onRefresh: load,
+          }))
+        ),
+    channels?.length === 0 && h("div", { className: "empty-state" },
+      h("span", { className: "empty-icon" }, "📡"),
+      h("h2", { className: "empty-title" }, "Нет доступных каналов"),
+      h("p", { className: "empty-body" }, "Добавьте каналы в реестр VALIDATORS — они появятся здесь автоматически."),
+    ),
+  );
+}
+
+// ── No profile selected ────────────────────────────────────────────────────
+
+function NoProfileView() {
+  return h("div", { className: "empty-state" },
+    h("span", { className: "empty-icon" }, "⊞"),
+    h("h2", { className: "empty-title" }, "Выберите профиль"),
+    h("p", { className: "empty-body" },
+      "Каждый клиент — отдельный профиль с изолированными каналами. "
+      + "Выберите существующий или создайте новый — кнопка внизу слева."
+    ),
+  );
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────
+
+function Sidebar({ profiles, activeId, onSelect, onNew }) {
+  return h("nav", { className: "sidebar", "aria-label": "Профили" },
+    h("div", { className: "sidebar-header" },
+      h("div", { className: "logo" }, h("span", null, "⊹"), " CROSSPOST"),
+    ),
+    h("p", { className: "sidebar-section-label" }, "Клиенты"),
+    profiles.length === 0
+      ? h("p", { style: { padding: "12px 20px", fontSize: "13px", color: "var(--text-3)" } },
+          "Нет профилей. Добавьте первый.")
+      : profiles.map(p => h("button", {
+          key: p.id,
+          className: `profile-item ${p.id === activeId ? "active" : ""}`,
+          onClick: () => onSelect(p),
+          "aria-current": p.id === activeId ? "page" : undefined,
+        },
+          h("span", { className: "profile-avatar" }, p.name[0].toUpperCase()),
+          h("span", null, p.name),
+        )),
+    h("div", { className: "sidebar-footer" },
+      h("button", { className: "btn-new-profile", onClick: onNew },
+        h("span", { "aria-hidden": true }, "+"),
+        "Новый профиль",
+      ),
+    ),
+  );
+}
+
+// ── App root ───────────────────────────────────────────────────────────────
+
+function App() {
+  const [profiles, setProfiles] = useState([]);
+  const [active, setActive] = useState(null);
+  const [showNewProfile, setShowNewProfile] = useState(false);
+  const [loadingProfiles, setLoadingProfiles] = useState(true);
+
+  useEffect(() => {
+    api.get("/api/profiles")
+      .then(data => { setProfiles(data); if (data.length) setActive(data[0]); })
+      .catch(() => {})
+      .finally(() => setLoadingProfiles(false));
+  }, []);
+
+  function onProfileCreated(p) {
+    setProfiles(prev => [...prev, p]);
+    setActive(p);
+  }
+
+  return h("div", { id: "root-inner", style: { display: "contents" } },
+    h(Sidebar, {
+      profiles,
+      activeId: active?.id,
+      onSelect: setActive,
+      onNew: () => setShowNewProfile(true),
+    }),
+    h("main", { className: "main" },
+      loadingProfiles
+        ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
+        : active
+          ? h(ChannelsView, { key: active.id, profile: active })
+          : h(NoProfileView),
+    ),
+    showNewProfile && h(NewProfileModal, {
+      onClose: () => setShowNewProfile(false),
+      onCreated: onProfileCreated,
+    }),
+  );
+}
+
+// ── Mount ──────────────────────────────────────────────────────────────────
+createRoot(document.getElementById("root")).render(h(App));
+</script>
+</body>
+</html>
