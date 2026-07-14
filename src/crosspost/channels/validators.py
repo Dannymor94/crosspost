@@ -154,14 +154,17 @@ def _channel_from_url(url: str) -> str:
 
 # ── Реестр каналов ────────────────────────────────────────────────────────────
 
-# DOM-маркеры «НЕ залогинен» (Playwright-селекторы). Текстовые — устойчивее
-# генерённых CSS-классов. Сняты с экрана «ВКонтакте | Добро пожаловать»; при
-# редизайне VK — проверять на живой странице (make smoke), НЕ угадывать.
-_VK_LOGGED_OUT = (
-    "text=/Добро пожаловать/i",  # заголовок лендинга-приглашения
-    "button:has-text('Войти')",  # кнопка входа на незалогиненной
-    "a[href*='id.vk.com']",  # ссылка на форму входа VK ID
-)
+# ПОЧЕМУ детекция входа НЕ по DOM-тексту:
+# Негативная проверка «на странице есть слово Войти» ненадёжна — оно встречается
+# и на ЗАЛОГИНЕННЫХ страницах ВК (футер, скрытые виджеты) → ложный «не вошёл».
+# Позитивные DOM-селекторы кабинета угадывать нельзя (CLAUDE.md), а снять живой
+# DOM из кода нельзя. Поэтому вход определяем по НАДЁЖНЫМ фактам:
+#   1) probe_url — ЗАЩИЩЁННАЯ страница: аноним → редирект на login (reject_fragments);
+#      залогинен → остаётся. URL-проверка на защищённой странице надёжна.
+#   2) session_cookie_domains — снятый storageState содержит куки аккаунта.
+# require_selector/logged_out_selectors ОСТАВЛЕНЫ пустыми: заполнить ТОЛЬКО
+# устойчивым маркером, снятым с ЖИВОЙ страницы (make smoke), тогда добавится
+# строгая позитивная DOM-проверка. Пустые = не участвуют (не ломают детекцию).
 
 VALIDATORS: dict[str, ChannelValidatorDef] = {
     "telegram": ChannelValidatorDef(
@@ -185,15 +188,15 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         fn=_make_browser_validator(
             url="https://yandex.ru/business",
             reject_url_fragments=("passport.yandex", "auth/login", "accounts/login"),
-            require_selector=".YandexBusinessCabinet, [data-testid='cabinet']",
+            # require_selector НЕ задаём: прежний ".YandexBusinessCabinet" был угадан
+            # и давал ложный «не вошёл». Полагаемся на URL-редирект + куки.
         ),
         title="Яндекс Бизнес",
         enabled=True,
         login_url="https://yandex.ru/sprav/",
         probe_url="https://yandex.ru/business",
         reject_fragments=("passport.yandex", "auth/login", "accounts/login"),
-        logged_out_selectors=("button:has-text('Войти')", "a[href*='passport.yandex']"),
-        require_selector=".YandexBusinessCabinet, [data-testid='cabinet']",
+        # require_selector: снять с живой yandex.ru/business (маркер кабинета) и вписать.
         session_cookie_domains=("yandex.ru", "yandex.com"),
     ),
     "vk_wall": ChannelValidatorDef(
@@ -208,7 +211,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         login_url="https://vk.com/",
         probe_url="https://vk.com/feed",
         reject_fragments=("vk.com/login", "id.vk.com"),
-        logged_out_selectors=_VK_LOGGED_OUT,
+        # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
     ),
     "vk_channel": ChannelValidatorDef(
@@ -224,7 +227,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         login_url="https://vk.com/",
         probe_url="https://vk.com/feed",
         reject_fragments=("vk.com/login", "id.vk.com"),
-        logged_out_selectors=_VK_LOGGED_OUT,
+        # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
         session_channel="vk_wall",  # сессию берём/пишем в vk_wall
     ),

@@ -109,42 +109,50 @@ async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str
 
 
 async def confirm(profile_id: int, channel: str) -> dict | None:
-    """Проверить вход ПОЗИТИВНО (навигация на probe_url).
+    """Проверить вход по НАДЁЖНЫМ фактам (не по тексту DOM).
+
+    Сигналы «залогинен»:
+      1. probe_url НЕ увёл на страницу входа (reject_fragments) — на защищённой
+         странице это надёжно: аноним редиректится, залогиненный остаётся;
+      2. снятый storageState содержит куки аккаунта (session_cookie_domains);
+      3. опц. require_selector — позитивный DOM-маркер кабинета, ЕСЛИ снят с живой
+         страницы и вписан в декларацию (иначе шаг пропускается).
 
     Возвращает storageState (dict) при успехе — окно закрывается.
-    None — пользователь ещё НЕ вошёл; окно остаётся открытым для повторной попытки.
+    None — ещё не вошёл; окно живо. Причина неуспеха логируется (диагностика).
     """
     sess = _SESSIONS.get((profile_id, channel))
     if sess is None:
         raise BrowserLoginError("Окно входа не открыто — нажмите «Войти» заново.")
 
     v = _validator(channel)
-    from crosspost.adapters.browser.base_browser import is_logged_in
 
     try:
         await sess.page.goto(v.probe_url, wait_until="domcontentloaded", timeout=30_000)
-        # (1) Дождаться РЕАЛЬНОЙ загрузки — иначе проверяем пустой DOM и ложно «вошли».
+        # (1) Дождаться РЕАЛЬНОГО рендера — иначе судим о пустой странице.
         await _settle(sess.page)
-        # (2) Проверка по ФАКТУ (URL + DOM-маркеры), а не только по URL.
-        ok = await is_logged_in(
-            sess.page,
-            reject_url_fragments=v.reject_fragments,
-            reject_selectors=v.logged_out_selectors,
-            require_selector=v.require_selector,
-        )
+        url = sess.page.url
+        state = await sess.context.storage_state()
+        # (3) DOM-маркеры — ТОЛЬКО если реально заданы (сняты с живой страницы):
+        #     require_selector — позитивный маркер кабинета;
+        #     logged_out_selectors — СТРОГИЙ признак формы входа (не текст «Войти»).
+        selector_ok = True
+        if v.require_selector or v.logged_out_selectors:
+            from crosspost.adapters.browser.base_browser import is_logged_in
+
+            selector_ok = await is_logged_in(
+                sess.page,
+                reject_selectors=v.logged_out_selectors,
+                require_selector=v.require_selector,
+            )
     except Exception as exc:
         raise BrowserLoginError(f"Не удалось проверить вход: {exc}") from exc
 
-    if not ok:
-        return None  # ещё не вошёл — держим окно
-
-    state = await sess.context.storage_state()
-    # (3) Страховка: снятая сессия должна содержать куки домена. Пустая → НЕ успех.
-    if not _has_session_cookies(state, v.session_cookie_domains):
-        raise BrowserLoginError(
-            "Вход не выполнен: сессия пустая (нет кук аккаунта). "
-            "Войдите в аккаунт до рабочего кабинета и повторите."
-        )
+    reason = _login_failure_reason(url, state, v, selector_ok=selector_ok)
+    if reason is not None:
+        # Диагностика: ЧТО именно не сошлось — чтобы не гадать вслепую.
+        logger.info("browser login %s/%s не завершён: %s", profile_id, channel, reason)
+        return None  # держим окно — пользователь может дожать вход
 
     await _close(sess)
     _SESSIONS.pop((profile_id, channel), None)
@@ -152,15 +160,21 @@ async def confirm(profile_id: int, channel: str) -> dict | None:
 
 
 async def _settle(page) -> None:
-    """Дождаться, пока страница реально загрузится (сеть утихнет).
+    """Дождаться РЕАЛЬНОЙ загрузки страницы перед проверкой входа.
 
-    networkidle может не наступить на «живых» SPA — тогда просто идём дальше:
-    к этому моменту DOM уже отрендерен (domcontentloaded + попытка networkidle).
+    Сначала "load" (ресурсы), затем попытка "networkidle" (динамика ленты).
+    networkidle может не наступить на «живых» SPA — тогда идём дальше (DOM уже есть).
     """
-    try:
-        await page.wait_for_load_state("networkidle", timeout=10_000)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("networkidle wait skipped: %s", exc)
+    for state_name in ("load", "networkidle"):
+        try:
+            await page.wait_for_load_state(state_name, timeout=10_000)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("wait_for_load_state(%s) пропущен: %s", state_name, exc)
+
+
+def _cookie_names(state: dict) -> list[str]:
+    cookies = state.get("cookies", []) if isinstance(state, dict) else []
+    return sorted({str(c.get("name", "")) for c in cookies if c.get("name")})
 
 
 def _has_session_cookies(state: dict, domains: tuple[str, ...]) -> bool:
@@ -177,6 +191,24 @@ def _has_session_cookies(state: dict, domains: tuple[str, ...]) -> bool:
         if any(d in dom for d in domains):
             return True
     return False
+
+
+def _login_failure_reason(
+    url: str, state: dict, v, *, selector_ok: bool = True
+) -> str | None:
+    """None если залогинен; иначе человекочитаемая причина (для лога/диагностики)."""
+    for frag in v.reject_fragments:
+        if frag in url:
+            return f"открыта страница входа (URL {url!r} содержит {frag!r})"
+    if not _has_session_cookies(state, v.session_cookie_domains):
+        present = ", ".join(_cookie_names(state)) or "нет"
+        return (
+            f"нет кук доменов {v.session_cookie_domains} — сессия пустая "
+            f"(куки в snapshot: {present})"
+        )
+    if not selector_ok:
+        return f"маркер кабинета не найден (require_selector={v.require_selector!r})"
+    return None
 
 
 async def cancel(profile_id: int, channel: str) -> None:
