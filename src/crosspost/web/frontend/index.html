@@ -1151,8 +1151,10 @@ function ChannelCard({ ch, profileId, onRefresh }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
-    // per-profile цель постинга (группа/организация) — своя у каждого клиента
-    ch.needs_target && hasSession && h(TargetEditor, {
+    // per-profile цель постинга (группа/организация) — своя у каждого клиента.
+    // Показываем СРАЗУ при подключении (не ждём входа): цель — отдельная настройка
+    // профиля, задаётся вместе с логином. Поля/подсказка — из декларации канала.
+    ch.needs_target && h(TargetEditor, {
       channel: ch.channel, profileId,
       label: ch.target_label, hint: ch.target_hint, current: ch.target,
       onSaved: onRefresh,

@@ -95,3 +95,23 @@ async def test_no_session_no_adapter(repo):
     await repo.set_credential(p.id, "vk_wall", CredentialKind.TARGET, "group_A")
     # сессии нет → None
     assert await build_profile_adapter(repo, p.id, "vk_wall") is None
+
+
+async def test_yandex_two_profiles_isolated_org_id(repo):
+    """Блокер мультипрофиля: A→org_id=X, B→org_id=Y. Публикации НЕ пересекаются.
+
+    org_id раньше брался из общего runtime/.env → пост любого профиля уходил
+    в организацию ВЛАДЕЛЬЦА. Теперь org_id — per-profile (CredentialKind.TARGET).
+    """
+    a = await repo.create_profile("A")
+    b = await repo.create_profile("B")
+    await repo.set_credential(a.id, "yandex", CredentialKind.STORAGE_STATE, _STATE)
+    await repo.set_credential(a.id, "yandex", CredentialKind.TARGET, "111")  # X
+    await repo.set_credential(b.id, "yandex", CredentialKind.STORAGE_STATE, _STATE)
+    await repo.set_credential(b.id, "yandex", CredentialKind.TARGET, "222")  # Y
+
+    ad_a = await build_profile_adapter(repo, a.id, "yandex")
+    ad_b = await build_profile_adapter(repo, b.id, "yandex")
+    assert ad_a is not None and ad_b is not None
+    assert ad_a._org_id == "111"  # A постит в СВОЮ организацию X
+    assert ad_b._org_id == "222"  # B — в СВОЮ Y, не в X (изоляция)
