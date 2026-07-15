@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    name: ruff + mypy + pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev,browser]"
+
+      - name: ruff lint
+        run: python -m ruff check src tests
+
+      - name: ruff format check
+        run: python -m ruff format --check src tests
+
+      - name: mypy
+        run: python -m mypy src
+
+      - name: pytest
+        run: python -m pytest --tb=short -q
