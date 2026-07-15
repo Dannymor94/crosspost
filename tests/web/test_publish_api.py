@@ -139,19 +139,28 @@ async def test_live_channel_without_target_not_eligible(client, factory):
 async def test_publish_multichannel_done(client, factory):
     pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
     adapters = {
-        "telegram": _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")),
-        "vk_wall": _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk1")),
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")
+        ),
+        "vk_wall": _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk1")
+        ),
     }
     with _patch_adapters(adapters):
         resp = await client.post(
             f"/api/profiles/{pid}/publish",
-            data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram", "vk_wall"])},
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps(["telegram", "vk_wall"]),
+            },
             files=_post_files(),
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert {o["channel"]: o["status"] for o in body["outcomes"]} == {
-        "telegram": "done", "vk_wall": "done"
+        "telegram": "done",
+        "vk_wall": "done",
     }
 
     # Поллинг статуса возвращает то же.
@@ -162,13 +171,19 @@ async def test_publish_multichannel_done(client, factory):
 async def test_partial_success_then_retry_one(client, factory):
     pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
     failing = {
-        "telegram": _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")),
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")
+        ),
         "vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("VK упал")),
     }
     with _patch_adapters(failing):
         resp = await client.post(
             f"/api/profiles/{pid}/publish",
-            data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram", "vk_wall"])},
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps(["telegram", "vk_wall"]),
+            },
             files=_post_files(),
         )
     body = resp.json()
@@ -177,13 +192,20 @@ async def test_partial_success_then_retry_one(client, factory):
     assert by == {"telegram": "done", "vk_wall": "failed"}
 
     # Ретраим ТОЛЬКО vk_wall — теперь успешно.
-    fixed = {"vk_wall": _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk9"))}
+    fixed = {
+        "vk_wall": _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk9")
+        )
+    }
     with _patch_adapters(fixed):
         r = await client.post(f"/api/profiles/{pid}/publish/{pub_id}/retry/vk_wall")
     assert r.status_code == 200
     assert r.json()["status"] == "done"
 
-    st = {o["channel"]: o["status"] for o in (await client.get(f"/api/profiles/{pid}/publish/{pub_id}")).json()}
+    st = {
+        o["channel"]: o["status"]
+        for o in (await client.get(f"/api/profiles/{pid}/publish/{pub_id}")).json()
+    }
     assert st == {"telegram": "done", "vk_wall": "done"}
 
 
@@ -217,7 +239,9 @@ async def test_schedule_list_cancel(client, factory):
     resp = await client.post(
         f"/api/profiles/{pid}/scheduled",
         data={
-            "content_type": "post", "text": "later", "channels": json.dumps(["telegram"]),
+            "content_type": "post",
+            "text": "later",
+            "channels": json.dumps(["telegram"]),
             "scheduled_at": "2026-08-01T12:00:00+00:00",
         },
         files=_post_files(),

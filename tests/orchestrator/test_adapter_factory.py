@@ -45,6 +45,17 @@ async def test_vk_wall_adapter_uses_profile_target(repo):
     assert adapter._storage_state == _STATE
 
 
+async def test_dirty_stored_target_normalized_at_use(repo):
+    """Старое значение — полный URL. Адаптер получает ЧИСТОЕ имя (без задвоения)."""
+    p = await repo.create_profile("A")
+    await repo.set_credential(p.id, "vk_wall", CredentialKind.STORAGE_STATE, _STATE)
+    # эмулируем значение, сохранённое ДО нормализации
+    await repo.set_credential(p.id, "vk_wall", CredentialKind.TARGET, "https://vk.com/yogapiecom")
+
+    adapter = await build_profile_adapter(repo, p.id, "vk_wall")
+    assert adapter._screen_name == "yogapiecom"  # НЕ https://vk.com/yogapiecom
+
+
 async def test_no_target_no_adapter(repo):
     """Есть сессия, но НЕТ per-profile цели → None (не постим в чужую группу)."""
     p = await repo.create_profile("A")

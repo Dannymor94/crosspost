@@ -106,7 +106,9 @@ async def _require_profile(profile_repo: ProfileRepository, profile_id: int) -> 
         raise HTTPException(status_code=404, detail="Profile not found")
 
 
-def _make_service(profile_repo: ProfileRepository, pub_repo: PublicationRepository, profile_id: int):
+def _make_service(
+    profile_repo: ProfileRepository, pub_repo: PublicationRepository, profile_id: int
+):
     async def factory(channel: str):
         return await build_profile_adapter(profile_repo, profile_id, channel)
 
@@ -162,8 +164,12 @@ async def publish_targets(
             reason = ""
         out.append(
             TargetOut(
-                channel=ch, title=v.title or ch, kind=v.kind,
-                state=state_str, eligible=eligible, reason=reason,
+                channel=ch,
+                title=v.title or ch,
+                kind=v.kind,
+                state=state_str,
+                eligible=eligible,
+                reason=reason,
             )
         )
     return out
@@ -211,16 +217,16 @@ async def publish_now(
     )
 
 
-@router.get(
-    "/api/profiles/{profile_id}/publish/{publication_id}", response_model=list[OutcomeOut]
-)
+@router.get("/api/profiles/{profile_id}/publish/{publication_id}", response_model=list[OutcomeOut])
 async def publish_status(
     profile_id: int, publication_id: str, session: SessionDep
 ) -> list[OutcomeOut]:
     _, pub_repo = _repos(session, profile_id)
     rows = await pub_repo.list_statuses(publication_id)
     return [
-        OutcomeOut(channel=r.channel, status=str(r.status), external_id=r.external_id, error=r.error)
+        OutcomeOut(
+            channel=r.channel, status=str(r.status), external_id=r.external_id, error=r.error
+        )
         for r in rows
     ]
 
@@ -287,8 +293,12 @@ async def schedule_post(
     _validate_or_422(content)
 
     post = await pub_repo.create_scheduled(
-        content_type=content_type, text=text, title=title or None,
-        media_paths=media_paths, channels=channel_list, scheduled_at=when,
+        content_type=content_type,
+        text=text,
+        title=title or None,
+        media_paths=media_paths,
+        channels=channel_list,
+        scheduled_at=when,
     )
     return _scheduled_out(post)
 
@@ -301,9 +311,7 @@ async def list_scheduled(profile_id: int, session: SessionDep) -> list[Scheduled
 
 
 @router.delete("/api/profiles/{profile_id}/scheduled/{scheduled_id}")
-async def cancel_scheduled(
-    profile_id: int, scheduled_id: int, session: SessionDep
-) -> dict:
+async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionDep) -> dict:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
 
@@ -336,9 +344,7 @@ async def _reject_ineligible(
         if v is None or not v.enabled:
             raise HTTPException(status_code=422, detail=f"Канал '{ch}' недоступен")
         if not supports(ch, ctype):
-            raise HTTPException(
-                status_code=422, detail=f"'{ch}' не поддерживает {ctype.value}"
-            )
+            raise HTTPException(status_code=422, detail=f"'{ch}' не поддерживает {ctype.value}")
         if conns.get(ch) != ConnectionState.LIVE:
             raise HTTPException(
                 status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"

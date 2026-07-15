@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
-from crosspost.adapters.browser.base_browser import is_logged_in, open_page
+from crosspost.adapters.browser.base_browser import _FROM_FILE, is_logged_in, open_page
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
 
@@ -88,12 +89,12 @@ class VKWallBrowserAdapter:
         store: IdempotencyStore,
         *,
         headless: bool = False,
-        storage_state: str | None = None,
+        storage_state: Any = _FROM_FILE,
     ) -> None:
         self._screen_name = screen_name  # напр. "medithou"
         self._store = store
         self._headless = headless
-        # per-profile сессия (UI). None → CLI-режим (общий файл сессии).
+        # per-profile сессия из credentials (UI), либо _FROM_FILE → CLI-файл.
         self._storage_state = storage_state
 
     async def publish(
@@ -106,10 +107,11 @@ class VKWallBrowserAdapter:
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        _kw = {"headless": self._headless}
-        if self._storage_state is not None:
-            _kw["storage_state"] = self._storage_state
-        async with open_page(self.channel, **_kw) as page:
+        async with open_page(
+            self.channel,
+            headless=self._headless,
+            storage_state=self._storage_state,
+        ) as page:
             # 2) открыть стену сообщества
             url = _WALL_URL.format(screen_name=self._screen_name)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)

@@ -24,9 +24,10 @@ CSS-классы vkit-* НЕ используем (генерённые).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
-from crosspost.adapters.browser.base_browser import is_logged_in, open_page
+from crosspost.adapters.browser.base_browser import _FROM_FILE, is_logged_in, open_page
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
 
@@ -119,12 +120,12 @@ class VKChannelBrowserAdapter:
         store: IdempotencyStore,
         *,
         headless: bool = False,
-        storage_state: str | None = None,
+        storage_state: Any = _FROM_FILE,
     ) -> None:
         self._channel_id = channel_id  # напр. "-240033402"
         self._store = store
         self._headless = headless
-        self._storage_state = storage_state  # per-profile сессия vk_wall; None → CLI-файл
+        self._storage_state = storage_state  # per-profile сессия vk_wall; _FROM_FILE → CLI-файл
 
     async def publish(
         self,
@@ -137,10 +138,12 @@ class VKChannelBrowserAdapter:
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Сессию берём из vk_wall — тот же аккаунт ВК, не логинимся дважды.
-        _kw = {"headless": self._headless, "session_channel": _SESSION_CHANNEL}
-        if self._storage_state is not None:
-            _kw["storage_state"] = self._storage_state
-        async with open_page(self.channel, **_kw) as page:
+        async with open_page(
+            self.channel,
+            headless=self._headless,
+            session_channel=_SESSION_CHANNEL,
+            storage_state=self._storage_state,
+        ) as page:
             # 2) навигация в раздел канала мессенджера
             url = _CHANNEL_URL.format(channel_id=self._channel_id)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)

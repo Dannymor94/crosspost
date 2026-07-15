@@ -421,6 +421,56 @@ async def test_set_and_get_target(client: AsyncClient) -> None:
     assert vk["target"] == "medithou"
 
 
+async def test_target_normalized_from_full_url(client: AsyncClient) -> None:
+    """Баг задвоения: ввели полную ссылку — сохраняем только screen_name."""
+    r = await client.post("/api/profiles", json={"name": "norm"})
+    pid = r.json()["id"]
+
+    put = await client.put(
+        f"/api/profiles/{pid}/channels/vk_wall/target",
+        json={"target": "https://vk.com/yogapiecom"},
+    )
+    assert put.status_code == 200
+    assert put.json()["target"] == "yogapiecom"  # без vk.com/https://…
+
+    got = await client.get(f"/api/profiles/{pid}/channels/vk_wall/target")
+    assert got.json()["target"] == "yogapiecom"
+
+
+async def test_dirty_stored_target_shown_normalized(client: AsyncClient) -> None:
+    """Значение, сохранённое ДО фикса (полный URL), показывается уже нормализованным."""
+    from crosspost.db.models import CredentialKind
+    from crosspost.db.profile_repo import ProfileRepository
+    from crosspost.db.vault import get_vault
+
+    r = await client.post("/api/profiles", json={"name": "legacy"})
+    pid = r.json()["id"]
+    # кладём «грязное» значение напрямую, минуя нормализующий эндпоинт
+    deps_factory = deps._session_factory
+    async with deps_factory() as s:
+        repo = ProfileRepository(s, vault=get_vault())
+        await repo.set_credential(
+            pid, "vk_wall", CredentialKind.TARGET, "https://vk.com/yogapiecom"
+        )
+
+    got = await client.get(f"/api/profiles/{pid}/channels/vk_wall/target")
+    assert got.json()["target"] == "yogapiecom"  # само обрезалось при показе
+
+    chans = (await client.get(f"/api/profiles/{pid}/channels")).json()
+    vk = next(c for c in chans if c["channel"] == "vk_wall")
+    assert vk["target"] == "yogapiecom"
+
+
+async def test_target_garbage_rejected(client: AsyncClient) -> None:
+    r = await client.post("/api/profiles", json={"name": "bad"})
+    pid = r.json()["id"]
+    resp = await client.put(
+        f"/api/profiles/{pid}/channels/vk_wall/target",
+        json={"target": "это не адрес группы"},
+    )
+    assert resp.status_code == 422
+
+
 async def test_target_isolated_between_profiles(client: AsyncClient) -> None:
     ra = await client.post("/api/profiles", json={"name": "clientA"})
     rb = await client.post("/api/profiles", json={"name": "clientB"})
@@ -440,9 +490,7 @@ async def test_target_rejected_for_channel_without_target(client: AsyncClient) -
     r = await client.post("/api/profiles", json={"name": "tg-owner"})
     pid = r.json()["id"]
     # telegram цель постинга задаёт в своём флоу, не через /target.
-    resp = await client.put(
-        f"/api/profiles/{pid}/channels/telegram/target", json={"target": "x"}
-    )
+    resp = await client.put(f"/api/profiles/{pid}/channels/telegram/target", json={"target": "x"})
     assert resp.status_code == 400
 
 

@@ -13,6 +13,7 @@ validate_connection() читает реестр — никаких if/elif по 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -24,6 +25,50 @@ logger = logging.getLogger(__name__)
 # Тип валидирующей функции: принимает credential (plaintext или None для browser)
 # и возвращает True если соединение живое.
 ValidatorFn = Callable[[str | None], Coroutine[Any, Any, bool]]
+
+# Нормализатор цели: сырой ввод пользователя → чистое значение (screen_name/id).
+# Бросает ValueError с человеческим сообщением, если ввод не распознан (верификация).
+TargetNormalizer = Callable[[str], str]
+
+
+class TargetError(ValueError):
+    """Ввод цели постинга не распознан (для 422 с человеческим текстом)."""
+
+
+def normalize_vk_screen_name(raw: str) -> str:
+    """Любой формат адреса группы VK → короткое имя.
+
+    'https://vk.com/yogapiecom' | 'vk.com/yogapiecom' | '@yogapiecom' | 'yogapiecom'
+    → 'yogapiecom'. Числовой 'club123' / 'public123' — оставляем как есть.
+    """
+    s = raw.strip()
+    s = re.sub(r"^https?://", "", s, flags=re.I)
+    s = re.sub(r"^(m\.|www\.)?vk\.com/", "", s, flags=re.I)
+    s = s.lstrip("@").strip("/")
+    s = s.split("/")[0].split("?")[0].strip()  # первый сегмент пути, без query
+    # VK screen name: буквы/цифры/подчёркивание (точки/домены недопустимы).
+    if not re.fullmatch(r"[A-Za-z0-9_]+", s or ""):
+        raise TargetError(
+            "Не похоже на адрес группы VK. Введите короткое имя (vk.com/XXXX → XXXX)."
+        )
+    return s
+
+
+def normalize_vk_channel_id(raw: str) -> str:
+    """ID канала VK (числовой, обычно отрицательный) из строки/URL."""
+    m = re.search(r"-?\d+", raw or "")
+    if not m:
+        raise TargetError("Укажите числовой id канала VK (напр. -240033402).")
+    return m.group(0)
+
+
+def normalize_yandex_org(raw: str) -> str:
+    """ID организации Яндекс Бизнес: из URL yandex.ru/sprav/<id>/… или голого числа."""
+    s = raw or ""
+    m = re.search(r"/sprav/(\d+)", s) or re.search(r"\b(\d{3,})\b", s)
+    if not m:
+        raise TargetError("Укажите числовой ID организации (yandex.ru/sprav/<ID>/…).")
+    return m.group(1)
 
 
 @dataclass(frozen=True)
@@ -54,6 +99,7 @@ class ChannelValidatorDef:
     needs_target: bool = False
     target_label: str = ""  # подпись поля цели в UI
     target_hint: str = ""  # подсказка «что вводить»
+    target_normalizer: TargetNormalizer | None = None  # сырой ввод → чистое значение
 
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
@@ -207,6 +253,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         needs_target=True,
         target_label="ID организации",
         target_hint="Из URL кабинета: yandex.ru/sprav/<ЭТОТ-ID>/…",
+        target_normalizer=normalize_yandex_org,
     ),
     "vk_wall": ChannelValidatorDef(
         kind="browser",
@@ -224,7 +271,8 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         session_cookie_domains=("vk.com",),
         needs_target=True,
         target_label="Адрес группы",
-        target_hint="vk.com/XXXX → впишите XXXX (короткое имя группы, куда постим)",
+        target_hint="Вставьте адрес группы: vk.com/XXXX или полную ссылку — оставим только имя",
+        target_normalizer=normalize_vk_screen_name,
     ),
     "vk_channel": ChannelValidatorDef(
         kind="browser",
@@ -245,5 +293,22 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         needs_target=True,
         target_label="ID канала VK",
         target_hint="Числовой id канала сообщества (напр. -240033402)",
+        target_normalizer=normalize_vk_channel_id,
     ),
 }
+
+
+def normalize_target(channel: str, raw: str) -> str:
+    """Применить нормализатор канала к цели (безопасно, для использования/показа).
+
+    Делает результат корректным ДАЖЕ для значений, сохранённых до нормализации
+    (напр. полный URL). Если нормализатор не задан или ввод не распознан —
+    возвращаем как есть (не роняем публикацию из-за старого значения).
+    """
+    v = VALIDATORS.get(channel)
+    if v is None or v.target_normalizer is None or not raw:
+        return raw
+    try:
+        return v.target_normalizer(raw)
+    except ValueError:
+        return raw

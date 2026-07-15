@@ -77,8 +77,12 @@ async def test_create_and_list_scheduled(session):
 async def test_cancel_scheduled_removes_it(session):
     repo = _repo(session)
     post = await repo.create_scheduled(
-        content_type="post", text="x", title=None, media_paths=[],
-        channels=["telegram"], scheduled_at=datetime(2026, 8, 1, tzinfo=UTC),
+        content_type="post",
+        text="x",
+        title=None,
+        media_paths=[],
+        channels=["telegram"],
+        scheduled_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     assert await repo.cancel_scheduled(post.id) is True
     assert await repo.list_scheduled() == []
@@ -90,8 +94,12 @@ async def test_scheduled_isolated_between_profiles(session):
     repo_a = _repo(session, pid=1)
     repo_b = _repo(session, pid=2)
     post = await repo_a.create_scheduled(
-        content_type="post", text="A", title=None, media_paths=[],
-        channels=["telegram"], scheduled_at=datetime(2026, 8, 1, tzinfo=UTC),
+        content_type="post",
+        text="A",
+        title=None,
+        media_paths=[],
+        channels=["telegram"],
+        scheduled_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     # B не видит и не может отменить пост A.
     assert await repo_b.list_scheduled() == []

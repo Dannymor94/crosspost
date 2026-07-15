@@ -193,9 +193,7 @@ def _has_session_cookies(state: dict, domains: tuple[str, ...]) -> bool:
     return False
 
 
-def _login_failure_reason(
-    url: str, state: dict, v, *, selector_ok: bool = True
-) -> str | None:
+def _login_failure_reason(url: str, state: dict, v, *, selector_ok: bool = True) -> str | None:
     """None если залогинен; иначе человекочитаемая причина (для лога/диагностики)."""
     for frag in v.reject_fragments:
         if frag in url:

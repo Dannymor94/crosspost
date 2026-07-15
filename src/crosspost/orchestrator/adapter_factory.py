@@ -16,7 +16,7 @@ import logging
 
 from crosspost.adapters.base import ChannelAdapter
 from crosspost.channels.telegram_login import parse_credential_blob
-from crosspost.channels.validators import VALIDATORS
+from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.config import load_config, parse_bool
 from crosspost.db.models import CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
@@ -53,6 +53,9 @@ async def build_profile_adapter(
         if not target:
             logger.warning("channel %s: не задана per-profile цель постинга", channel)
             return None  # без цели не публикуем (иначе постили бы в чужую группу)
+        # Нормализуем ПРИ ИСПОЛЬЗОВАНИИ: даже старое «грязное» значение (полный URL)
+        # обрежется до screen_name/id — не постим в vk.com/https://vk.com/...
+        target = normalize_target(channel, target)
 
     return _build_browser(channel, cred, store, target)
 
@@ -77,24 +80,18 @@ async def _build_telegram(cred: str, store) -> ChannelAdapter | None:
     return TelegramAdapter(client, target=target, store=store)
 
 
-def _build_browser(
-    channel: str, storage_state: str, store, target: str
-) -> ChannelAdapter | None:
+def _build_browser(channel: str, storage_state: str, store, target: str) -> ChannelAdapter | None:
     """target — per-profile цель (screen_name / org_id / channel_id). НЕ из env."""
     headless = parse_bool(load_config().get("BROWSER_HEADLESS", "true"))
 
     if channel == "yandex":
         from crosspost.adapters.browser.yandex import YandexBrowserAdapter  # noqa: PLC0415
 
-        return YandexBrowserAdapter(
-            target, store, headless=headless, storage_state=storage_state
-        )
+        return YandexBrowserAdapter(target, store, headless=headless, storage_state=storage_state)
     if channel == "vk_wall":
         from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter  # noqa: PLC0415
 
-        return VKWallBrowserAdapter(
-            target, store, headless=headless, storage_state=storage_state
-        )
+        return VKWallBrowserAdapter(target, store, headless=headless, storage_state=storage_state)
     if channel == "vk_channel":
         from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter  # noqa: PLC0415
 

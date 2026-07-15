@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from crosspost.channels.connection_validator import validate_connection
-from crosspost.channels.validators import VALIDATORS
+from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.db.models import ConnectionState, CredentialKind
 from crosspost.web.deps import RepoDep
 
@@ -160,7 +160,8 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
 
         target = ""
         if v.needs_target:
-            target = await repo.get_credential(profile_id, ch, CredentialKind.TARGET) or ""
+            raw_target = await repo.get_credential(profile_id, ch, CredentialKind.TARGET) or ""
+            target = normalize_target(ch, raw_target)  # показываем чистое значение
 
         result.append(
             ChannelStatusOut(
@@ -187,25 +188,28 @@ async def get_target(profile_id: int, channel: str, repo: RepoDep) -> TargetBody
     if channel not in VALIDATORS:
         raise HTTPException(status_code=404, detail=f"Channel '{channel}' not in registry")
     target = await repo.get_credential(profile_id, channel, CredentialKind.TARGET)
-    return TargetBody(target=target or "")
+    return TargetBody(target=normalize_target(channel, target or ""))
 
 
 @router.put(
     "/api/profiles/{profile_id}/channels/{channel}/target",
     response_model=TargetBody,
 )
-async def set_target(
-    profile_id: int, channel: str, body: TargetBody, repo: RepoDep
-) -> TargetBody:
+async def set_target(profile_id: int, channel: str, body: TargetBody, repo: RepoDep) -> TargetBody:
     """Сохранить per-profile цель постинга (группа/организация). Изоляция клиентов."""
     if await repo.get_profile(profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
     v = VALIDATORS.get(channel)
     if v is None or not v.needs_target:
         raise HTTPException(status_code=400, detail="Канал не требует цели постинга")
-    target = body.target.strip()
-    if not target:
+    raw = body.target.strip()
+    if not raw:
         raise HTTPException(status_code=422, detail="Укажите цель (группу/организацию)")
+    # Нормализуем: из полного URL/адреса вытягиваем чистое значение (screen_name/id).
+    try:
+        target = v.target_normalizer(raw) if v.target_normalizer else raw
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     await repo.set_credential(profile_id, channel, CredentialKind.TARGET, target)
     return TargetBody(target=target)
 

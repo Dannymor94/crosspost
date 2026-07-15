@@ -1033,7 +1033,9 @@ function TargetEditor({ channel, profileId, label, hint, current, onSaved }) {
     if (!t) return;
     setSaving(true); setOk(false); setErr(null);
     try {
-      await api.put(`/api/profiles/${profileId}/channels/${channel}/target`, { target: t });
+      const res = await api.put(`/api/profiles/${profileId}/channels/${channel}/target`, { target: t });
+      // Сервер вернул НОРМАЛИЗОВАННОЕ значение (из полного URL → только имя/id).
+      if (res && typeof res.target === "string") setValue(res.target);
       setOk(true);
       onSaved?.();
     } catch (ex) {

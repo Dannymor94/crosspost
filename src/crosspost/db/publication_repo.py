@@ -155,4 +155,6 @@ class PublicationRepository:
             )
         )
         await self._s.commit()
-        return result.rowcount > 0
+        # rowcount есть у CursorResult (DELETE), но session.execute типизирован как
+        # Result[Any] без него — getattr держит mypy чистым в обеих средах (с/без стабов).
+        return getattr(result, "rowcount", 0) > 0

@@ -65,8 +65,12 @@ def _repo(session, profile_id=1) -> PublicationRepository:
 
 async def test_publish_multichannel_all_done(session):
     adapters = {
-        "telegram": _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")),
-        "vk_wall": _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk1")),
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")
+        ),
+        "vk_wall": _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vk1")
+        ),
     }
     svc = PublishService(_repo(session), _factory(adapters))
 
@@ -78,7 +82,9 @@ async def test_publish_multichannel_all_done(session):
 
 async def test_partial_success_one_fails(session):
     adapters = {
-        "telegram": _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")),
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1")
+        ),
         "vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("VK упал")),
     }
     svc = PublishService(_repo(session), _factory(adapters))
@@ -96,7 +102,9 @@ async def test_partial_success_one_fails(session):
 
 async def test_yandex_submitted_not_done(session):
     adapters = {
-        "yandex": _MockAdapter("yandex", result=ChannelResult("yandex", ResultStatus.SUBMITTED, "y1")),
+        "yandex": _MockAdapter(
+            "yandex", result=ChannelResult("yandex", ResultStatus.SUBMITTED, "y1")
+        ),
     }
     svc = PublishService(_repo(session), _factory(adapters))
     outcomes = await svc.publish(_post(), ["yandex"], publication_id="p1")
