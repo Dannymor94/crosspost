@@ -57,12 +57,18 @@ async def client(factory) -> AsyncGenerator[AsyncClient, None]:
         yield c
 
 
-async def _make_profile_with_live(factory, channels_live: list[str]) -> int:
+async def _make_profile_with_live(factory, channels_live: list[str], *, name="client-a") -> int:
+    from crosspost.channels.validators import VALIDATORS
+    from crosspost.db.models import CredentialKind
+
     async with factory() as s:
         repo = ProfileRepository(s, vault=get_vault())
-        p = await repo.create_profile("client-a")
+        p = await repo.create_profile(name)
         for ch in channels_live:
             await repo.upsert_connection(p.id, ch, ConnectionState.LIVE)
+            # каналам с целью — задаём per-profile цель, иначе они не eligible.
+            if VALIDATORS[ch].needs_target:
+                await repo.set_credential(p.id, ch, CredentialKind.TARGET, f"grp-{name}")
         return p.id
 
 
@@ -102,6 +108,29 @@ async def test_targets_reflect_live_and_capability(client, factory):
     assert by["telegram"]["eligible"] is True
     assert by["vk_wall"]["eligible"] is False  # не подключён
     assert "подключ" in by["vk_wall"]["reason"].lower()
+
+
+async def test_live_channel_without_target_not_eligible(client, factory):
+    # vk_wall live, но БЕЗ цели → не eligible (нужна per-profile группа).
+    async with factory() as s:
+        repo = ProfileRepository(s, vault=get_vault())
+        p = await repo.create_profile("no-target")
+        await repo.upsert_connection(p.id, "vk_wall", ConnectionState.LIVE)
+        pid = p.id
+
+    resp = await client.get(f"/api/profiles/{pid}/publish/targets?content_type=post")
+    vk = next(t for t in resp.json() if t["channel"] == "vk_wall")
+    assert vk["eligible"] is False
+    assert "групп" in vk["reason"].lower()
+
+    # И публикация отклоняется, пока цель не задана.
+    with _patch_adapters({}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "x", "channels": json.dumps(["vk_wall"])},
+            files=_post_files(),
+        )
+    assert r.status_code == 422
 
 
 # ── Publish now ───────────────────────────────────────────────────────────────

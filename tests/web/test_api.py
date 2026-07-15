@@ -398,6 +398,54 @@ async def test_connect_rejects_interactive_channel(client: AsyncClient) -> None:
     assert resp2.status_code == 400
 
 
+# ── Per-profile цель постинга (изоляция групп) ────────────────────────────────
+
+
+async def test_set_and_get_target(client: AsyncClient) -> None:
+    r = await client.post("/api/profiles", json={"name": "grp-owner"})
+    pid = r.json()["id"]
+
+    put = await client.put(
+        f"/api/profiles/{pid}/channels/vk_wall/target", json={"target": "medithou"}
+    )
+    assert put.status_code == 200
+    assert put.json()["target"] == "medithou"
+
+    got = await client.get(f"/api/profiles/{pid}/channels/vk_wall/target")
+    assert got.json()["target"] == "medithou"
+
+    # Отражается в статусе канала.
+    chans = (await client.get(f"/api/profiles/{pid}/channels")).json()
+    vk = next(c for c in chans if c["channel"] == "vk_wall")
+    assert vk["needs_target"] is True
+    assert vk["target"] == "medithou"
+
+
+async def test_target_isolated_between_profiles(client: AsyncClient) -> None:
+    ra = await client.post("/api/profiles", json={"name": "clientA"})
+    rb = await client.post("/api/profiles", json={"name": "clientB"})
+    pa, pb = ra.json()["id"], rb.json()["id"]
+
+    # Один аккаунт ВК, но РАЗНЫЕ группы у клиентов.
+    await client.put(f"/api/profiles/{pa}/channels/vk_wall/target", json={"target": "group_A"})
+    await client.put(f"/api/profiles/{pb}/channels/vk_wall/target", json={"target": "group_B"})
+
+    a = (await client.get(f"/api/profiles/{pa}/channels/vk_wall/target")).json()["target"]
+    b = (await client.get(f"/api/profiles/{pb}/channels/vk_wall/target")).json()["target"]
+    assert a == "group_A"
+    assert b == "group_B"  # B НЕ подхватил цель A
+
+
+async def test_target_rejected_for_channel_without_target(client: AsyncClient) -> None:
+    r = await client.post("/api/profiles", json={"name": "tg-owner"})
+    pid = r.json()["id"]
+    # telegram цель постинга задаёт в своём флоу, не через /target.
+    resp = await client.put(
+        f"/api/profiles/{pid}/channels/telegram/target", json={"target": "x"}
+    )
+    assert resp.status_code == 400
+
+
 async def test_validate_channel_calls_validate_connection(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "dave"})
     pid = resp.json()["id"]

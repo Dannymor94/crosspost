@@ -49,6 +49,7 @@ class ConnectionState(StrEnum):
 class CredentialKind(StrEnum):
     API_TOKEN = "api_token"
     STORAGE_STATE = "storage_state"  # Playwright storageState JSON
+    TARGET = "target"  # per-profile цель постинга (группа VK / орг Яндекса / id канала)
 
 
 class PublicationStatus(StrEnum):

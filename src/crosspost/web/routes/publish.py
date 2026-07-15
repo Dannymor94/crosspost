@@ -29,7 +29,7 @@ from crosspost.channels.validators import VALIDATORS
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import ContentValidationError, validate
-from crosspost.db.models import ConnectionState, PublicationStatus
+from crosspost.db.models import ConnectionState, CredentialKind, PublicationStatus
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.vault import get_vault
@@ -146,11 +146,18 @@ async def publish_targets(
         state_str = str(state) if state is not None else "not_connected"
         supported = supports(ch, ctype)
         live = state == ConnectionState.LIVE
-        eligible = live and supported
+        has_target = True
+        if v.needs_target:
+            has_target = bool(
+                await profile_repo.get_credential(profile_id, ch, CredentialKind.TARGET)
+            )
+        eligible = live and supported and has_target
         if not supported:
             reason = f"не поддерживает {ctype.value}"
         elif not live:
             reason = "переподключите в настройках" if state else "не подключён"
+        elif not has_target:
+            reason = f"укажите «{v.target_label.lower()}» в настройках"
         else:
             reason = ""
         out.append(
@@ -335,6 +342,13 @@ async def _reject_ineligible(
         if conns.get(ch) != ConnectionState.LIVE:
             raise HTTPException(
                 status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"
+            )
+        if v.needs_target and not await profile_repo.get_credential(
+            profile_id, ch, CredentialKind.TARGET
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{ch}': укажите «{v.target_label.lower()}» в настройках",
             )
 
 

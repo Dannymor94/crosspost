@@ -609,6 +609,14 @@ body {
 .outcome-id { font-size: 10.5px; color: var(--text-3); margin-top: 6px; }
 .outcome-err { font-size: 12px; color: var(--error); margin-top: 6px; line-height: 1.4; }
 
+/* ── Target editor ───────────────────────────────────────────────────────── */
+.target-editor {
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input); display: flex; flex-direction: column; gap: 4px;
+}
+.target-row { display: flex; gap: 8px; align-items: center; }
+.target-row .form-input { flex: 1; }
+
 /* ── Scheduled list ──────────────────────────────────────────────────────── */
 .sched-list { display: flex; flex-direction: column; gap: 8px; }
 .sched-item {
@@ -649,6 +657,15 @@ const api = {
   },
   async postForm(url, formData) {
     const r = await fetch(url, { method: "POST", body: formData });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
+  async put(url, body) {
+    const r = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
@@ -1002,6 +1019,49 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
   );
 }
 
+// ── Target editor (per-profile цель постинга) ──────────────────────────────
+
+function TargetEditor({ channel, profileId, label, hint, current, onSaved }) {
+  const [value, setValue] = useState(current || "");
+  const [saving, setSaving] = useState(false);
+  const [ok, setOk] = useState(false);
+  useEffect(() => { setValue(current || ""); }, [current]);
+
+  const [err, setErr] = useState(null);
+  async function save() {
+    const t = value.trim();
+    if (!t) return;
+    setSaving(true); setOk(false); setErr(null);
+    try {
+      await api.put(`/api/profiles/${profileId}/channels/${channel}/target`, { target: t });
+      setOk(true);
+      onSaved?.();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally { setSaving(false); }
+  }
+
+  const dirty = value.trim() !== (current || "");
+  return h("div", { className: "target-editor" },
+    h("label", { className: "form-label", htmlFor: `tgt-${channel}` }, label || "Цель постинга"),
+    h("div", { className: "target-row" },
+      h("input", {
+        id: `tgt-${channel}`, className: "form-input mono", value,
+        onChange: (e) => { setValue(e.target.value); setOk(false); },
+        placeholder: hint || "", spellCheck: false, autoComplete: "off",
+      }),
+      h("button", {
+        className: "btn btn-ghost btn-sm", onClick: save,
+        disabled: saving || !value.trim() || !dirty,
+      }, saving ? h(Spinner) : (ok && !dirty ? "✓" : "Сохранить")),
+    ),
+    hint && h("p", { className: "form-hint" }, hint),
+    err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
+    !current && h("p", { className: "form-hint", style: { color: "var(--amber)" } },
+      "Без цели канал недоступен для публикации — у каждого клиента своя группа."),
+  );
+}
+
 // ── Channel card ───────────────────────────────────────────────────────────
 
 function ChannelCard({ ch, profileId, onRefresh }) {
@@ -1089,6 +1149,12 @@ function ChannelCard({ ch, profileId, onRefresh }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
+    // per-profile цель постинга (группа/организация) — своя у каждого клиента
+    ch.needs_target && hasSession && h(TargetEditor, {
+      channel: ch.channel, profileId,
+      label: ch.target_label, hint: ch.target_hint, current: ch.target,
+      onSaved: onRefresh,
+    }),
     msg && h(Alert, { type: msg.type }, msg.text),
     h("div", { className: "card-actions" },
       // connect / reconnect button

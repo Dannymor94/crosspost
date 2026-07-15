@@ -72,6 +72,14 @@ class ChannelStatusOut(BaseModel):
     state: str
     has_credential: bool
     interactive: bool
+    needs_target: bool = False
+    target_label: str = ""
+    target_hint: str = ""
+    target: str = ""  # текущая per-profile цель (не секрет — адрес группы/орг)
+
+
+class TargetBody(BaseModel):
+    target: str
 
 
 class ChannelRegistryItem(BaseModel):
@@ -150,6 +158,10 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
         cred = await repo.get_credential(profile_id, ch, v.credential_kind)
         has_cred = cred is not None
 
+        target = ""
+        if v.needs_target:
+            target = await repo.get_credential(profile_id, ch, CredentialKind.TARGET) or ""
+
         result.append(
             ChannelStatusOut(
                 channel=ch,
@@ -158,9 +170,44 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
                 state=state_str,
                 has_credential=has_cred,
                 interactive=v.interactive,
+                needs_target=v.needs_target,
+                target_label=v.target_label,
+                target_hint=v.target_hint,
+                target=target,
             )
         )
     return result
+
+
+@router.get(
+    "/api/profiles/{profile_id}/channels/{channel}/target",
+    response_model=TargetBody,
+)
+async def get_target(profile_id: int, channel: str, repo: RepoDep) -> TargetBody:
+    if channel not in VALIDATORS:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel}' not in registry")
+    target = await repo.get_credential(profile_id, channel, CredentialKind.TARGET)
+    return TargetBody(target=target or "")
+
+
+@router.put(
+    "/api/profiles/{profile_id}/channels/{channel}/target",
+    response_model=TargetBody,
+)
+async def set_target(
+    profile_id: int, channel: str, body: TargetBody, repo: RepoDep
+) -> TargetBody:
+    """Сохранить per-profile цель постинга (группа/организация). Изоляция клиентов."""
+    if await repo.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    v = VALIDATORS.get(channel)
+    if v is None or not v.needs_target:
+        raise HTTPException(status_code=400, detail="Канал не требует цели постинга")
+    target = body.target.strip()
+    if not target:
+        raise HTTPException(status_code=422, detail="Укажите цель (группу/организацию)")
+    await repo.set_credential(profile_id, channel, CredentialKind.TARGET, target)
+    return TargetBody(target=target)
 
 
 @router.post(

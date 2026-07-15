@@ -48,6 +48,12 @@ class ChannelValidatorDef:
     # куки этих доменов — иначе сессия пустая → «вход не выполнен» (страховка от ложного LIVE)
     session_channel: str | None = None  # из какого канала брать/писать сессию
     # (vk_channel делит аккаунт с vk_wall → session_channel="vk_wall")
+    # ── Цель постинга (per-profile) ───────────────────────────────────────────
+    # Сессия может быть общей (один аккаунт), но КУДА постим — своё у каждого
+    # профиля. Без цели канал не eligible: разные клиенты → разные группы.
+    needs_target: bool = False
+    target_label: str = ""  # подпись поля цели в UI
+    target_hint: str = ""  # подсказка «что вводить»
 
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
@@ -198,6 +204,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         reject_fragments=("passport.yandex", "auth/login", "accounts/login"),
         # require_selector: снять с живой yandex.ru/business (маркер кабинета) и вписать.
         session_cookie_domains=("yandex.ru", "yandex.com"),
+        needs_target=True,
+        target_label="ID организации",
+        target_hint="Из URL кабинета: yandex.ru/sprav/<ЭТОТ-ID>/…",
     ),
     "vk_wall": ChannelValidatorDef(
         kind="browser",
@@ -213,6 +222,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         reject_fragments=("vk.com/login", "id.vk.com"),
         # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
+        needs_target=True,
+        target_label="Адрес группы",
+        target_hint="vk.com/XXXX → впишите XXXX (короткое имя группы, куда постим)",
     ),
     "vk_channel": ChannelValidatorDef(
         kind="browser",
@@ -229,6 +241,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         reject_fragments=("vk.com/login", "id.vk.com"),
         # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
-        session_channel="vk_wall",  # сессию берём/пишем в vk_wall
+        session_channel="vk_wall",  # сессию берём/пишем в vk_wall (общий аккаунт)
+        needs_target=True,
+        target_label="ID канала VK",
+        target_hint="Числовой id канала сообщества (напр. -240033402)",
     ),
 }
