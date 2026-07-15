@@ -119,10 +119,12 @@ class VKChannelBrowserAdapter:
         store: IdempotencyStore,
         *,
         headless: bool = False,
+        storage_state: str | None = None,
     ) -> None:
         self._channel_id = channel_id  # напр. "-240033402"
         self._store = store
         self._headless = headless
+        self._storage_state = storage_state  # per-profile сессия vk_wall; None → CLI-файл
 
     async def publish(
         self,
@@ -135,9 +137,10 @@ class VKChannelBrowserAdapter:
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Сессию берём из vk_wall — тот же аккаунт ВК, не логинимся дважды.
-        async with open_page(
-            self.channel, headless=self._headless, session_channel=_SESSION_CHANNEL
-        ) as page:
+        _kw = {"headless": self._headless, "session_channel": _SESSION_CHANNEL}
+        if self._storage_state is not None:
+            _kw["storage_state"] = self._storage_state
+        async with open_page(self.channel, **_kw) as page:
             # 2) навигация в раздел канала мессенджера
             url = _CHANNEL_URL.format(channel_id=self._channel_id)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)

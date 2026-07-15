@@ -501,6 +501,125 @@ body {
 .text-3 { color: var(--text-3); }
 .mt-2 { margin-top: 8px; }
 .flex-gap { display: flex; align-items: center; gap: 8px; }
+
+/* ── View tabs ───────────────────────────────────────────────────────────── */
+.view-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+.view-tab {
+  padding: 10px 16px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-3); font-size: 14px; font-weight: 500;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .12s, border-color .12s;
+}
+.view-tab:hover { color: var(--text-1); }
+.view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.view-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Photo picker ────────────────────────────────────────────────────────── */
+.photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.photo-thumb {
+  position: relative; width: 84px; height: 84px;
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg-input);
+}
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-remove {
+  position: absolute; top: 3px; right: 3px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(0,0,0,.65); color: #fff; border: none; cursor: pointer;
+  font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.photo-remove:hover { background: var(--error); }
+.photo-add {
+  width: 84px; height: 84px; flex-shrink: 0;
+  border: 1px dashed var(--border-f); border-radius: var(--radius);
+  background: var(--bg-input); color: var(--text-2); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 11px; transition: border-color .12s, color .12s;
+}
+.photo-add:hover { border-color: var(--accent); color: var(--text-1); }
+.photo-add-plus { font-size: 20px; line-height: 1; }
+
+/* ── Target toggles ──────────────────────────────────────────────────────── */
+.target-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px; margin-bottom: 20px;
+}
+.target {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; text-align: left;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.target:hover:not(.disabled) { border-color: var(--border-f); }
+.target.on { border-color: var(--accent); background: var(--accent-dim); }
+.target.disabled { opacity: .5; cursor: not-allowed; }
+.target:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.target-icon {
+  width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+  background: var(--bg-input); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--text-2);
+}
+.target-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.target-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.target-id { font-size: 10.5px; color: var(--text-3); }
+.target-reason { font-size: 10.5px; color: var(--amber); }
+.target-check {
+  width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--border-f); display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px;
+}
+.target-check.on { background: var(--accent); border-color: var(--accent); }
+
+/* ── Publish actions ─────────────────────────────────────────────────────── */
+.publish-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.hint-inline { font-size: 12px; color: var(--text-3); font-family: var(--font-mono); }
+.empty-inline {
+  padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius-lg);
+  color: var(--text-3); font-size: 13px; line-height: 1.6; margin-bottom: 20px;
+}
+
+/* ── Outcomes ────────────────────────────────────────────────────────────── */
+.outcome-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;
+}
+.outcome {
+  padding: 14px 16px; border-radius: var(--radius-lg);
+  border: 1px solid var(--border); background: var(--bg-card);
+}
+.outcome.success { border-color: rgba(34,197,94,.3); }
+.outcome.error   { border-color: rgba(248,113,113,.3); }
+.outcome.warning { border-color: rgba(245,158,11,.3); }
+.outcome-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.outcome-ch { font-size: 13px; color: var(--text-1); font-weight: 600; }
+.outcome-badge {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 3px 8px; border-radius: 20px;
+}
+.outcome-badge.success { background: var(--live-bg); color: var(--live); }
+.outcome-badge.error   { background: var(--error-bg); color: var(--error); }
+.outcome-badge.warning { background: var(--amber-bg); color: var(--amber); }
+.outcome-badge.info    { background: var(--accent-dim); color: var(--accent); }
+.outcome-id { font-size: 10.5px; color: var(--text-3); margin-top: 6px; }
+.outcome-err { font-size: 12px; color: var(--error); margin-top: 6px; line-height: 1.4; }
+
+/* ── Scheduled list ──────────────────────────────────────────────────────── */
+.sched-list { display: flex; flex-direction: column; gap: 8px; }
+.sched-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: var(--radius-lg);
+  border: 1px solid var(--border); background: var(--bg-card);
+}
+.sched-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sched-when { font-size: 12px; color: var(--accent); }
+.sched-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sched-chans { font-size: 11px; color: var(--text-3); }
 </style>
 </head>
 <body>
@@ -525,6 +644,16 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
     });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
+  async postForm(url, formData) {
+    const r = await fetch(url, { method: "POST", body: formData });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
+  async del(url) {
+    const r = await fetch(url, { method: "DELETE" });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
@@ -1134,9 +1263,272 @@ function Sidebar({ profiles, activeId, onSelect, onNew }) {
 
 // ── App root ───────────────────────────────────────────────────────────────
 
+// ── Publish view ─────────────────────────────────────────────────────────────
+
+const OUTCOME_META = {
+  done:          { cls: "success", label: "Опубликовано" },
+  submitted:     { cls: "warning", label: "На модерации" },
+  attempting:    { cls: "info",    label: "Публикую…" },
+  failed:        { cls: "error",   label: "Ошибка" },
+  needs_relogin: { cls: "warning", label: "Нужен ре-логин" },
+};
+
+function PhotoPicker({ files, onChange }) {
+  const inputRef = useRef(null);
+  const previews = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
+
+  function add(e) {
+    const picked = Array.from(e.target.files || []);
+    onChange([...files, ...picked]);
+    e.target.value = "";  // позволить выбрать тот же файл снова
+  }
+  function remove(i) { onChange(files.filter((_, idx) => idx !== i)); }
+
+  return h("div", null,
+    h("div", { className: "photo-grid" },
+      previews.map((p, i) => h("div", { key: i, className: "photo-thumb" },
+        h("img", { src: p.url, alt: p.name }),
+        h("button", { type: "button", className: "photo-remove", onClick: () => remove(i), "aria-label": "Убрать" }, "×"),
+      )),
+      h("button", { type: "button", className: "photo-add", onClick: () => inputRef.current?.click() },
+        h("span", { className: "photo-add-plus" }, "+"),
+        h("span", null, "Фото"),
+      ),
+    ),
+    h("input", {
+      ref: inputRef, type: "file", accept: "image/*", multiple: true,
+      style: { display: "none" }, onChange: add,
+    }),
+  );
+}
+
+function TargetToggle({ t, checked, onToggle }) {
+  const icon = CHANNEL_ICONS[t.channel] ?? t.channel.slice(0, 2).toUpperCase();
+  const disabled = !t.eligible;
+  return h("button", {
+    type: "button",
+    className: `target ${checked ? "on" : ""} ${disabled ? "disabled" : ""}`,
+    onClick: disabled ? undefined : () => onToggle(t.channel),
+    disabled,
+    title: disabled ? t.reason : "",
+    "aria-pressed": checked,
+  },
+    h("span", { className: "target-icon" }, icon),
+    h("span", { className: "target-body" },
+      h("span", { className: "target-title" }, t.title),
+      disabled
+        ? h("span", { className: "target-reason" }, t.reason)
+        : h("span", { className: "target-id mono" }, t.channel),
+    ),
+    h("span", { className: `target-check ${checked ? "on" : ""}` }, checked ? "✓" : ""),
+  );
+}
+
+function OutcomeCard({ o, onRetry, retrying }) {
+  const meta = OUTCOME_META[o.status] || { cls: "info", label: o.status };
+  const canRetry = o.status === "failed" || o.status === "needs_relogin";
+  return h("div", { className: `outcome ${meta.cls}` },
+    h("div", { className: "outcome-head" },
+      h("span", { className: "outcome-ch mono" }, o.channel),
+      h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
+    ),
+    o.external_id && h("div", { className: "outcome-id mono" }, `id: ${o.external_id}`),
+    o.error && h("div", { className: "outcome-err" }, o.error),
+    canRetry && h("button", {
+      className: "btn btn-ghost btn-sm mt-2", onClick: () => onRetry(o.channel), disabled: retrying,
+    }, retrying ? h(Spinner) : null, retrying ? " Повторяю…" : "Повторить только его"),
+  );
+}
+
+function ScheduleModal({ onClose, onConfirm }) {
+  const now = new Date(Date.now() + 3600_000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const local = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const [when, setWhen] = useState(local);
+  return h(Modal, { title: "Запланировать публикацию", onClose },
+    h("div", { className: "form-group" },
+      h("label", { className: "form-label", htmlFor: "sched-when" }, "Дата и время"),
+      h("input", { id: "sched-when", className: "form-input", type: "datetime-local",
+        value: when, onChange: (e) => setWhen(e.target.value) }),
+      h("p", { className: "form-hint" }, "Исполнение по расписанию — в следующей версии; сейчас пост сохраняется в очередь."),
+    ),
+    h("div", { className: "flex-gap mt-2" },
+      h("button", { className: "btn btn-primary", onClick: () => onConfirm(when), disabled: !when }, "Сохранить в план"),
+      h("button", { className: "btn btn-ghost", onClick: onClose }, "Отмена"),
+    ),
+  );
+}
+
+function PublishView({ profile }) {
+  const [text, setText] = useState("");
+  const [files, setFiles] = useState([]);
+  const [targets, setTargets] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [outcomes, setOutcomes] = useState(null);
+  const [pubId, setPubId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [retryCh, setRetryCh] = useState(null);
+  const [scheduled, setScheduled] = useState([]);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [alert, setAlert] = useState(null);
+  const base = `/api/profiles/${profile.id}`;
+
+  const loadTargets = useCallback(async () => {
+    try {
+      const t = await api.get(`${base}/publish/targets?content_type=post`);
+      setTargets(t);
+      setSelected((prev) => new Set([...prev].filter((c) => t.find((x) => x.channel === c && x.eligible))));
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+  }, [base]);
+
+  const loadScheduled = useCallback(async () => {
+    try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
+  }, [base]);
+
+  useEffect(() => { loadTargets(); loadScheduled(); }, [loadTargets, loadScheduled]);
+
+  function toggle(ch) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(ch) ? next.delete(ch) : next.add(ch);
+      return next;
+    });
+  }
+
+  function buildForm(extra) {
+    const fd = new FormData();
+    fd.append("content_type", "post");
+    fd.append("text", text);
+    fd.append("channels", JSON.stringify([...selected]));
+    files.forEach((f) => fd.append("media", f));
+    Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
+    return fd;
+  }
+
+  const canSend = selected.size > 0 && files.length > 0 && !busy;
+
+  async function publishNow() {
+    setBusy(true); setAlert(null); setOutcomes(null);
+    try {
+      const res = await api.postForm(`${base}/publish`, buildForm());
+      setPubId(res.publication_id);
+      setOutcomes(res.outcomes);
+      loadTargets();
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setBusy(false); }
+  }
+
+  async function retry(ch) {
+    setRetryCh(ch);
+    try {
+      const o = await api.post(`${base}/publish/${pubId}/retry/${ch}`);
+      setOutcomes((prev) => prev.map((x) => (x.channel === ch ? o : x)));
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setRetryCh(null); }
+  }
+
+  async function doSchedule(whenLocal) {
+    setShowSchedule(false); setBusy(true); setAlert(null);
+    try {
+      const iso = new Date(whenLocal).toISOString();
+      await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: iso }));
+      setAlert({ type: "success", text: "Пост запланирован." });
+      setText(""); setFiles([]); setOutcomes(null);
+      loadScheduled();
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setBusy(false); }
+  }
+
+  async function cancelScheduled(id) {
+    try { await api.del(`${base}/scheduled/${id}`); loadScheduled(); }
+    catch (ex) { setAlert({ type: "error", text: ex.message }); }
+  }
+
+  const eligibleCount = (targets || []).filter((t) => t.eligible).length;
+
+  return h("div", null,
+    h("h1", { className: "page-title" }, "Публикация"),
+    h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
+
+    // Контент
+    h("p", { className: "section-title" }, "Контент"),
+    h("div", { className: "form-panel", style: { maxWidth: "100%" } },
+      h("textarea", {
+        className: "form-input", rows: 4, placeholder: "Текст поста…",
+        value: text, onChange: (e) => setText(e.target.value),
+        style: { resize: "vertical", fontFamily: "var(--font-ui)" },
+      }),
+      h("div", { className: "mt-2" }, h(PhotoPicker, { files, onChange: setFiles })),
+    ),
+
+    // Каналы
+    h("p", { className: "section-title" }, "Куда публикуем"),
+    targets === null
+      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
+      : eligibleCount === 0
+        ? h("div", { className: "empty-inline" },
+            "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
+        : h("div", { className: "target-grid" },
+            targets.map((t) => h(TargetToggle, {
+              key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
+            }))),
+
+    // Действия
+    h("div", { className: "publish-actions" },
+      h("button", { className: "btn btn-primary", onClick: publishNow, disabled: !canSend },
+        busy && h(Spinner), busy ? "Публикую…" : "Опубликовать сейчас"),
+      h("button", { className: "btn btn-ghost", onClick: () => setShowSchedule(true), disabled: !canSend },
+        "Запланировать"),
+      selected.size === 0 && targets && eligibleCount > 0
+        ? h("span", { className: "hint-inline" }, "выберите канал")
+        : files.length === 0
+          ? h("span", { className: "hint-inline" }, "добавьте фото")
+          : null,
+    ),
+    alert && h(Alert, { type: alert.type }, alert.text),
+
+    // Результаты
+    outcomes && h("div", null,
+      h("p", { className: "section-title", style: { marginTop: "24px" } }, "Результат по каналам"),
+      h("div", { className: "outcome-grid" },
+        outcomes.map((o) => h(OutcomeCard, { key: o.channel, o, onRetry: retry, retrying: retryCh === o.channel }))),
+    ),
+
+    // Запланированные
+    scheduled.length > 0 && h("div", null,
+      h("p", { className: "section-title", style: { marginTop: "24px" } }, `Запланировано (${scheduled.length})`),
+      h("div", { className: "sched-list" },
+        scheduled.map((s) => h("div", { key: s.id, className: "sched-item" },
+          h("div", { className: "sched-main" },
+            h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
+            h("div", { className: "sched-text" }, s.text || "(без текста)"),
+            h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
+          ),
+          h("button", { className: "btn btn-danger btn-sm", onClick: () => cancelScheduled(s.id) }, "Отменить"),
+        ))),
+    ),
+
+    showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
+  );
+}
+
+function ViewTabs({ view, onChange }) {
+  const tabs = [["publish", "Публикация"], ["channels", "Каналы"]];
+  return h("div", { className: "view-tabs", role: "tablist" },
+    tabs.map(([id, label]) => h("button", {
+      key: id,
+      className: `view-tab ${view === id ? "active" : ""}`,
+      role: "tab",
+      "aria-selected": view === id,
+      onClick: () => onChange(id),
+    }, label)),
+  );
+}
+
 function App() {
   const [profiles, setProfiles] = useState([]);
   const [active, setActive] = useState(null);
+  const [view, setView] = useState("publish");
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
 
@@ -1163,7 +1555,12 @@ function App() {
       loadingProfiles
         ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
         : active
-          ? h(ChannelsView, { key: active.id, profile: active })
+          ? h("div", null,
+              h(ViewTabs, { view, onChange: setView }),
+              view === "publish"
+                ? h(PublishView, { key: `pub-${active.id}`, profile: active })
+                : h(ChannelsView, { key: active.id, profile: active }),
+            )
           : h(NoProfileView),
     ),
     showNewProfile && h(NewProfileModal, {

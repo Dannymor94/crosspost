@@ -16,7 +16,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -48,7 +57,14 @@ class PublicationStatus(StrEnum):
     ATTEMPTING = "attempting"
     DONE = "done"
     FAILED = "failed"
+    SUBMITTED = "submitted"  # ушло на модерацию (Яндекс) — не путать с done
     NEEDS_RELOGIN = "needs_relogin"  # осела в мёртвом подключении
+
+
+class ScheduledPostStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    CANCELLED = "cancelled"
+    PUBLISHED = "published"  # исполнено планировщиком (следующая итерация)
 
 
 # ── ORM-модели ────────────────────────────────────────────────────────────────
@@ -162,6 +178,36 @@ class Publication(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile", back_populates="publications")
+
+
+class ScheduledPost(Base):
+    """Запланированная публикация: контент + каналы + время. Итерация 2а.
+
+    Хранит СНИМОК контента и список каналов, чтобы планировщик (следующая
+    итерация) исполнил её позже. Медиа — пути к файлам во временном хранилище.
+    Изоляция: привязка к profile_id, каскадное удаление с профилем.
+    """
+
+    __tablename__ = "scheduled_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    content_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    media_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[ScheduledPostStatus] = mapped_column(
+        String(32), default=ScheduledPostStatus.SCHEDULED, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+
+    profile: Mapped[Profile] = relationship("Profile")
 
 
 class Log(Base):

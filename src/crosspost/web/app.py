@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.web import deps
-from crosspost.web.routes import channels, profiles, tg_login
+from crosspost.web.routes import channels, profiles, publish, tg_login
 
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(profiles.router)
     app.include_router(channels.router)
     app.include_router(tg_login.router)
+    app.include_router(publish.router)
 
     # Serve frontend SPA — must be after API routes
     if _FRONTEND_DIR.exists():

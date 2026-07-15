@@ -74,10 +74,12 @@ class YandexBrowserAdapter:
         store: IdempotencyStore,
         *,
         headless: bool = False,
+        storage_state: str | None = None,
     ) -> None:
         self._org_id = org_id
         self._store = store
         self._headless = headless
+        self._storage_state = storage_state  # per-profile сессия; None → CLI-файл
 
     async def publish(
         self,
@@ -89,7 +91,10 @@ class YandexBrowserAdapter:
         if self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
-        async with open_page(self.channel, headless=self._headless) as page:
+        _kw = {"headless": self._headless}
+        if self._storage_state is not None:
+            _kw["storage_state"] = self._storage_state
+        async with open_page(self.channel, **_kw) as page:
             # 2) переходим в раздел Публикации
             url = _POSTS_URL.format(org_id=self._org_id)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)

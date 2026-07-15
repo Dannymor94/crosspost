@@ -27,4 +27,12 @@ async def get_repo() -> AsyncGenerator[ProfileRepository, None]:
         yield ProfileRepository(session, vault=vault)
 
 
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Сырая сессия — когда в роуте нужны несколько репозиториев на одной сессии."""
+    assert _session_factory is not None, "Session factory not initialised"
+    async with _session_factory() as session:
+        yield session
+
+
 RepoDep = Annotated[ProfileRepository, Depends(get_repo)]
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
