@@ -146,6 +146,26 @@ async def _validate_telegram(token: str | None) -> bool:
         return False
 
 
+async def _validate_telegraph(token: str | None) -> bool:
+    """Telegraph: getAccountInfo с access_token.
+
+    API: https://telegra.ph/api#getAccountInfo
+    """
+    if not token:
+        return False
+    try:
+        import httpx
+
+        resp = await httpx.AsyncClient(timeout=10).get(
+            "https://api.telegra.ph/getAccountInfo",
+            params={"access_token": token},
+        )
+        return bool(resp.json().get("ok"))
+    except Exception as exc:
+        logger.debug("telegraph validate failed: %s", exc)
+        return False
+
+
 async def _validate_vk_api(token: str | None) -> bool:
     """VK API: users.get или groups.getById с токеном."""
     if not token:
@@ -219,6 +239,14 @@ def _channel_from_url(url: str) -> str:
 # строгая позитивная DOM-проверка. Пустые = не участвуют (не ломают детекцию).
 
 VALIDATORS: dict[str, ChannelValidatorDef] = {
+    "telegraph": ChannelValidatorDef(
+        kind="api",
+        credential_kind=CredentialKind.API_TOKEN,
+        fn=_validate_telegraph,
+        title="Telegraph",
+        enabled=True,
+        interactive=False,
+    ),
     "telegram": ChannelValidatorDef(
         kind="api",
         credential_kind=CredentialKind.API_TOKEN,
