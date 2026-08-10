@@ -18,6 +18,14 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from crosspost.channels.guide import (
+    TELEGRAM_GUIDE,
+    TELEGRAPH_GUIDE,
+    VK_CHANNEL_GUIDE,
+    VK_WALL_GUIDE,
+    YANDEX_GUIDE,
+    ChannelGuide,
+)
 from crosspost.db.models import CredentialKind
 
 logger = logging.getLogger(__name__)
@@ -100,6 +108,8 @@ class ChannelValidatorDef:
     target_label: str = ""  # подпись поля цели в UI
     target_hint: str = ""  # подсказка «что вводить»
     target_normalizer: TargetNormalizer | None = None  # сырой ввод → чистое значение
+    # ── Инструкция подключения (декларация, не хардкод в UI) ───────────────────
+    guide: ChannelGuide | None = None  # пошаговая инструкция для клиента-нетехнаря
 
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
@@ -246,6 +256,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         title="Telegraph",
         enabled=True,
         interactive=False,
+        guide=TELEGRAPH_GUIDE,
     ),
     "telegram": ChannelValidatorDef(
         kind="api",
@@ -254,6 +265,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         title="Telegram",
         enabled=True,
         interactive=True,  # вход по телефону+коду прямо в UI, см. telegram_login
+        guide=TELEGRAM_GUIDE,
     ),
     "vk": ChannelValidatorDef(
         kind="api",
@@ -282,6 +294,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_label="ID организации",
         target_hint="Из URL кабинета: yandex.ru/sprav/<ЭТОТ-ID>/…",
         target_normalizer=normalize_yandex_org,
+        guide=YANDEX_GUIDE,
     ),
     "vk_wall": ChannelValidatorDef(
         kind="browser",
@@ -301,6 +314,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_label="Адрес группы",
         target_hint="Вставьте адрес группы: vk.com/XXXX или полную ссылку — оставим только имя",
         target_normalizer=normalize_vk_screen_name,
+        guide=VK_WALL_GUIDE,
     ),
     "vk_channel": ChannelValidatorDef(
         kind="browser",
@@ -322,6 +336,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_label="ID канала VK",
         target_hint="Числовой id канала сообщества (напр. -240033402)",
         target_normalizer=normalize_vk_channel_id,
+        guide=VK_CHANNEL_GUIDE,
     ),
 }
 

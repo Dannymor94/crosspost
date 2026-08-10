@@ -680,6 +680,46 @@ body {
 .plan-src.explicit { background: var(--amber-bg); color: var(--amber); }
 .plan-unmatched { font-size: 11.5px; color: var(--text-3); margin-top: 10px; line-height: 1.5; }
 
+/* ── Guide: интерактивная инструкция подключения ─────────────────────────── */
+.guide-intro {
+  font-size: 13px; color: var(--text-2); line-height: 1.6; margin-bottom: 14px;
+  padding: 12px 14px; background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.guide-note {
+  font-size: 12.5px; color: var(--text-2); line-height: 1.55; margin: 10px 0;
+  padding: 11px 13px; background: var(--accent-dim);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.howto { margin: 6px 0 2px; }
+.howto-summary {
+  cursor: pointer; font-size: 12px; color: var(--accent); user-select: none;
+  list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 0;
+}
+.howto-summary::-webkit-details-marker { display: none; }
+.howto-summary::before { content: "▸"; font-size: 10px; transition: transform .12s; }
+.howto[open] > .howto-summary::before { transform: rotate(90deg); }
+.howto-summary:hover { color: var(--text-1); }
+.howto-steps {
+  margin: 8px 0 4px 0; padding-left: 20px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.howto-steps li { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.howto-link { display: inline-block; margin-top: 2px; font-size: 12px; color: var(--accent); }
+.step-hint {
+  font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin: 10px 0 14px;
+  padding: 9px 12px; background: var(--bg-input);
+  border-left: 2px solid var(--accent); border-radius: 4px;
+}
+.errors-help { margin-top: 12px; }
+.errors-list {
+  margin: 8px 0 0 0; padding-left: 18px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.errors-list li { font-size: 12px; line-height: 1.5; }
+.err-sym { color: var(--text-1); font-weight: 600; }
+.err-chk { color: var(--text-2); }
+
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
   flex: 1; min-height: 100dvh;
@@ -895,9 +935,57 @@ function NewProfileModal({ onClose, onCreated }) {
   );
 }
 
+// ── Guide: интерактивная инструкция подключения (тексты из декларации канала) ─
+
+function guideBlocksFor(guide, field) {
+  return (guide?.blocks || []).filter((b) => b.field === field);
+}
+function stepHintFor(guide, key) {
+  return (guide?.step_hints || []).find((s) => s.key === key)?.text || "";
+}
+
+function HowTo({ block }) {
+  return h("details", { className: "howto" },
+    h("summary", { className: "howto-summary" }, block.label),
+    h("ol", { className: "howto-steps" }, block.steps.map((s, i) => h("li", { key: i }, s))),
+    block.link && h("a", { className: "howto-link", href: block.link, target: "_blank", rel: "noopener" },
+      block.link_label || "открыть →"),
+  );
+}
+
+function GuideIntro({ text }) {
+  return text ? h("p", { className: "guide-intro" }, text) : null;
+}
+
+function GuideNote({ text }) {
+  return text ? h("div", { className: "guide-note" }, text) : null;
+}
+
+function StepHintLine({ text }) {
+  return text ? h("p", { className: "step-hint" }, text) : null;
+}
+
+function ErrorsHelp({ errors }) {
+  if (!errors || !errors.length) return null;
+  return h("details", { className: "howto errors-help" },
+    h("summary", { className: "howto-summary" }, "Что-то пошло не так?"),
+    h("ul", { className: "errors-list" },
+      errors.map((e, i) => h("li", { key: i },
+        h("span", { className: "err-sym" }, e.symptom + ": "),
+        h("span", { className: "err-chk" }, e.check),
+      ))),
+  );
+}
+
+// Блоки «Как это получить?», привязанные к конкретному полю формы (под инпутом).
+function FieldHowTo({ guide, field }) {
+  const blocks = guideBlocksFor(guide, field);
+  return blocks.length ? h("div", null, blocks.map((b, i) => h(HowTo, { key: i, block: b }))) : null;
+}
+
 // ── Connect API channel modal ──────────────────────────────────────────────
 
-function ConnectApiModal({ channel, profileId, onClose, onDone }) {
+function ConnectApiModal({ channel, profileId, guide, onClose, onDone }) {
   const [fields, setFields] = useState(null);
   const [values, setValues] = useState({});
   const [loading, setLoading] = useState(false);
@@ -933,6 +1021,7 @@ function ConnectApiModal({ channel, profileId, onClose, onDone }) {
     fields === null
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
       : h("form", { onSubmit: handleSubmit },
+          h(GuideIntro, { text: guide?.intro }),
           fields.map(fd => h("div", { key: fd.name, className: "form-group" },
             h("label", { className: "form-label", htmlFor: `field-${fd.name}` }, fd.label),
             h("input", {
@@ -946,6 +1035,7 @@ function ConnectApiModal({ channel, profileId, onClose, onDone }) {
               spellCheck: false,
             }),
             fd.hint && h("p", { className: "form-hint" }, fd.hint),
+            h(FieldHowTo, { guide, field: fd.name }),
           )),
           result && h(Alert, { type: result.ok ? "success" : "error" }, result.msg),
           !result?.ok && h("div", { className: "flex-gap mt-2" },
@@ -957,6 +1047,7 @@ function ConnectApiModal({ channel, profileId, onClose, onDone }) {
             ),
             h("button", { type: "button", className: "btn btn-ghost", onClick: onClose }, "Отмена"),
           ),
+          !result?.ok && h(ErrorsHelp, { errors: guide?.errors }),
         )
   );
 }
@@ -986,7 +1077,7 @@ function StepTrack({ step }) {
   );
 }
 
-function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
+function TelegramLoginModal({ channel, profileId, title, guide, onClose, onDone }) {
   const [fields, setFields] = useState(null);        // step-1 field defs from registry
   const [step, setStep] = useState("form");           // form|phone|code|password|done
   const [v, setV] = useState({ api_id: "", api_hash: "", target_channel: "", phone: "", code: "", password: "" });
@@ -1062,6 +1153,7 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
         fd.hint,
         fd.link && [" ", h("a", { key: "l", href: fd.link, target: "_blank", rel: "noopener" }, "открыть →")],
       ),
+      h(FieldHowTo, { guide, field: name }),
     );
   }
 
@@ -1074,6 +1166,8 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
     body = h(Alert, { type: "success" }, info || "Telegram подключён.");
   } else if (step === "form") {
     body = h("form", { onSubmit: begin },
+      h(GuideIntro, { text: guide?.intro }),
+      h(StepHintLine, { text: stepHintFor(guide, "form") }),
       renderField("api_id"), renderField("api_hash"), renderField("target_channel"),
       err && h(Alert, { type: "error" }, err),
       h("div", { className: "flex-gap mt-2" },
@@ -1085,6 +1179,7 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
     );
   } else if (step === "phone") {
     body = h("form", { onSubmit: sendCode },
+      h(StepHintLine, { text: stepHintFor(guide, "phone") }),
       h("div", { className: "form-group" },
         h("label", { className: "form-label", htmlFor: "tg-phone" }, "Номер телефона"),
         h("input", { id: "tg-phone", className: "form-input", type: "tel", value: v.phone,
@@ -1100,6 +1195,7 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
     );
   } else if (step === "code" || step === "password") {
     body = h("form", { onSubmit: signIn },
+      h(StepHintLine, { text: stepHintFor(guide, step) }),
       step === "code" && h("div", { className: "form-group" },
         h("label", { className: "form-label", htmlFor: "tg-code" }, "Код из Telegram"),
         h("input", { id: "tg-code", className: "form-input", value: v.code, onChange: set("code"),
@@ -1126,12 +1222,13 @@ function TelegramLoginModal({ channel, profileId, title, onClose, onDone }) {
   return h(Modal, { title: `Подключить · ${title}`, onClose: cancel },
     fields !== null && step !== "done" && h(StepTrack, { step }),
     body,
+    step !== "done" && h(ErrorsHelp, { errors: guide?.errors }),
   );
 }
 
 // ── Target editor (per-profile цель постинга) ──────────────────────────────
 
-function TargetEditor({ channel, profileId, label, hint, current, onSaved }) {
+function TargetEditor({ channel, profileId, label, hint, current, guide, onSaved }) {
   const [value, setValue] = useState(current || "");
   const [saving, setSaving] = useState(false);
   const [ok, setOk] = useState(false);
@@ -1168,6 +1265,7 @@ function TargetEditor({ channel, profileId, label, hint, current, onSaved }) {
       }, saving ? h(Spinner) : (ok && !dirty ? "✓" : "Сохранить")),
     ),
     hint && h("p", { className: "form-hint" }, hint),
+    h(FieldHowTo, { guide, field: "target" }),
     err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
     !current && h("p", { className: "form-hint", style: { color: "var(--amber)" } },
       "Без цели канал недоступен для публикации — у каждого клиента своя группа."),
@@ -1267,8 +1365,13 @@ function ChannelCard({ ch, profileId, onRefresh }) {
     ch.needs_target && h(TargetEditor, {
       channel: ch.channel, profileId,
       label: ch.target_label, hint: ch.target_hint, current: ch.target,
-      onSaved: onRefresh,
+      guide: ch.guide, onSaved: onRefresh,
     }),
+    // Браузерный канал ещё не подключён: объясняем, что откроется окно и что делать.
+    ch.kind === "browser" && state !== "live" && h("div", null,
+      h(GuideIntro, { text: ch.guide?.intro }),
+      h(GuideNote, { text: ch.guide?.browser_note }),
+    ),
     msg && h(Alert, { type: msg.type }, msg.text),
     h("div", { className: "card-actions" },
       // connect / reconnect button
@@ -1336,12 +1439,15 @@ function ChannelCard({ ch, profileId, onRefresh }) {
       ? h("p", { className: "form-hint", style: { marginTop: "4px" } },
           "ВК-стена и ВК-канал делят один вход — сброс затронет оба.")
       : null,
+    // Что проверить при ошибке браузерного входа (свёрнуто).
+    ch.kind === "browser" && state !== "live" && h(ErrorsHelp, { errors: ch.guide?.errors }),
     // connect modal — interactive (Telegram multi-step) vs simple API form
     connecting && ch.kind === "api" && ch.interactive
       ? h(TelegramLoginModal, {
           channel: ch.channel,
           profileId,
           title: ch.title || ch.channel,
+          guide: ch.guide,
           onClose: () => setConnecting(false),
           onDone: () => { setConnecting(false); onRefresh(); },
         })
@@ -1350,6 +1456,7 @@ function ChannelCard({ ch, profileId, onRefresh }) {
       ? h(ConnectApiModal, {
           channel: ch.channel,
           profileId,
+          guide: ch.guide,
           onClose: () => setConnecting(false),
           onDone: () => { setConnecting(false); onRefresh(); },
         })

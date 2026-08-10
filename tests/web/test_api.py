@@ -148,6 +148,55 @@ async def test_fresh_profile_channels_not_connected(client: AsyncClient) -> None
         assert ch["has_credential"] is False
 
 
+# ── Инструкция подключения (из декларации канала) ─────────────────────────────
+
+
+async def test_every_enabled_channel_declares_a_guide() -> None:
+    """Каждый включённый канал приносит свою инструкцию (иначе UI покажет пустоту)."""
+    from crosspost.channels.validators import VALIDATORS
+
+    missing = [ch for ch, v in VALIDATORS.items() if v.enabled and v.guide is None]
+    assert missing == [], f"каналы без guide: {missing}"
+
+
+async def test_channel_guide_endpoint_returns_declaration(client: AsyncClient) -> None:
+    resp = await client.get("/api/channels/telegram/guide")
+    assert resp.status_code == 200
+    g = resp.json()
+    assert g["intro"]  # непустой дружеский абзац
+    # Блок «как получить api_id» привязан к полю формы.
+    api_block = next(b for b in g["blocks"] if b["field"] == "api_id")
+    assert "my.telegram.org" in api_block["link"]
+    assert len(api_block["steps"]) >= 2
+    # Подсказки на шагах интерактивного входа.
+    keys = {s["key"] for s in g["step_hints"]}
+    assert {"form", "phone", "code"} <= keys
+    assert g["errors"]  # что проверить при ошибке
+
+
+async def test_browser_channel_guide_has_note(client: AsyncClient) -> None:
+    resp = await client.get("/api/channels/yandex/guide")
+    assert resp.status_code == 200
+    g = resp.json()
+    assert "Я вошёл" in g["browser_note"]
+    tgt = next(b for b in g["blocks"] if b["field"] == "target")
+    assert "sprav" in tgt["link"]
+
+
+async def test_channel_guide_in_status_list(client: AsyncClient) -> None:
+    resp = await client.post("/api/profiles", json={"name": "guide-prof"})
+    pid = resp.json()["id"]
+    statuses = (await client.get(f"/api/profiles/{pid}/channels")).json()
+    tg = next(ch for ch in statuses if ch["channel"] == "telegram")
+    assert tg["guide"] is not None
+    assert tg["guide"]["intro"]
+
+
+async def test_unknown_channel_guide_404(client: AsyncClient) -> None:
+    resp = await client.get("/api/channels/nonesuch/guide")
+    assert resp.status_code == 404
+
+
 async def test_telegram_interactive_login_live(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "carol"})
     pid = resp.json()["id"]

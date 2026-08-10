@@ -57,6 +57,15 @@ CHANNEL_FIELDS: dict[str, list[dict]] = {
             "secret": True,
         }
     ],
+    "telegraph": [
+        {
+            "name": "token",
+            "label": "Токен Telegraph",
+            "hint": "Технический токен доступа — если его нет, напишите мне, создам",
+            "link": "",
+            "secret": True,
+        }
+    ],
 }
 
 # Maps channel → (field_name_in_fields_dict → CredentialKind).
@@ -64,10 +73,59 @@ CHANNEL_FIELDS: dict[str, list[dict]] = {
 # у него многошаговый вход через /telegram/login/*.
 _FIELD_TO_CREDENTIAL: dict[str, dict[str, CredentialKind]] = {
     "vk": {"token": CredentialKind.API_TOKEN},
+    "telegraph": {"token": CredentialKind.API_TOKEN},
 }
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
+
+
+class GuideBlockOut(BaseModel):
+    label: str
+    steps: list[str]
+    link: str = ""
+    link_label: str = ""
+    field: str = ""
+
+
+class StepHintOut(BaseModel):
+    key: str
+    text: str
+
+
+class ErrorHintOut(BaseModel):
+    symptom: str
+    check: str
+
+
+class ChannelGuideOut(BaseModel):
+    intro: str = ""
+    blocks: list[GuideBlockOut] = []
+    step_hints: list[StepHintOut] = []
+    browser_note: str = ""
+    errors: list[ErrorHintOut] = []
+
+
+def _guide_out(guide) -> ChannelGuideOut | None:
+    """Декларация инструкции (dataclass) → сериализуемый вид для UI."""
+    if guide is None:
+        return None
+    return ChannelGuideOut(
+        intro=guide.intro,
+        blocks=[
+            GuideBlockOut(
+                label=b.label,
+                steps=list(b.steps),
+                link=b.link,
+                link_label=b.link_label,
+                field=b.field,
+            )
+            for b in guide.blocks
+        ],
+        step_hints=[StepHintOut(key=s.key, text=s.text) for s in guide.step_hints],
+        browser_note=guide.browser_note,
+        errors=[ErrorHintOut(symptom=e.symptom, check=e.check) for e in guide.errors],
+    )
 
 
 class ChannelStatusOut(BaseModel):
@@ -81,6 +139,7 @@ class ChannelStatusOut(BaseModel):
     target_label: str = ""
     target_hint: str = ""
     target: str = ""  # текущая per-profile цель (не секрет — адрес группы/орг)
+    guide: ChannelGuideOut | None = None  # инструкция подключения (из декларации)
 
 
 class TargetBody(BaseModel):
@@ -138,6 +197,18 @@ async def get_channel_fields(channel: str) -> list[ChannelFieldDef]:
     return [ChannelFieldDef(**f) for f in fields]
 
 
+@router.get("/api/channels/{channel}/guide", response_model=ChannelGuideOut)
+async def get_channel_guide(channel: str) -> ChannelGuideOut:
+    """Инструкция подключения канала (из декларации). 404 — канал/инструкции нет."""
+    v = VALIDATORS.get(channel)
+    if v is None:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel}' not in registry")
+    out = _guide_out(v.guide)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"No guide for channel '{channel}'")
+    return out
+
+
 # ── Profile-scoped channel endpoints ─────────────────────────────────────────
 
 
@@ -181,6 +252,7 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
                 target_label=v.target_label,
                 target_hint=v.target_hint,
                 target=target,
+                guide=_guide_out(v.guide),
             )
         )
     return result
