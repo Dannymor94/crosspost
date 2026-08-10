@@ -11,15 +11,17 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from crosspost.config import load_config
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.web import deps
-from crosspost.web.routes import auth, channels, profiles, publish, tg_login, users
+from crosspost.web.routes import auth, channels, import_plan, profiles, publish, tg_login, users
 
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    load_config()  # инжектирует runtime/.env в os.environ до любых обращений к секретам
     engine = await create_engine_and_tables(get_db_url())
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)
@@ -35,6 +37,7 @@ def create_app() -> FastAPI:
     app.include_router(channels.router)
     app.include_router(tg_login.router)
     app.include_router(publish.router)
+    app.include_router(import_plan.router)
 
     # Serve frontend SPA — must be after API routes
     if _FRONTEND_DIR.exists():

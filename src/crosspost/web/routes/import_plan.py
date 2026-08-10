@@ -1,0 +1,259 @@
+"""Роут массового импорта контент-плана. Трек A, часть 1.
+
+Эндпоинты (под profile_id — изоляция):
+  POST .../import/preview — stateless: таблица + имена файлов → отчёт (без БД)
+  POST .../import/commit  — таблица + картинки + правило + каналы → ScheduledPost
+
+Ошибки уровня строки НЕ прерывают импорт — возвращаются явно в problems.
+Ошибки уровня таблицы (нет колонки, битый формат) → 422.
+Правило необязательно, если все строки таблицы имеют явную дату.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+
+from crosspost.channels.validators import VALIDATORS
+from crosspost.content.canonical import ContentType
+from crosspost.content.capabilities import supports
+from crosspost.db.models import ConnectionState, CredentialKind
+from crosspost.db.profile_repo import ProfileRepository
+from crosspost.db.publication_repo import PublicationRepository
+from crosspost.db.vault import get_vault
+from crosspost.orchestrator.task import new_publication_id
+from crosspost.scheduler.import_plan import (
+    ImportReport,
+    PlanImportError,
+    RowProblem,
+    build_plan,
+    parse_rule,
+    parse_table,
+)
+from crosspost.web import media as media_store
+from crosspost.web.deps import SessionDep, require_profile_access
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["import"], dependencies=[Depends(require_profile_access)])
+
+
+# ── Схемы ─────────────────────────────────────────────────────────────────────
+
+
+class ResolvedOut(BaseModel):
+    row_number: int
+    file: str
+    text: str
+    scheduled_at: str  # ISO-8601
+    source: str  # "rule" | "explicit"
+
+
+class ProblemOut(BaseModel):
+    row_number: int
+    file: str
+    reason: str
+
+
+class PreviewOut(BaseModel):
+    resolved: list[ResolvedOut]
+    problems: list[ProblemOut]
+    unmatched_files: list[str]
+    resolved_count: int
+    problem_count: int
+
+
+class CommitOut(BaseModel):
+    created: int
+    problems: list[ProblemOut]
+    skipped_count: int  # число строк, не попавших в БД
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _parse_rule_or_422(start_date: str | None, times_csv: str | None):
+    """None, если оба поля пусты (допустимо при all-explicit таблице)."""
+    if not start_date and not times_csv:
+        return None
+    try:
+        return parse_rule(start_date or "", times_csv or "")
+    except PlanImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _parse_table_or_422(data: bytes, filename: str):
+    try:
+        return parse_table(data, filename)
+    except PlanImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _to_preview(report: ImportReport) -> PreviewOut:
+    return PreviewOut(
+        resolved=[
+            ResolvedOut(
+                row_number=r.row_number,
+                file=r.file,
+                text=r.text,
+                scheduled_at=r.scheduled_at.isoformat(),
+                source=r.source,
+            )
+            for r in report.resolved
+        ],
+        problems=[
+            ProblemOut(row_number=p.row_number, file=p.file, reason=p.reason)
+            for p in report.problems
+        ],
+        unmatched_files=report.unmatched_files,
+        resolved_count=report.matched_count,
+        problem_count=len(report.problems),
+    )
+
+
+def _basename_lower(name: str) -> str:
+    return re.split(r"[\\/]", (name or "").strip())[-1].lower()
+
+
+async def _validate_channels(
+    profile_repo: ProfileRepository,
+    profile_id: int,
+    channels: list[str],
+    content_type: str,
+) -> None:
+    try:
+        ctype = ContentType(content_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Неизвестный тип: {content_type}") from exc
+    conns = {c.channel: c.state for c in await profile_repo.get_connections(profile_id)}
+    for ch in channels:
+        v = VALIDATORS.get(ch)
+        if v is None or not v.enabled:
+            raise HTTPException(status_code=422, detail=f"Канал '{ch}' недоступен")
+        if not supports(ch, ctype):
+            raise HTTPException(status_code=422, detail=f"'{ch}' не поддерживает {ctype.value}")
+        if conns.get(ch) != ConnectionState.LIVE:
+            raise HTTPException(
+                status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"
+            )
+        if v.needs_target and not await profile_repo.get_credential(
+            profile_id, ch, CredentialKind.TARGET
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{ch}': укажите «{v.target_label.lower()}» в настройках",
+            )
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+
+@router.post("/api/profiles/{profile_id}/import/preview", response_model=PreviewOut)
+async def import_preview(
+    profile_id: int,
+    session: SessionDep,
+    table: UploadFile = File(...),  # noqa: B008
+    filenames: str = Form(...),  # JSON list[str] — имена будущих картинок
+    start_date: str | None = Form(None),
+    times_csv: str | None = Form(None),
+) -> PreviewOut:
+    """Stateless превью: таблица + имена картинок → отчёт связывания без записи в БД.
+
+    Возвращает: resolved (что связалось + время), problems (строки с ошибками),
+    unmatched_files (файлы без строк в таблице).
+    Проблемы показываются явно — не импортируем молча с дырами.
+    """
+    try:
+        file_list: list[str] = json.loads(filenames)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail="filenames: ожидается JSON-массив строк"
+        ) from exc
+    if not isinstance(file_list, list):
+        raise HTTPException(status_code=422, detail="filenames: ожидается JSON-массив строк")
+
+    data = await table.read()
+    rows = _parse_table_or_422(data, table.filename or "plan.csv")
+    rule = _parse_rule_or_422(start_date, times_csv)
+    report = build_plan(rows, file_list, rule)
+    return _to_preview(report)
+
+
+@router.post("/api/profiles/{profile_id}/import/commit", response_model=CommitOut)
+async def import_commit(
+    profile_id: int,
+    session: SessionDep,
+    table: UploadFile = File(...),  # noqa: B008
+    media: list[UploadFile] = File(default=[]),  # noqa: B008
+    channels: str = Form(...),
+    content_type: str = Form("post"),
+    start_date: str | None = Form(None),
+    times_csv: str | None = Form(None),
+) -> CommitOut:
+    """Создать ScheduledPost на каждую строку плана (без исполнения).
+
+    Каждая строка получает отдельный медиа-каталог sched-<uuid>.
+    Строки с проблемами (файл не загружен, нет даты) пропускаются — остальные создаются.
+    Каналы валидируются один раз до начала импорта (live + поддержка content_type).
+    """
+    try:
+        channel_list: list[str] = json.loads(channels)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
+    if not channel_list:
+        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
+
+    profile_repo = ProfileRepository(session, vault=get_vault())
+    pub_repo = PublicationRepository(session, profile_id=profile_id)
+
+    if await profile_repo.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    await _validate_channels(profile_repo, profile_id, channel_list, content_type)
+
+    data = await table.read()
+    rows = _parse_table_or_422(data, table.filename or "plan.csv")
+
+    # Индекс загруженных файлов: lower(basename) → UploadFile
+    real_media = [f for f in (media or []) if getattr(f, "filename", None)]
+    available_names = [f.filename for f in real_media]  # оригинальные имена для build_plan
+    media_by_basename: dict[str, UploadFile] = {}
+    for f in real_media:
+        media_by_basename.setdefault(_basename_lower(f.filename or ""), f)
+
+    rule = _parse_rule_or_422(start_date, times_csv)
+    report = build_plan(rows, available_names, rule)
+
+    problems: list[RowProblem] = list(report.problems)
+    created = 0
+
+    for rrow in report.resolved:
+        upload = media_by_basename.get(_basename_lower(rrow.file))
+        if upload is None:
+            problems.append(RowProblem(rrow.row_number, rrow.file, "файл не загружен на сервер"))
+            continue
+
+        await upload.seek(0)
+        key = f"sched-{new_publication_id()}"
+        saved_paths = await media_store.save_uploads([upload], key)
+
+        await pub_repo.create_scheduled(
+            content_type=content_type,
+            text=rrow.text,
+            title=None,
+            media_paths=saved_paths,
+            channels=channel_list,
+            scheduled_at=rrow.scheduled_at,
+        )
+        created += 1
+
+    return CommitOut(
+        created=created,
+        problems=[
+            ProblemOut(row_number=p.row_number, file=p.file, reason=p.reason) for p in problems
+        ],
+        skipped_count=len(problems),
+    )

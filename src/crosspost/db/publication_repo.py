@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import delete, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -145,6 +146,19 @@ class PublicationRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def update_scheduled_time(self, scheduled_id: int, new_time: datetime) -> bool:
+        """Сдвинуть scheduled_at запланированного поста профиля. True если нашли."""
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.profile_id == self._pid,
+            )
+            .values(scheduled_at=new_time)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
 
     async def cancel_scheduled(self, scheduled_id: int) -> bool:
         """Удалить запланированный пост профиля. True если что-то удалено."""

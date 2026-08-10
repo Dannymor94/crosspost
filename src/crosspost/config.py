@@ -39,7 +39,11 @@ def parse_bool(value: str, default: bool = True) -> bool:
 
 
 def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
-    """Прочитать .env (+ окружение) в dict. Отсутствие файла — не ошибка."""
+    """Прочитать .env (+ окружение) в dict и вставить в os.environ.
+
+    os.environ перекрывает файл (удобно для CI/секрет-сторов).
+    Уже установленные переменные окружения НЕ перезаписываем (setdefault).
+    """
     cfg: dict[str, str] = {}
     p = Path(env_path)
     if p.exists():
@@ -50,7 +54,11 @@ def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
             key, _, val = line.partition("=")
             val = val.split(" #", 1)[0].strip().strip('"').strip("'")
             cfg[key.strip()] = val
+    # os.environ побеждает файл.
     for key in list(cfg) + _KNOWN_KEYS:
         if key in os.environ:
             cfg[key] = os.environ[key]
+    # Инжектируем в os.environ (setdefault — не затираем то, что задано снаружи).
+    for key, val in cfg.items():
+        os.environ.setdefault(key, val)
     return cfg
