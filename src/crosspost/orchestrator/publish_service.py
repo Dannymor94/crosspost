@@ -49,6 +49,7 @@ class ChannelOutcome:
     status: str  # значение PublicationStatus
     external_id: str | None = None
     error: str | None = None
+    screenshot_path: str | None = None  # диагностика браузерного сбоя (Блок 4)
 
 
 class PublishService:
@@ -127,7 +128,11 @@ class PublishService:
             await self._repo.set_status(
                 publication_id, channel, PublicationStatus.FAILED, error=str(exc)
             )
-            return ChannelOutcome(channel, PublicationStatus.FAILED.value, error=str(exc))
+            # Браузерный шов мог приложить скриншот к исключению (диагностика).
+            shot = getattr(exc, "screenshot_path", None)
+            return ChannelOutcome(
+                channel, PublicationStatus.FAILED.value, error=str(exc), screenshot_path=shot
+            )
 
         # (6) маппим квитанцию → статус
         status = _RESULT_MAP.get(result.status, PublicationStatus.FAILED)

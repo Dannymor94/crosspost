@@ -201,6 +201,7 @@ class ScheduledExecutor:
             publication_id=pubid,
             level=level,
             message=msg,
+            screenshot_path=outcome.screenshot_path,
         )
 
     # ── Хелперы ───────────────────────────────────────────────────────────────

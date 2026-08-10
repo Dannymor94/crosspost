@@ -76,6 +76,7 @@ class OutcomeOut(BaseModel):
     status: str
     external_id: str | None = None
     error: str | None = None
+    screenshot_path: str | None = None
 
 
 class PublishResult(BaseModel):

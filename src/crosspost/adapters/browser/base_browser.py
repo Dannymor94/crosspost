@@ -31,14 +31,20 @@ Playwright импортируется ЛЕНИВО внутри контекст
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
+import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 _PROFILES_ROOT_DEFAULT = "runtime/browser_profiles"
+_SCREENSHOT_ROOT_DEFAULT = "runtime/logs/screenshots"
 
 # Сентинел «сессию брать из файла» (CLI-режим). UI ВСЕГДА передаёт storage_state
 # явно (dict / JSON-строка / None) — из credentials профиля, не из общего файла.
@@ -48,6 +54,28 @@ _FROM_FILE: Any = object()
 def _profiles_root() -> Path:
     """Корень CLI-браузерных данных. Единственное место чтения BROWSER_PROFILES_DIR."""
     return Path(os.environ.get("BROWSER_PROFILES_DIR", _PROFILES_ROOT_DEFAULT))
+
+
+def _screenshot_root() -> Path:
+    """Корень скриншотов-диагностики. Единственное место чтения SCREENSHOT_DIR."""
+    return Path(os.environ.get("SCREENSHOT_DIR", _SCREENSHOT_ROOT_DEFAULT))
+
+
+async def capture_failure_screenshot(page, channel: str) -> str | None:
+    """Снять скриншот страницы при сбое (диагностика). Вернуть путь или None.
+
+    Никогда не бросает: диагностика не должна маскировать исходную ошибку.
+    Путь кладётся в SCREENSHOT_DIR/<channel>-<uuid>.png (не коммитится).
+    """
+    try:
+        root = _screenshot_root()
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"{channel}-{uuid.uuid4().hex}.png"
+        await page.screenshot(path=str(path))
+        return str(path)
+    except Exception as exc:  # noqa: BLE001 — скриншот не критичен
+        logger.debug("screenshot capture failed for %s: %s", channel, exc)
+        return None
 
 
 def profile_dir(channel: str) -> Path:
@@ -144,6 +172,16 @@ async def open_page(
             page = await context.new_page()
             try:
                 yield page
+            except Exception as exc:
+                # Диагностика браузерного сбоя: скриншот пока страница ЖИВА,
+                # путь вешаем на исключение → доедет до logs.screenshot_path
+                # (PublishService → ChannelOutcome → executor). Тир API сюда не
+                # заходит: скриншот — свойство браузерного шва, не ветвление.
+                shot = await capture_failure_screenshot(page, session_key)
+                if shot is not None:
+                    with contextlib.suppress(Exception):
+                        exc.screenshot_path = shot  # type: ignore[attr-defined]
+                raise
             finally:
                 await context.close()
                 await browser.close()
