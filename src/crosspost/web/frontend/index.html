@@ -754,6 +754,12 @@ body {
 .wiz-landmark-body { font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
 .wiz-landmark-title { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--text-1); }
 .wiz-return { font-size: 12px; color: var(--text-3); margin: -4px 0 12px; font-style: italic; }
+.wf-row { display: flex; gap: 8px; align-items: stretch; }
+.wf-row .form-input { flex: 1; }
+.wf-paste { flex-shrink: 0; white-space: nowrap; }
+.form-input.wf-ok { border-color: rgba(34,197,94,.45); }
+.form-input.wf-bad { border-color: rgba(248,113,113,.55); }
+.wf-msg { font-size: 11.5px; color: var(--error); margin-top: 5px; line-height: 1.45; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -1020,19 +1026,82 @@ function FieldHowTo({ guide, field }) {
 
 // ── Мастер подключения (адаптивен под тир; шаги из декларации канала) ────────
 
+// Нормализаторы ввода — закрытый словарь (какой применить, решает декларация).
+function normalizeField(kind, raw) {
+  const v = (raw ?? "").trim();
+  switch (kind) {
+    case "digits": return v.replace(/\D/g, "");
+    case "tg_channel": {
+      const s = v.replace(/^https?:\/\//i, "").replace(/^t\.me\//i, "").replace(/^@/, "").split(/[/?]/)[0];
+      return s ? "@" + s : "";
+    }
+    case "yandex_org": {
+      const m = v.match(/sprav\/(\d+)/) || v.match(/(\d{3,})/);
+      return m ? m[1] : v.replace(/\D/g, "");
+    }
+    case "vk_group":
+      return v.replace(/^https?:\/\//i, "").replace(/^(m\.|www\.)?vk\.com\//i, "").replace(/^@/, "").split(/[/?]/)[0];
+    case "vk_channel_id": {
+      const m = v.match(/-?\d+/); return m ? m[0] : "";
+    }
+    default: return v; // trim
+  }
+}
+
+// Валидность поля по правилу из декларации (проверяем НОРМАЛИЗОВАННОЕ значение).
+function validateField(f, raw) {
+  const norm = normalizeField(f.normalize || "trim", raw);
+  if (!norm) return { norm, valid: false, message: "" };  // пусто — не ошибка, просто нельзя дальше
+  if (f.pattern) {
+    try {
+      if (!new RegExp(f.pattern).test(norm)) {
+        return { norm, valid: false, message: f.invalid_message || "Проверьте формат значения." };
+      }
+    } catch (_) { /* кривой паттерн из декларации — не блокируем */ }
+  }
+  return { norm, valid: true, message: "" };
+}
+
 function WizardFieldInput({ f, value, onChange }) {
+  const [touched, setTouched] = useState(false);
+  const v = value ?? "";
+  const { valid, message } = validateField(f, v);
+  const showError = touched && v.trim() && !valid && message;
+  const showOk = touched && valid;
+
+  function commitNormalized() {
+    const norm = normalizeField(f.normalize || "trim", v);
+    if (norm !== v) onChange(f.name, norm);  // автоочистка на выходе из поля
+  }
+  async function paste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      onChange(f.name, normalizeField(f.normalize || "trim", text));  // вставка + очистка
+      setTouched(true);
+    } catch (_) { /* нет доступа к буферу — вставит руками */ }
+  }
+
   return h("div", { className: "form-group" },
     h("label", { className: "form-label", htmlFor: `wf-${f.name}` }, f.label),
-    h("input", {
-      id: `wf-${f.name}`, className: "form-input",
-      type: f.secret ? "password" : "text",
-      value: value ?? "",
-      onChange: (e) => onChange(f.name, e.target.value),
-      placeholder: f.placeholder || (f.secret ? "•••••••••••" : ""),
-      autoComplete: "off", spellCheck: false,
-      inputMode: f.normalize === "digits" ? "numeric" : undefined,
-    }),
-    f.hint && h("p", { className: "form-hint" }, f.hint),
+    h("div", { className: "wf-row" },
+      h("input", {
+        id: `wf-${f.name}`,
+        className: `form-input ${showError ? "wf-bad" : (showOk ? "wf-ok" : "")}`,
+        type: f.secret ? "password" : "text",
+        value: v,
+        onChange: (e) => onChange(f.name, e.target.value),
+        onBlur: () => { setTouched(true); commitNormalized(); },
+        placeholder: f.placeholder || (f.secret ? "•••••••••••" : ""),
+        autoComplete: "off", spellCheck: false,
+        inputMode: f.normalize === "digits" ? "numeric" : undefined,
+      }),
+      f.paste !== false && h("button", {
+        type: "button", className: "btn btn-ghost btn-sm wf-paste",
+        onClick: paste, title: "Вставить из буфера обмена",
+      }, "Вставить"),
+    ),
+    showError && h("p", { className: "wf-msg" }, message),
+    f.hint && !showError && h("p", { className: "form-hint" }, f.hint),
   );
 }
 
@@ -1068,7 +1137,8 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   async function close() { if (!done) await cancelFlow(); onClose(); }
 
   function fieldsFilled(step) {
-    return (step.fields || []).every((f) => (values[f.name] || "").trim());
+    // «Далее» доступно только когда ВСЕ поля шага валидны по формату (Блок 3).
+    return (step.fields || []).every((f) => validateField(f, values[f.name]).valid);
   }
 
   async function runStep() {

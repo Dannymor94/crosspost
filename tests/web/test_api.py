@@ -271,6 +271,30 @@ async def test_external_steps_have_specific_link_and_landmark(client: AsyncClien
     assert "/sprav/" in tgt["landmark"]  # ориентир указывает, где искать ID
 
 
+async def test_wizard_fields_declare_validation_rules(client: AsyncClient) -> None:
+    """Блок 3: правила проверки и очистки ввода объявлены в декларации, не в UI."""
+    known_norm = {"trim", "digits", "tg_channel", "yandex_org", "vk_group", "vk_channel_id"}
+    from crosspost.channels.validators import VALIDATORS
+
+    tg = (await client.get("/api/channels/telegram/guide")).json()
+    fields = {f["name"]: f for s in tg["steps"] for f in s["fields"]}
+    # api_id — только цифры, с понятным сообщением; чистится как digits.
+    assert fields["api_id"]["pattern"] and fields["api_id"]["invalid_message"]
+    assert fields["api_id"]["normalize"] == "digits"
+    assert fields["api_hash"]["pattern"]  # 32 hex-символа
+    assert fields["target_channel"]["normalize"] == "tg_channel"
+
+    # Любой normalize у любого включённого канала — из известного словаря
+    # (иначе UI не знает, как очистить ввод).
+    for ch, v in VALIDATORS.items():
+        if not (v.enabled and v.guide):
+            continue
+        g = (await client.get(f"/api/channels/{ch}/guide")).json()
+        for s in g["steps"]:
+            for f in s["fields"]:
+                assert f["normalize"] in known_norm, f"{ch}/{f['name']}: {f['normalize']}"
+
+
 async def test_telegram_interactive_login_live(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "carol"})
     pid = resp.json()["id"]
