@@ -197,6 +197,66 @@ async def test_unknown_channel_guide_404(client: AsyncClient) -> None:
     assert resp.status_code == 404
 
 
+# ── Мастер подключения (шаги из декларации) ───────────────────────────────────
+
+
+async def test_every_enabled_channel_has_wizard_steps() -> None:
+    """Каждый включённый канал приносит шаги мастера (иначе UI не построит мастер)."""
+    from crosspost.channels.validators import VALIDATORS
+
+    bad = [
+        ch for ch, v in VALIDATORS.items() if v.enabled and (v.guide is None or not v.guide.steps)
+    ]
+    assert bad == [], f"каналы без шагов мастера: {bad}"
+
+
+async def test_every_wizard_step_has_title_and_known_kind() -> None:
+    from crosspost.channels.validators import VALIDATORS
+
+    known = {
+        "collect",
+        "tg_begin",
+        "tg_phone",
+        "tg_code",
+        "tg_twofa",
+        "simple_connect",
+        "browser_open",
+        "browser_confirm",
+        "target",
+    }
+    for ch, v in VALIDATORS.items():
+        if not (v.enabled and v.guide):
+            continue
+        for st in v.guide.steps:
+            assert st.title, f"{ch}/{st.key}: пустой заголовок"
+            assert st.kind in known, f"{ch}/{st.key}: неизвестный вид шага {st.kind}"
+
+
+async def test_telegram_wizard_is_interactive_sequence(client: AsyncClient) -> None:
+    g = (await client.get("/api/channels/telegram/guide")).json()
+    kinds = [s["kind"] for s in g["steps"]]
+    assert kinds == ["collect", "tg_begin", "tg_phone", "tg_code", "tg_twofa"]
+    # У шага приложения — оба кода как поля.
+    app = next(s for s in g["steps"] if s["key"] == "app")
+    assert {f["name"] for f in app["fields"]} == {"api_id", "api_hash"}
+    # 2FA — необязательный шаг.
+    assert next(s for s in g["steps"] if s["key"] == "twofa")["optional"] is True
+
+
+async def test_simple_api_wizard_is_single_step(client: AsyncClient) -> None:
+    g = (await client.get("/api/channels/telegraph/guide")).json()
+    assert [s["kind"] for s in g["steps"]] == ["simple_connect"]
+    assert g["steps"][0]["fields"][0]["name"] == "token"
+
+
+async def test_browser_wizard_has_open_confirm_target(client: AsyncClient) -> None:
+    g = (await client.get("/api/channels/yandex/guide")).json()
+    kinds = [s["kind"] for s in g["steps"]]
+    assert kinds == ["browser_open", "browser_confirm", "target"]
+    target = next(s for s in g["steps"] if s["kind"] == "target")
+    assert target["fields"][0]["name"] == "target"
+
+
 async def test_telegram_interactive_login_live(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "carol"})
     pid = resp.json()["id"]

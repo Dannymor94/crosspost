@@ -98,12 +98,37 @@ class ErrorHintOut(BaseModel):
     check: str
 
 
+class WizardFieldOut(BaseModel):
+    name: str
+    label: str
+    placeholder: str = ""
+    secret: bool = False
+    hint: str = ""
+    pattern: str = ""
+    invalid_message: str = ""
+    normalize: str = "trim"
+    paste: bool = True
+
+
+class WizardStepOut(BaseModel):
+    key: str
+    kind: str
+    title: str
+    body: str = ""
+    landmark: str = ""
+    link: str = ""
+    link_label: str = ""
+    fields: list[WizardFieldOut] = []
+    optional: bool = False
+
+
 class ChannelGuideOut(BaseModel):
     intro: str = ""
     blocks: list[GuideBlockOut] = []
     step_hints: list[StepHintOut] = []
     browser_note: str = ""
     errors: list[ErrorHintOut] = []
+    steps: list[WizardStepOut] = []
 
 
 def _guide_out(guide) -> ChannelGuideOut | None:
@@ -125,6 +150,33 @@ def _guide_out(guide) -> ChannelGuideOut | None:
         step_hints=[StepHintOut(key=s.key, text=s.text) for s in guide.step_hints],
         browser_note=guide.browser_note,
         errors=[ErrorHintOut(symptom=e.symptom, check=e.check) for e in guide.errors],
+        steps=[
+            WizardStepOut(
+                key=s.key,
+                kind=s.kind,
+                title=s.title,
+                body=s.body,
+                landmark=s.landmark,
+                link=s.link,
+                link_label=s.link_label,
+                optional=s.optional,
+                fields=[
+                    WizardFieldOut(
+                        name=f.name,
+                        label=f.label,
+                        placeholder=f.placeholder,
+                        secret=f.secret,
+                        hint=f.hint,
+                        pattern=f.pattern,
+                        invalid_message=f.invalid_message,
+                        normalize=f.normalize,
+                        paste=f.paste,
+                    )
+                    for f in s.fields
+                ],
+            )
+            for s in guide.steps
+        ],
     )
 
 
