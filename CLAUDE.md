@@ -7,15 +7,20 @@
 
 ## ▶ СЕЙЧАС (обновляй по вехам)
 
-**Фокус: Итерация 1 (Слой 1) — UI подключения каналов, админский пульт владельца (React + FastAPI).**
+**Фокус: Итерация 3 — надёжность, диагностика, scheduler executor.**
 
-Слой 0 закрыт:
-- 0.1 SQLite-схема (5 таблиц, async SQLAlchemy, Alembic)
-- 0.2 Vault (Fernet, VAULT_KEY из env, blob всегда шифртекст)
-- 0.3 ProfileRepository (CRUD профилей, connections, credentials; жёсткая изоляция по profile_id)
-- 0.4 validate_connection (декларативный реестр валидаторов, api/browser, запись в logs)
+Закрыто:
+- Слой 0: SQLite, Vault, ProfileRepository, validate_connection
+- Итерация 1: UI подключений (профили, карточки каналов, вход TG, браузер-логин, per-profile target)
+- Итерация 2а: экран публикации, поканальные итоги, ретрай одного канала, сохранение запланированных
+- Авторизация: login/logout (HMAC-кука), роли admin/client, изоляция по profile_id, user-add CLI
 
 Рабочие каналы: Telegram (API), Яндекс (браузер), ВК-стена (браузер), ВК-канал (браузер).
+
+Ближайшие треки (см. `AGENT_BRIEF.md` §7 для параллельной работы):
+- A. Scheduler executor — запланированные посты реально публикуются (scheduler/*, orchestrator/*, миграция)
+- B. Новый канал-адаптер — по рецепту в `AGENT_BRIEF.md` §5
+- C. Admin error console — UI диагностики ошибок (только C владеет index.html)
 
 Порядок итераций: см. `ROADMAP.md`. Задачи/отложено: `PRD_BACKLOG.md`.
 
