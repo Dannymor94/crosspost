@@ -13,14 +13,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from crosspost.channels import telegram_login as tl
 from crosspost.db.models import ConnectionState, CredentialKind
-from crosspost.web.deps import RepoDep
+from crosspost.web.deps import RepoDep, require_profile_access
 
-router = APIRouter(tags=["telegram-login"])
+# Все роуты под /api/profiles/{profile_id}/… → гейт изоляции на весь роутер.
+router = APIRouter(tags=["telegram-login"], dependencies=[Depends(require_profile_access)])
 
 _CHANNEL = "telegram"
 

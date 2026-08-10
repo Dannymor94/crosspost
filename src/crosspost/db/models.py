@@ -68,6 +68,11 @@ class ScheduledPostStatus(StrEnum):
     PUBLISHED = "published"  # исполнено планировщиком (следующая итерация)
 
 
+class Role(StrEnum):
+    ADMIN = "admin"  # владелец: видит и оперирует ВСЕ профили
+    CLIENT = "client"  # клиент: привязан к ОДНОМУ профилю, видит только его
+
+
 # ── ORM-модели ────────────────────────────────────────────────────────────────
 
 
@@ -209,6 +214,36 @@ class ScheduledPost(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile")
+
+
+class User(Base):
+    """Пользователь панели: admin (владелец) или client (привязан к профилю).
+
+    Регистрации нет — аккаунты заводит админ (см. CLI `user-add` и POST /api/users).
+    Пароль хранится ТОЛЬКО как необратимый хэш (scrypt, соль внутри). Сырого пароля
+    в БД нет — CLAUDE.md §Жёсткие правила п.4 (не хранить сырые пароли).
+
+    Изоляция доступа:
+      role=admin  → profile_id=NULL, видит и оперирует все профили;
+      role=client → profile_id указывает на ЕДИНСТВЕННЫЙ доступный профиль.
+    Профиль удалён → profile_id клиента становится NULL (SET NULL): аккаунт живёт,
+    но доступа ни к чему не имеет, пока админ не переназначит/не удалит.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    login: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # scrypt, НЕ пароль
+    role: Mapped[Role] = mapped_column(String(16), default=Role.CLIENT, nullable=False)
+    profile_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+
+    profile: Mapped[Profile | None] = relationship("Profile")
 
 
 class Log(Base):

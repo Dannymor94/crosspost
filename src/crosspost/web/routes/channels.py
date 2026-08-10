@@ -5,16 +5,21 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from crosspost.channels.connection_validator import validate_connection
 from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.db.models import ConnectionState, CredentialKind
-from crosspost.web.deps import RepoDep
+from crosspost.web.deps import RepoDep, require_profile_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["channels"])
+
+# Гейт изоляции для profile-scoped роутов (client — только свой profile_id → иначе 403).
+# Реестр каналов и поля формы (/api/channels/*) — НЕ per-profile, остаются открытыми
+# для любого вошедшего (метаданные каналов, без данных клиента).
+_PROFILE_GUARD = [Depends(require_profile_access)]
 
 # ── Channel field definitions (for frontend dynamic forms) ────────────────────
 
@@ -139,6 +144,7 @@ async def get_channel_fields(channel: str) -> list[ChannelFieldDef]:
 @router.get(
     "/api/profiles/{profile_id}/channels",
     response_model=list[ChannelStatusOut],
+    dependencies=_PROFILE_GUARD,
 )
 async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelStatusOut]:
     profile = await repo.get_profile(profile_id)
@@ -183,6 +189,7 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
 @router.get(
     "/api/profiles/{profile_id}/channels/{channel}/target",
     response_model=TargetBody,
+    dependencies=_PROFILE_GUARD,
 )
 async def get_target(profile_id: int, channel: str, repo: RepoDep) -> TargetBody:
     if channel not in VALIDATORS:
@@ -194,6 +201,7 @@ async def get_target(profile_id: int, channel: str, repo: RepoDep) -> TargetBody
 @router.put(
     "/api/profiles/{profile_id}/channels/{channel}/target",
     response_model=TargetBody,
+    dependencies=_PROFILE_GUARD,
 )
 async def set_target(profile_id: int, channel: str, body: TargetBody, repo: RepoDep) -> TargetBody:
     """Сохранить per-profile цель постинга (группа/организация). Изоляция клиентов."""
@@ -217,6 +225,7 @@ async def set_target(profile_id: int, channel: str, body: TargetBody, repo: Repo
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/connect",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def connect_channel(
     profile_id: int,
@@ -268,6 +277,7 @@ async def connect_channel(
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/validate",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def validate_channel(
     profile_id: int,
@@ -311,6 +321,7 @@ def _channels_sharing_session(session_key: str) -> set[str]:
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/disconnect",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def disconnect_channel(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Сбросить вход: удалить учётку канала у профиля и вернуть его в «не подключён».
@@ -346,6 +357,7 @@ async def disconnect_channel(profile_id: int, channel: str, repo: RepoDep) -> Va
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/begin",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def browser_login_begin(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Открыть браузер со СВЕЖИМ пустым контекстом на странице входа канала."""
@@ -370,6 +382,7 @@ async def browser_login_begin(profile_id: int, channel: str, repo: RepoDep) -> V
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/confirm",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def browser_login_confirm(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Пользователь подтвердил вход — ПОЗИТИВНО проверяем и сохраняем сессию профиля."""
@@ -403,6 +416,7 @@ async def browser_login_confirm(profile_id: int, channel: str, repo: RepoDep) ->
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/cancel",
     response_model=ValidationResult,
+    dependencies=_PROFILE_GUARD,
 )
 async def browser_login_cancel(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Закрыть окно входа, ничего не сохранять."""

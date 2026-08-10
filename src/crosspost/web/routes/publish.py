@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from crosspost.channels.validators import VALIDATORS
@@ -37,10 +37,12 @@ from crosspost.orchestrator.adapter_factory import build_profile_adapter
 from crosspost.orchestrator.publish_service import PublishService
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.web import media as media_store
-from crosspost.web.deps import SessionDep
+from crosspost.web.deps import SessionDep, require_profile_access
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["publish"])
+# Все роуты под /api/profiles/{profile_id}/… → изоляция гейтом на весь роутер:
+# client не дёрнет чужой profile_id (403), даже мимо UI.
+router = APIRouter(tags=["publish"], dependencies=[Depends(require_profile_access)])
 
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
 

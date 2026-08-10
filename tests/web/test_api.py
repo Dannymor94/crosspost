@@ -12,9 +12,11 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from crosspost.auth.sessions import sign_session
 from crosspost.channels import telegram_login as tl
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.models import ConnectionState
+from crosspost.db.models import ConnectionState, Role
+from crosspost.db.user_repo import UserRepository
 from crosspost.web import deps
 from crosspost.web.routes import channels, profiles, tg_login
 
@@ -23,8 +25,8 @@ from crosspost.web.routes import channels, profiles, tg_login
 
 @pytest.fixture(autouse=True)
 def vault_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = Fernet.generate_key().decode()
-    monkeypatch.setenv("VAULT_KEY", key)
+    monkeypatch.setenv("VAULT_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("SESSION_SECRET", "test-secret-please-change")
 
 
 @pytest.fixture()
@@ -103,7 +105,17 @@ async def _login_telegram(
 
 @pytest.fixture()
 async def client(test_app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
+    # Существующие тесты оперируют как «владелец» — аутентифицируем клиента админом
+    # (admin обходит гейт profile-изоляции, прежнее поведение эндпоинтов сохраняется).
+    assert deps._session_factory is not None
+    async with deps._session_factory() as s:
+        repo = UserRepository(s)
+        admin = await repo.get_by_login("admin") or await repo.create_user(
+            "admin", "adminpass", role=Role.ADMIN
+        )
+        admin_id = admin.id
     async with AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as c:
+        c.cookies.set("session", sign_session(admin_id))
         yield c
 
 

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.web import deps
-from crosspost.web.routes import channels, profiles, publish, tg_login
+from crosspost.web.routes import auth, channels, profiles, publish, tg_login, users
 
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Crosspost Admin", lifespan=lifespan)
+    app.include_router(auth.router)
+    app.include_router(users.router)
     app.include_router(profiles.router)
     app.include_router(channels.router)
     app.include_router(tg_login.router)

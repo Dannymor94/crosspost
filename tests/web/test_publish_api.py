@@ -31,6 +31,7 @@ from crosspost.web.routes import channels, profiles, publish, tg_login
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("VAULT_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("SESSION_SECRET", "test-secret-please-change")
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
 
@@ -53,7 +54,19 @@ async def client(factory) -> AsyncGenerator[AsyncClient, None]:
     app = FastAPI(lifespan=_lifespan)
     for r in (profiles, channels, tg_login, publish):
         app.include_router(r.router)
+
+    # Аутентифицируем как admin: обходит гейт profile-изоляции, прежние тесты
+    # публикации оперируют любым профилем как владелец.
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.user_repo import UserRepository
+
+    async with factory() as s:
+        admin = await UserRepository(s).create_user("admin", "adminpass", role=Role.ADMIN)
+        admin_id = admin.id
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        c.cookies.set("session", sign_session(admin_id))
         yield c
 
 

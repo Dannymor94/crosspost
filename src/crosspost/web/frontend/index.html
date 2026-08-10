@@ -628,6 +628,44 @@ body {
 .sched-when { font-size: 12px; color: var(--accent); }
 .sched-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sched-chans { font-size: 11px; color: var(--text-3); }
+
+/* ── Login ───────────────────────────────────────────────────────────────── */
+.login-wrap {
+  flex: 1; min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.login-card {
+  width: 100%; max-width: 360px;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 32px; box-shadow: var(--shadow);
+}
+.login-logo {
+  font-family: var(--font-mono); font-size: 18px; letter-spacing: 1px;
+  color: var(--accent); margin-bottom: 4px;
+}
+.login-sub { font-size: 13px; color: var(--text-3); margin-bottom: 24px; }
+.login-card .form-group { margin-bottom: 16px; }
+
+/* ── Top bar (user chip + logout) ────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding-bottom: 16px; margin-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.user-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.user-name { color: var(--text-1); font-weight: 600; }
+.role-badge {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .5px;
+  padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
+}
+.role-badge.admin  { background: var(--accent-dim); color: var(--accent); }
+.role-badge.client { background: var(--bg-card); color: var(--text-2); border: 1px solid var(--border); }
+.client-brand { display: flex; align-items: center; gap: 8px; margin-right: auto;
+  font-family: var(--font-mono); color: var(--accent); font-size: 14px; letter-spacing: 1px; }
+
+/* ── Client rows in sidebar (admin: manage account) ──────────────────────── */
+.profile-row { display: flex; align-items: stretch; }
+.profile-row .profile-item { flex: 1; }
+.user-badge { font-size: 10px; color: var(--text-3); padding: 0 8px; display: flex; align-items: center; }
 </style>
 </head>
 <body>
@@ -1304,7 +1342,7 @@ function NoProfileView() {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
-function Sidebar({ profiles, activeId, onSelect, onNew }) {
+function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient }) {
   return h("nav", { className: "sidebar", "aria-label": "Профили" },
     h("div", { className: "sidebar-header" },
       h("div", { className: "logo" }, h("span", null, "⊹"), " CROSSPOST"),
@@ -1327,6 +1365,11 @@ function Sidebar({ profiles, activeId, onSelect, onNew }) {
         h("span", { "aria-hidden": true }, "+"),
         "Новый профиль",
       ),
+      h("button", {
+        className: "btn btn-ghost btn-sm", style: { width: "100%", marginTop: "8px" },
+        onClick: onNewClient, disabled: profiles.length === 0,
+        title: profiles.length === 0 ? "Сначала создайте профиль" : "",
+      }, "＋ Аккаунт клиента"),
     ),
   );
 }
@@ -1595,47 +1638,210 @@ function ViewTabs({ view, onChange }) {
   );
 }
 
+// ── Авторизация: вход, шапка пользователя, создание клиентского аккаунта ─────
+
+function LoginView({ onSuccess }) {
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!login.trim() || !password) return;
+    setLoading(true); setErr(null);
+    try {
+      const me = await api.post("/api/auth/login", { login: login.trim(), password });
+      onSuccess(me);
+    } catch (ex) { setErr(ex.message); }
+    finally { setLoading(false); }
+  }
+
+  return h("div", { className: "login-wrap" },
+    h("form", { className: "login-card", onSubmit: submit },
+      h("div", { className: "login-logo" }, "⊹ CROSSPOST"),
+      h("p", { className: "login-sub" }, "Вход в панель"),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "l-login" }, "Логин"),
+        h("input", { id: "l-login", ref, className: "form-input", value: login,
+          autoComplete: "username", onChange: (e) => setLogin(e.target.value) }),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "l-pass" }, "Пароль"),
+        h("input", { id: "l-pass", className: "form-input", type: "password", value: password,
+          autoComplete: "current-password", onChange: (e) => setPassword(e.target.value) }),
+      ),
+      err && h(Alert, { type: "error" }, err),
+      h("button", { type: "submit", className: "btn btn-primary", style: { width: "100%", marginTop: "8px" },
+        disabled: loading || !login.trim() || !password },
+        loading && h(Spinner), loading ? " Вхожу…" : "Войти"),
+    ),
+  );
+}
+
+function TopBar({ me, onLogout }) {
+  return h("div", { className: "topbar" },
+    me.role === "client" && h("div", { className: "client-brand" }, "⊹ CROSSPOST"),
+    h("div", { className: "user-chip" },
+      h("span", { className: `role-badge ${me.role}` }, me.role === "admin" ? "Админ" : "Клиент"),
+      h("span", { className: "user-name" }, me.login),
+    ),
+    h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout }, "Выйти"),
+  );
+}
+
+function NewClientModal({ profiles, onClose, onCreated }) {
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [profileId, setProfileId] = useState(profiles[0]?.id ?? "");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [done, setDone] = useState(null);
+
+  async function submit(e) {
+    e.preventDefault();
+    setLoading(true); setErr(null);
+    try {
+      const u = await api.post("/api/users", {
+        login: login.trim(), password, profile_id: Number(profileId),
+      });
+      onCreated?.(u);
+      // Показываем сводку: логин/пароль передать клиенту вне системы (в ТГ).
+      setDone({ login: u.login, password });
+    } catch (ex) { setErr(ex.message); }
+    finally { setLoading(false); }
+  }
+
+  if (done) {
+    return h(Modal, { title: "Аккаунт создан", onClose },
+      h("p", { className: "form-hint", style: { marginBottom: "12px" } },
+        "Передайте эти данные клиенту в ТГ. Пароль больше не будет показан."),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Логин"),
+        h("input", { className: "form-input mono", value: done.login, readOnly: true }),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Пароль"),
+        h("input", { className: "form-input mono", value: done.password, readOnly: true }),
+      ),
+      h("button", { className: "btn btn-primary", onClick: onClose }, "Готово"),
+    );
+  }
+
+  return h(Modal, { title: "Новый клиентский аккаунт", onClose },
+    h("form", { onSubmit: submit },
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Профиль клиента"),
+        h("select", { className: "form-input", value: profileId,
+          onChange: (e) => setProfileId(e.target.value) },
+          profiles.map(p => h("option", { key: p.id, value: p.id }, p.name))),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Логин"),
+        h("input", { className: "form-input", value: login, autoComplete: "off",
+          onChange: (e) => setLogin(e.target.value) }),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Пароль"),
+        h("input", { className: "form-input mono", value: password, autoComplete: "off",
+          onChange: (e) => setPassword(e.target.value) }),
+        h("p", { className: "form-hint" }, "Задайте пароль (мин. 6 символов) и передайте клиенту в ТГ."),
+      ),
+      err && h(Alert, { type: "error" }, err),
+      h("div", { className: "flex-gap mt-2" },
+        h("button", { type: "submit", className: "btn btn-primary",
+          disabled: loading || login.trim().length < 3 || password.length < 6 || !profileId },
+          loading && h(Spinner), loading ? " Создаю…" : "Создать аккаунт"),
+        h("button", { type: "button", className: "btn btn-ghost", onClick: onClose }, "Отмена"),
+      ),
+    ),
+  );
+}
+
+function NoAccessView() {
+  return h("div", { className: "empty-state" },
+    h("span", { className: "empty-icon" }, "⌀"),
+    h("h2", { className: "empty-title" }, "Профиль недоступен"),
+    h("p", { className: "empty-body" },
+      "К вашему аккаунту не привязан профиль. Обратитесь к администратору."),
+  );
+}
+
 function App() {
+  const [me, setMe] = useState(undefined); // undefined=проверяем, null=не вошёл, obj=вошёл
   const [profiles, setProfiles] = useState([]);
   const [active, setActive] = useState(null);
   const [view, setView] = useState("publish");
   const [showNewProfile, setShowNewProfile] = useState(false);
-  const [loadingProfiles, setLoadingProfiles] = useState(true);
+  const [showNewClient, setShowNewClient] = useState(false);
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
 
+  // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
+    api.get("/api/auth/me").then(setMe).catch(() => setMe(null));
+  }, []);
+
+  const loadProfiles = useCallback(() => {
+    setLoadingProfiles(true);
     api.get("/api/profiles")
-      .then(data => { setProfiles(data); if (data.length) setActive(data[0]); })
+      .then(data => {
+        setProfiles(data);
+        setActive(prev => (prev && data.find(p => p.id === prev.id)) || data[0] || null);
+      })
       .catch(() => {})
       .finally(() => setLoadingProfiles(false));
   }, []);
+
+  useEffect(() => { if (me) loadProfiles(); }, [me, loadProfiles]);
+
+  async function logout() {
+    try { await api.post("/api/auth/logout"); } catch (_) {}
+    setMe(null); setProfiles([]); setActive(null);
+  }
+
+  if (me === undefined) return h("div", { className: "login-wrap" }, h(Spinner));
+  if (me === null) return h(LoginView, { onSuccess: setMe });
+
+  const isAdmin = me.role === "admin";
 
   function onProfileCreated(p) {
     setProfiles(prev => [...prev, p]);
     setActive(p);
   }
 
+  const mainBody = loadingProfiles
+    ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
+    : active
+      ? h("div", null,
+          h(ViewTabs, { view, onChange: setView }),
+          view === "publish"
+            ? h(PublishView, { key: `pub-${active.id}`, profile: active })
+            : h(ChannelsView, { key: active.id, profile: active }),
+        )
+      : (isAdmin ? h(NoProfileView) : h(NoAccessView));
+
   return h("div", { id: "root-inner", style: { display: "contents" } },
-    h(Sidebar, {
+    // Список клиентов слева — ТОЛЬКО у админа. Клиент идёт сразу в свой профиль.
+    isAdmin && h(Sidebar, {
       profiles,
       activeId: active?.id,
       onSelect: setActive,
       onNew: () => setShowNewProfile(true),
+      onNewClient: () => setShowNewClient(true),
     }),
     h("main", { className: "main" },
-      loadingProfiles
-        ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
-        : active
-          ? h("div", null,
-              h(ViewTabs, { view, onChange: setView }),
-              view === "publish"
-                ? h(PublishView, { key: `pub-${active.id}`, profile: active })
-                : h(ChannelsView, { key: active.id, profile: active }),
-            )
-          : h(NoProfileView),
+      h(TopBar, { me, onLogout: logout }),
+      mainBody,
     ),
     showNewProfile && h(NewProfileModal, {
       onClose: () => setShowNewProfile(false),
       onCreated: onProfileCreated,
+    }),
+    showNewClient && h(NewClientModal, {
+      profiles,
+      onClose: () => setShowNewClient(false),
     }),
   );
 }

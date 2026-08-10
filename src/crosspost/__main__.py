@@ -193,6 +193,54 @@ async def _run_with_sqlite(
         return await _run(content, channels, store)
 
 
+async def _run_user_add(login: str, role: str, profile_id: int | None, password: str | None) -> int:
+    """Завести пользователя панели (первый admin — только так, регистрации нет).
+
+    Пароль: из --password, иначе из env CROSSPOST_PASSWORD, иначе интерактивный ввод.
+    Сырой пароль не логируется и не сохраняется — в БД идёт только scrypt-хэш.
+    """
+    import getpass
+    import os
+
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from crosspost.db.engine import create_engine_and_tables
+    from crosspost.db.models import Role
+    from crosspost.db.user_repo import UserRepository
+
+    if role not in (Role.ADMIN, Role.CLIENT):
+        print(f"user-add: роль должна быть admin|client, получено {role!r}")
+        return 1
+    if role == Role.CLIENT and profile_id is None:
+        print("user-add: для client укажите --profile-id (привязка к профилю)")
+        return 1
+
+    pwd = password or os.environ.get("CROSSPOST_PASSWORD") or getpass.getpass("Пароль: ")
+    if len(pwd) < 6:
+        print("user-add: пароль слишком короткий (мин. 6 символов)")
+        return 1
+
+    engine = await create_engine_and_tables()
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            repo = UserRepository(session)
+            try:
+                user = await repo.create_user(
+                    login.strip(),
+                    pwd,
+                    role=Role(role),
+                    profile_id=profile_id if role == Role.CLIENT else None,
+                )
+            except IntegrityError:
+                print(f"user-add: логин {login!r} уже занят")
+                return 1
+        print(f"✓ Пользователь #{user.id} '{user.login}' ({user.role}) создан")
+        return 0
+    finally:
+        await engine.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="crosspost")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -211,11 +259,22 @@ def main(argv: list[str] | None = None) -> int:
         "--channel", required=True, help=f"канал: {', '.join(sorted(_LOGIN_SUPPORTED))}"
     )
 
+    ua = sub.add_parser("user-add", help="завести пользователя панели (admin/client)")
+    ua.add_argument("--login", required=True, help="логин пользователя")
+    ua.add_argument("--role", required=True, choices=["admin", "client"])
+    ua.add_argument("--profile-id", type=int, default=None, help="для client — id профиля")
+    ua.add_argument(
+        "--password", default=None, help="пароль (иначе env CROSSPOST_PASSWORD или запрос)"
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "login":
         cfg = load_config()
         return asyncio.run(_run_login(args.channel, cfg))
+
+    if args.cmd == "user-add":
+        return asyncio.run(_run_user_add(args.login, args.role, args.profile_id, args.password))
 
     content = CanonicalContent(
         type=ContentType(args.type),
