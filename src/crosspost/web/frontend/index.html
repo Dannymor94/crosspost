@@ -628,6 +628,57 @@ body {
 .sched-when { font-size: 12px; color: var(--accent); }
 .sched-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sched-chans { font-size: 11px; color: var(--text-3); }
+.sched-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.sched-edit { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* ── Import: план ─────────────────────────────────────────────────────────── */
+.import-drop {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; border: 1px dashed var(--border-f); border-radius: var(--radius-lg);
+  background: var(--bg-input); cursor: pointer; transition: border-color .12s;
+}
+.import-drop:hover { border-color: var(--accent); }
+.import-drop.filled { border-style: solid; border-color: rgba(34,197,94,.35); }
+.import-drop-ic {
+  width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+  background: var(--bg-card); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--text-2);
+}
+.import-drop-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.import-drop-title { font-size: 13px; color: var(--text-1); font-weight: 600; }
+.import-drop-sub { font-size: 11px; color: var(--text-3); }
+.rule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+.report-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.chip {
+  font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px;
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text-2);
+}
+.chip.ok   { background: var(--live-bg); color: var(--live); border-color: rgba(34,197,94,.3); }
+.chip.warn { background: var(--amber-bg); color: var(--amber); border-color: rgba(245,158,11,.3); }
+.chip.err  { background: var(--error-bg); color: var(--error); border-color: rgba(248,113,113,.3); }
+
+.plan-rows { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.plan-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.plan-row.bad { border-color: rgba(248,113,113,.3); }
+.plan-when { font-size: 11px; color: var(--accent); flex-shrink: 0; width: 130px; }
+.plan-file { font-size: 11px; color: var(--text-3); flex-shrink: 0; width: 100px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-text { flex: 1; min-width: 0; font-size: 12px; color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-reason { flex: 1; min-width: 0; font-size: 12px; color: var(--error); }
+.plan-src {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 2px 7px; border-radius: 20px; flex-shrink: 0;
+}
+.plan-src.rule { background: var(--accent-dim); color: var(--accent); }
+.plan-src.explicit { background: var(--amber-bg); color: var(--amber); }
+.plan-unmatched { font-size: 11.5px; color: var(--text-3); margin-top: 10px; line-height: 1.5; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -707,6 +758,15 @@ const api = {
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
+  async patch(url, body) {
+    const r = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+    return r.json();
+  },
   async del(url) {
     const r = await fetch(url, { method: "DELETE" });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
@@ -727,6 +787,18 @@ const CHANNEL_ICONS = {
   dzen:       "Дз",
   telegraph:  "Tl",
 };
+
+// ── Date helpers (naive local: сохраняем как ввёл пользователь, без UTC-сдвига) ─
+function _pad(n) { return String(n).padStart(2, "0"); }
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`;
+}
+function toLocalInput(value) {
+  // ISO/naive-строка → значение для <input type=datetime-local> (yyyy-MM-ddThh:mm).
+  const d = new Date(value);
+  return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+}
 
 function lampClass(state) {
   if (state === "live") return "live";
@@ -1463,7 +1535,7 @@ function ScheduleModal({ onClose, onConfirm }) {
       h("label", { className: "form-label", htmlFor: "sched-when" }, "Дата и время"),
       h("input", { id: "sched-when", className: "form-input", type: "datetime-local",
         value: when, onChange: (e) => setWhen(e.target.value) }),
-      h("p", { className: "form-hint" }, "Исполнение по расписанию — в следующей версии; сейчас пост сохраняется в очередь."),
+      h("p", { className: "form-hint" }, "Пост уйдёт сам в указанное время (местное). Планировщик публикует по расписанию."),
     ),
     h("div", { className: "flex-gap mt-2" },
       h("button", { className: "btn btn-primary", onClick: () => onConfirm(when), disabled: !when }, "Сохранить в план"),
@@ -1543,18 +1615,13 @@ function PublishView({ profile }) {
   async function doSchedule(whenLocal) {
     setShowSchedule(false); setBusy(true); setAlert(null);
     try {
-      const iso = new Date(whenLocal).toISOString();
-      await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: iso }));
+      // naive-local (без Z): исполнитель сравнивает по локальному времени.
+      await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
       setText(""); setFiles([]); setOutcomes(null);
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); }
-  }
-
-  async function cancelScheduled(id) {
-    try { await api.del(`${base}/scheduled/${id}`); loadScheduled(); }
-    catch (ex) { setAlert({ type: "error", text: ex.message }); }
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
@@ -1607,26 +1674,248 @@ function PublishView({ profile }) {
         outcomes.map((o) => h(OutcomeCard, { key: o.channel, o, onRetry: retry, retrying: retryCh === o.channel }))),
     ),
 
-    // Запланированные
-    scheduled.length > 0 && h("div", null,
-      h("p", { className: "section-title", style: { marginTop: "24px" } }, `Запланировано (${scheduled.length})`),
-      h("div", { className: "sched-list" },
-        scheduled.map((s) => h("div", { key: s.id, className: "sched-item" },
-          h("div", { className: "sched-main" },
-            h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
-            h("div", { className: "sched-text" }, s.text || "(без текста)"),
-            h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
-          ),
-          h("button", { className: "btn btn-danger btn-sm", onClick: () => cancelScheduled(s.id) }, "Отменить"),
-        ))),
-    ),
+    // Запланированные (общий список: отмена + правка времени)
+    h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
 
     showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
 }
 
+// ── Запланированные: список с отменой и правкой времени ──────────────────────
+
+function SchedItem({ base, s, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [when, setWhen] = useState(() => toLocalInput(s.scheduled_at));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      // Шлём naive-local (без Z): исполнитель сравнивает по локальному времени.
+      await api.patch(`${base}/scheduled/${s.id}`, { scheduled_at: when });
+      setEditing(false); onChanged?.();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+  async function cancel() {
+    try { await api.del(`${base}/scheduled/${s.id}`); onChanged?.(); }
+    catch (ex) { setErr(ex.message); }
+  }
+
+  return h("div", { className: "sched-item" },
+    h("div", { className: "sched-main" },
+      editing
+        ? h("div", { className: "sched-edit" },
+            h("input", { className: "form-input", type: "datetime-local", value: when,
+              onChange: (e) => setWhen(e.target.value), style: { maxWidth: "220px" } }),
+            h("button", { className: "btn btn-primary btn-sm", onClick: save, disabled: busy },
+              busy && h(Spinner), busy ? " Сохраняю…" : "Сохранить"),
+            h("button", { className: "btn btn-ghost btn-sm", onClick: () => setEditing(false) }, "Отмена"),
+          )
+        : h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
+      h("div", { className: "sched-text" }, s.text || "(без текста)"),
+      h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
+      err && h("div", { className: "outcome-err" }, err),
+    ),
+    !editing && h("div", { className: "sched-actions" },
+      h("button", { className: "btn btn-ghost btn-sm",
+        onClick: () => { setWhen(toLocalInput(s.scheduled_at)); setEditing(true); } }, "Время"),
+      h("button", { className: "btn btn-danger btn-sm", onClick: cancel }, "Отменить"),
+    ),
+  );
+}
+
+function ScheduledList({ base, items, onChanged }) {
+  if (!items.length) return null;
+  return h("div", null,
+    h("p", { className: "section-title", style: { marginTop: "24px" } }, `Запланировано (${items.length})`),
+    h("div", { className: "sched-list" },
+      items.map((s) => h(SchedItem, { key: s.id, base, s, onChanged }))),
+  );
+}
+
+// ── Импорт контент-плана ─────────────────────────────────────────────────────
+
+function TableDrop({ file, onPick }) {
+  const ref = useRef(null);
+  return h("div", null,
+    h("div", { className: `import-drop ${file ? "filled" : ""}`, onClick: () => ref.current?.click() },
+      h("span", { className: "import-drop-ic" }, file ? "✓" : "CSV"),
+      h("div", { className: "import-drop-body" },
+        h("span", { className: "import-drop-title" }, file ? file.name : "Выберите таблицу плана"),
+        h("span", { className: "import-drop-sub" },
+          file ? `${(file.size / 1024).toFixed(1)} КБ` : "CSV или XLSX · колонки: файл, текст, дата, время"),
+      ),
+    ),
+    h("input", { ref, type: "file", accept: ".csv,.xlsx,.xlsm", style: { display: "none" },
+      onChange: (e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ""; } }),
+  );
+}
+
+function RuleFields({ startDate, times, onStart, onTimes }) {
+  return h("div", { className: "rule-grid" },
+    h("div", { className: "form-group", style: { margin: 0 } },
+      h("label", { className: "form-label" }, "Первый день"),
+      h("input", { className: "form-input", type: "date", value: startDate,
+        onChange: (e) => onStart(e.target.value) }),
+    ),
+    h("div", { className: "form-group", style: { margin: 0 } },
+      h("label", { className: "form-label" }, "Времена постинга"),
+      h("input", { className: "form-input mono", placeholder: "10:00, 18:00", value: times,
+        onChange: (e) => onTimes(e.target.value) }),
+      h("p", { className: "form-hint" },
+        "Через запятую. Строки без явной даты раскидаются по слотам, в порядке имён файлов."),
+    ),
+  );
+}
+
+function ImportReportView({ report }) {
+  return h("div", null,
+    h("div", { className: "report-chips" },
+      h("span", { className: "chip ok" }, `Связалось: ${report.resolved_count}`),
+      report.problem_count > 0 && h("span", { className: "chip err" }, `Проблем: ${report.problem_count}`),
+      report.unmatched_files.length > 0
+        && h("span", { className: "chip warn" }, `Файлов без строк: ${report.unmatched_files.length}`),
+    ),
+    report.resolved.length > 0 && h("div", null,
+      h("p", { className: "section-title" }, "Расписание"),
+      h("div", { className: "plan-rows" },
+        report.resolved.map((r, i) => h("div", { key: i, className: "plan-row" },
+          h("span", { className: "plan-when mono" }, new Date(r.scheduled_at).toLocaleString("ru-RU")),
+          h("span", { className: "plan-file mono" }, r.file),
+          h("span", { className: "plan-text" }, r.text || "(без текста)"),
+          h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата"),
+        ))),
+    ),
+    report.problems.length > 0 && h("div", null,
+      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Проблемные строки"),
+      h("div", { className: "plan-rows" },
+        report.problems.map((p, i) => h("div", { key: i, className: "plan-row bad" },
+          h("span", { className: "plan-file mono" }, `стр. ${p.row_number}`),
+          h("span", { className: "plan-file mono" }, p.file || "—"),
+          h("span", { className: "plan-reason" }, p.reason),
+        ))),
+    ),
+    report.unmatched_files.length > 0 && h("p", { className: "plan-unmatched" },
+      `Картинки без строки в таблице: ${report.unmatched_files.join(", ")}`),
+  );
+}
+
+function ImportView({ profile }) {
+  const base = `/api/profiles/${profile.id}`;
+  const [table, setTable] = useState(null);
+  const [images, setImages] = useState([]);
+  const [startDate, setStartDate] = useState(() => todayStr());
+  const [times, setTimes] = useState("10:00, 18:00");
+  const [targets, setTargets] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [report, setReport] = useState(null);
+  const [scheduled, setScheduled] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [alert, setAlert] = useState(null);
+
+  const loadTargets = useCallback(async () => {
+    try { setTargets(await api.get(`${base}/publish/targets?content_type=post`)); }
+    catch (ex) { setAlert({ type: "error", text: ex.message }); }
+  }, [base]);
+  const loadScheduled = useCallback(async () => {
+    try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
+  }, [base]);
+  useEffect(() => { loadTargets(); loadScheduled(); }, [loadTargets, loadScheduled]);
+
+  function toggle(ch) {
+    setSelected((prev) => { const n = new Set(prev); n.has(ch) ? n.delete(ch) : n.add(ch); return n; });
+  }
+  function appendRule(fd) {
+    if (startDate) fd.append("start_date", startDate);
+    if (times.trim()) fd.append("times_csv", times);
+  }
+
+  async function preview() {
+    if (!table) { setAlert({ type: "error", text: "Выберите таблицу плана." }); return; }
+    setBusy(true); setAlert(null); setReport(null);
+    try {
+      const fd = new FormData();
+      fd.append("table", table);
+      fd.append("filenames", JSON.stringify(images.map((f) => f.name)));
+      appendRule(fd);
+      setReport(await api.postForm(`${base}/import/preview`, fd));
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setBusy(false); }
+  }
+
+  async function commit() {
+    setCommitting(true); setAlert(null);
+    try {
+      const fd = new FormData();
+      fd.append("table", table);
+      fd.append("channels", JSON.stringify([...selected]));
+      fd.append("content_type", "post");
+      images.forEach((f) => fd.append("media", f));
+      appendRule(fd);
+      const res = await api.postForm(`${base}/import/commit`, fd);
+      const parts = [`создано ${res.created}`];
+      if (res.skipped_count > 0) parts.push(`пропущено ${res.skipped_count}`);
+      setAlert({ type: res.created > 0 ? "success" : "error", text: `Запланировано: ${parts.join(", ")}.` });
+      setReport(null); setTable(null); setImages([]);
+      loadScheduled();
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setCommitting(false); }
+  }
+
+  const eligibleCount = (targets || []).filter((t) => t.eligible).length;
+  const canPreview = !!table && !busy;
+  const canCommit = !!table && selected.size > 0 && report && report.resolved_count > 0 && !committing;
+
+  return h("div", null,
+    h("h1", { className: "page-title" }, "Импорт контент-плана"),
+    h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
+
+    h("p", { className: "section-title" }, "Таблица плана"),
+    h(TableDrop, { file: table, onPick: setTable }),
+
+    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Картинки"),
+    h("div", { className: "form-panel", style: { maxWidth: "100%" } },
+      h(PhotoPicker, { files: images, onChange: setImages }),
+      h("p", { className: "form-hint mt-2" },
+        "Свяжутся со строками таблицы по имени файла (2.jpg < 10.jpg — натуральный порядок)."),
+    ),
+
+    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Правило раскидки"),
+    h("div", { className: "form-panel", style: { maxWidth: "100%" } },
+      h(RuleFields, { startDate, times, onStart: setStartDate, onTimes: setTimes })),
+
+    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Куда публикуем"),
+    targets === null
+      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
+      : eligibleCount === 0
+        ? h("div", { className: "empty-inline" },
+            "Нет доступных каналов. Подключите канал во вкладке «Каналы».")
+        : h("div", { className: "target-grid" },
+            targets.map((t) => h(TargetToggle, {
+              key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
+            }))),
+
+    h("div", { className: "publish-actions" },
+      h("button", { className: "btn btn-ghost", onClick: preview, disabled: !canPreview },
+        busy && h(Spinner), busy ? " Считаю…" : "Показать превью"),
+      h("button", { className: "btn btn-primary", onClick: commit, disabled: !canCommit },
+        committing && h(Spinner), committing ? " Планирую…" : "Запланировать всё"),
+      !table ? h("span", { className: "hint-inline" }, "выберите таблицу")
+        : !report ? h("span", { className: "hint-inline" }, "сначала превью")
+          : selected.size === 0 ? h("span", { className: "hint-inline" }, "выберите канал") : null,
+    ),
+    alert && h(Alert, { type: alert.type }, alert.text),
+
+    report && h("div", { style: { marginTop: "16px" } }, h(ImportReportView, { report })),
+
+    h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
+  );
+}
+
 function ViewTabs({ view, onChange }) {
-  const tabs = [["publish", "Публикация"], ["channels", "Каналы"]];
+  const tabs = [["publish", "Публикация"], ["import", "Импорт плана"], ["channels", "Каналы"]];
   return h("div", { className: "view-tabs", role: "tablist" },
     tabs.map(([id, label]) => h("button", {
       key: id,
@@ -1818,7 +2107,9 @@ function App() {
           h(ViewTabs, { view, onChange: setView }),
           view === "publish"
             ? h(PublishView, { key: `pub-${active.id}`, profile: active })
-            : h(ChannelsView, { key: active.id, profile: active }),
+            : view === "import"
+              ? h(ImportView, { key: `imp-${active.id}`, profile: active })
+              : h(ChannelsView, { key: active.id, profile: active }),
         )
       : (isAdmin ? h(NoProfileView) : h(NoAccessView));
 

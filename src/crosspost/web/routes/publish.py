@@ -313,6 +313,28 @@ async def list_scheduled(profile_id: int, session: SessionDep) -> list[Scheduled
     return [_scheduled_out(p) for p in await pub_repo.list_scheduled()]
 
 
+class RescheduleBody(BaseModel):
+    scheduled_at: str  # ISO-8601
+
+
+@router.patch("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
+async def reschedule(
+    profile_id: int, scheduled_id: int, body: RescheduleBody, session: SessionDep
+) -> ScheduledOut:
+    """Сдвинуть время запланированного поста (правка из UI). Изоляция по profile_id."""
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    try:
+        when = datetime.fromisoformat(body.scheduled_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="scheduled_at: ISO-8601 дата/время") from exc
+    if not await pub_repo.update_scheduled_time(scheduled_id, when):
+        raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+    post = await pub_repo.get_scheduled(scheduled_id)
+    assert post is not None
+    return _scheduled_out(post)
+
+
 @router.delete("/api/profiles/{profile_id}/scheduled/{scheduled_id}")
 async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionDep) -> dict:
     profile_repo, pub_repo = _repos(session, profile_id)

@@ -271,6 +271,41 @@ async def test_schedule_list_cancel(client, factory):
     assert (await client.get(f"/api/profiles/{pid}/scheduled")).json() == []
 
 
+async def test_reschedule_updates_time(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "later",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    patched = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": "2026-09-15T18:30:00"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["scheduled_at"].startswith("2026-09-15T18:30")
+
+    # Изменение видно в списке.
+    listed = await client.get(f"/api/profiles/{pid}/scheduled")
+    assert listed.json()[0]["scheduled_at"].startswith("2026-09-15T18:30")
+
+
+async def test_reschedule_missing_post_404(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.patch(
+        f"/api/profiles/{pid}/scheduled/99999",
+        json={"scheduled_at": "2026-09-15T18:30:00"},
+    )
+    assert resp.status_code == 404
+
+
 # ── Изоляция ──────────────────────────────────────────────────────────────────
 
 
