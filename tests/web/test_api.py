@@ -295,6 +295,14 @@ async def test_wizard_fields_declare_validation_rules(client: AsyncClient) -> No
                 assert f["normalize"] in known_norm, f"{ch}/{f['name']}: {f['normalize']}"
 
 
+async def test_every_channel_has_error_hints_for_stuck_panel() -> None:
+    """Блок 4: у каждого включённого канала есть подсказки «Не получается?»."""
+    from crosspost.channels.validators import VALIDATORS
+
+    empty = [ch for ch, v in VALIDATORS.items() if v.enabled and v.guide and not v.guide.errors]
+    assert empty == [], f"каналы без подсказок по ошибкам: {empty}"
+
+
 async def test_telegram_interactive_login_live(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "carol"})
     pid = resp.json()["id"]

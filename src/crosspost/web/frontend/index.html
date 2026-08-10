@@ -760,6 +760,8 @@ body {
 .form-input.wf-ok { border-color: rgba(34,197,94,.45); }
 .form-input.wf-bad { border-color: rgba(248,113,113,.55); }
 .wf-msg { font-size: 11.5px; color: var(--error); margin-top: 5px; line-height: 1.45; }
+.wiz-stuck { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.wiz-msg { font-family: var(--font-mono); font-size: 12px; resize: vertical; line-height: 1.5; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -1105,6 +1107,38 @@ function WizardFieldInput({ f, value, onChange }) {
   );
 }
 
+// Блок 4 — выход из тупика: готовое сообщение оператору с контекстом.
+function operatorMessage({ title, stepTitle, err }) {
+  const lines = [
+    `Здравствуйте! Не получается подключить канал «${title}».`,
+    `Шаг: ${stepTitle}`,
+  ];
+  if (err) lines.push(`Что вижу: ${err}`);
+  lines.push("Подскажите, пожалуйста, что делать дальше.");
+  return lines.join("\n");
+}
+
+function StuckPanel({ title, stepTitle, err, errors }) {
+  const [copied, setCopied] = useState(false);
+  const msg = operatorMessage({ title, stepTitle, err });
+  async function copy() {
+    try { await navigator.clipboard.writeText(msg); setCopied(true); }
+    catch (_) { setCopied(false); }
+  }
+  return h("details", { className: "howto errors-help wiz-stuck" },
+    h("summary", { className: "howto-summary" }, "Не получается?"),
+    errors && errors.length > 0 && h("ul", { className: "errors-list" },
+      errors.map((e, i) => h("li", { key: i },
+        h("span", { className: "err-sym" }, e.symptom + ": "),
+        h("span", { className: "err-chk" }, e.check)))),
+    h("p", { className: "form-hint", style: { marginTop: "10px" } },
+      "Не помогло? Скопируйте это сообщение и отправьте оператору в ваш чат:"),
+    h("textarea", { className: "form-input wiz-msg", readOnly: true, rows: 4, value: msg }),
+    h("button", { type: "button", className: "btn btn-ghost btn-sm mt-2", onClick: copy },
+      copied ? "✓ Скопировано" : "Скопировать сообщение оператору"),
+  );
+}
+
 function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   const allSteps = guide?.steps || [];
   const pbase = `/api/profiles/${profileId}`;
@@ -1252,6 +1286,9 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
       h("button", { className: "btn btn-primary", onClick: runStep, disabled: !canProceed },
         busy && h(Spinner), busy ? " Минуту…" : (ACTION_LABEL[current.kind] || "Далее")),
     ),
+
+    // Блок 4 — «застрял»: частые проблемы + готовое сообщение оператору.
+    h(StuckPanel, { title, stepTitle: current.title, err, errors: guide?.errors }),
   );
 }
 
