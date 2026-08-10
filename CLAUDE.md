@@ -14,13 +14,20 @@
 - Итерация 1: UI подключений (профили, карточки каналов, вход TG, браузер-логин, per-profile target)
 - Итерация 2а: экран публикации, поканальные итоги, ретрай одного канала, сохранение запланированных
 - Авторизация: login/logout (HMAC-кука), роли admin/client, изоляция по profile_id, user-add CLI
+- Милстоун «планировщик под ключ» (трек A): импорт контент-плана из таблицы
+  (scheduler/import_plan.py + web/routes/import_plan.py + UI-вкладка «Импорт плана»),
+  ИСПОЛНИТЕЛЬ (scheduler/executor.py в lifespan) — созревшие посты публикуются сами
+  (пейсинг, ретрай с потолком, идемпотентность по schedpost-<id>, чистка медиа),
+  диагностика (db/log_repo.py + скриншот браузерного сбоя в logs.screenshot_path).
 
 Рабочие каналы: Telegram (API), Яндекс (браузер), ВК-стена (браузер), ВК-канал (браузер).
 
+Флаги планировщика (env): SCHEDULER_ENABLED (default true), SCHEDULER_POLL_SECONDS (30),
+SCHEDULER_PACING_SECONDS (5), SCHEDULER_MAX_ATTEMPTS (3). Время постов — naive-local.
+
 Ближайшие треки (см. `AGENT_BRIEF.md` §7 для параллельной работы):
-- A. Scheduler executor — запланированные посты реально публикуются (scheduler/*, orchestrator/*, миграция)
 - B. Новый канал-адаптер — по рецепту в `AGENT_BRIEF.md` §5
-- C. Admin error console — UI диагностики ошибок (только C владеет index.html)
+- C. Admin error console — UI поверх db/log_repo.py (logs.list_for_profile уже есть)
 
 Порядок итераций: см. `ROADMAP.md`. Задачи/отложено: `PRD_BACKLOG.md`.
 
