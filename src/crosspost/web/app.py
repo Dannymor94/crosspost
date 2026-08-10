@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,10 +15,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from crosspost.config import load_config
+from crosspost.config import load_config, parse_bool
 from crosspost.db.engine import create_engine_and_tables, get_db_url
+from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
 from crosspost.web.routes import auth, channels, import_plan, profiles, publish, tg_login, users
+
+logger = logging.getLogger(__name__)
 
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -25,8 +32,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = await create_engine_and_tables(get_db_url())
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)
-    yield
-    await engine.dispose()
+
+    # Исполнитель расписания: фоновый демон публикует созревшие посты сам.
+    # Выключается флагом SCHEDULER_ENABLED=false (напр. в тестах/CLI).
+    scheduler_task: asyncio.Task | None = None
+    if parse_bool(os.environ.get("SCHEDULER_ENABLED", "true")):
+        scheduler_task = asyncio.create_task(ScheduledExecutor.from_env(factory).run_forever())
+
+    try:
+        yield
+    finally:
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await scheduler_task
+        await engine.dispose()
 
 
 def create_app() -> FastAPI:

@@ -89,6 +89,34 @@ class PublicationRepository:
         )
         return list(result.scalars().all())
 
+    async def bump_attempt(self, publication_id: str, channel: str) -> None:
+        """Инкремент счётчика попыток (профиль-scoped), помечая attempting.
+
+        Вызывается ДО попытки — счётчик переживает падение процесса посреди
+        отправки, поэтому потолок ретраев соблюдается и после перезапуска.
+        Первая попытка создаёт строку (attempt_count=1); последующие +1.
+        Статус/external_id из финального результата запишет set_status ниже.
+        """
+        stmt = (
+            sqlite_insert(Publication)
+            .values(
+                profile_id=self._pid,
+                publication_id=publication_id,
+                channel=channel,
+                status=PublicationStatus.ATTEMPTING,
+                attempt_count=1,
+            )
+            .on_conflict_do_update(
+                index_elements=["profile_id", "publication_id", "channel"],
+                set_={
+                    "attempt_count": Publication.attempt_count + 1,
+                    "status": PublicationStatus.ATTEMPTING,
+                },
+            )
+        )
+        await self._s.execute(stmt)
+        await self._s.commit()
+
     async def is_done(self, publication_id: str, channel: str) -> bool:
         row = await self._s.execute(
             select(Publication.id).where(
