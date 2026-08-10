@@ -257,6 +257,20 @@ async def test_browser_wizard_has_open_confirm_target(client: AsyncClient) -> No
     assert target["fields"][0]["name"] == "target"
 
 
+async def test_external_steps_have_specific_link_and_landmark(client: AsyncClient) -> None:
+    """Блок 2: шаг с внешним сайтом ведёт на КОНКРЕТНЫЙ раздел + даёт ориентир."""
+    tg = (await client.get("/api/channels/telegram/guide")).json()
+    app = next(s for s in tg["steps"] if s["key"] == "app")
+    assert app["link"].rstrip("/").endswith("/apps")  # не главная, а раздел приложений
+    assert app["landmark"]  # текстовый ориентир, что искать
+    assert app["link_label"]  # у кнопки есть подпись
+
+    ya = (await client.get("/api/channels/yandex/guide")).json()
+    tgt = next(s for s in ya["steps"] if s["kind"] == "target")
+    assert "sprav" in tgt["link"]
+    assert "/sprav/" in tgt["landmark"]  # ориентир указывает, где искать ID
+
+
 async def test_telegram_interactive_login_live(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "carol"})
     pid = resp.json()["id"]

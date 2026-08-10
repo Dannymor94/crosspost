@@ -737,6 +737,23 @@ body {
 }
 .wiz-success-title { font-size: 17px; font-weight: 600; color: var(--text-1); margin-bottom: 6px; }
 .wiz-success-body { font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.wiz-link {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 13px 16px; margin: 2px 0 12px; border-radius: var(--radius-lg);
+  background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
+  text-decoration: none; transition: filter .12s;
+}
+.wiz-link:hover { filter: brightness(1.08); }
+.wiz-link-ic { font-size: 16px; }
+.wiz-landmark {
+  display: flex; gap: 10px; padding: 11px 13px; margin-bottom: 14px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-left: 2px solid var(--amber); border-radius: var(--radius);
+}
+.wiz-landmark-ic { color: var(--amber); flex-shrink: 0; font-size: 14px; line-height: 1.4; }
+.wiz-landmark-body { font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
+.wiz-landmark-title { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--text-1); }
+.wiz-return { font-size: 12px; color: var(--text-3); margin: -4px 0 12px; font-style: italic; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -1139,6 +1156,18 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     ),
     h("h3", { className: "wiz-title" }, current.title),
     current.body && h("p", { className: "wiz-body" }, current.body),
+
+    // Блок 2 — «куда заходить»: крупная кнопка на нужный раздел + текстовый ориентир.
+    current.link && h("a", { className: "wiz-link", href: current.link, target: "_blank", rel: "noopener" },
+      h("span", { className: "wiz-link-ic" }, "↗"), current.link_label || "Открыть страницу"),
+    current.landmark && h("div", { className: "wiz-landmark" },
+      h("span", { className: "wiz-landmark-ic" }, "◎"),
+      h("div", { className: "wiz-landmark-body" },
+        h("span", { className: "wiz-landmark-title" }, "На той странице должно быть так:"),
+        current.landmark),
+    ),
+    current.link && (current.fields || []).length > 0 && h("p", { className: "wiz-return" },
+      "Нашли нужные значения? Вернитесь сюда и вставьте их ниже."),
 
     (current.fields || []).map((f) => h(WizardFieldInput, {
       key: f.name, f, value: values[f.name], onChange: setVal,
