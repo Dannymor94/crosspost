@@ -166,6 +166,24 @@ class PublicationRepository:
         )
         return list(result.scalars().all())
 
+    async def list_executed(self, *, limit: int = 100) -> list[ScheduledPost]:
+        """Исполненные планировщиком посты профиля (status=published), новые сверху.
+
+        Для «Журнала планировщика»: пост в published переходит, когда ВСЕ его
+        каналы финализировались (успех ИЛИ исчерпан ретрай). Поканальные итоги —
+        отдельно, в publications по ключу schedpost-<id> (см. роут отчёта).
+        """
+        result = await self._s.execute(
+            select(ScheduledPost)
+            .where(
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status == ScheduledPostStatus.PUBLISHED,
+            )
+            .order_by(ScheduledPost.scheduled_at.desc(), ScheduledPost.id.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def get_scheduled(self, scheduled_id: int) -> ScheduledPost | None:
         result = await self._s.execute(
             select(ScheduledPost).where(

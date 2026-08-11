@@ -610,6 +610,9 @@ body {
 .outcome-badge.info    { background: var(--accent-dim); color: var(--accent); }
 .outcome-id { font-size: 10.5px; color: var(--text-3); margin-top: 6px; }
 .outcome-err { font-size: 12px; color: var(--error); margin-top: 6px; line-height: 1.4; }
+/* Журнал планировщика: строки поканальных итогов внутри карточки */
+.report-channels { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.report-chan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* ── Target editor ───────────────────────────────────────────────────────── */
 .target-editor {
@@ -1712,6 +1715,7 @@ function PublishView({ profile }) {
   const [busy, setBusy] = useState(false);
   const [retryCh, setRetryCh] = useState(null);
   const [scheduled, setScheduled] = useState([]);
+  const [report, setReport] = useState([]);
   const [showSchedule, setShowSchedule] = useState(false);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
@@ -1728,7 +1732,19 @@ function PublishView({ profile }) {
     try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); loadScheduled(); }, [loadTargets, loadScheduled]);
+  // Журнал планировщика — итоги уже исполненных постов из БД (переживают перезагрузку).
+  const loadReport = useCallback(async () => {
+    try { setReport(await api.get(`${base}/scheduled/report`)); } catch (_) {}
+  }, [base]);
+
+  useEffect(() => { loadTargets(); loadScheduled(); loadReport(); }, [loadTargets, loadScheduled, loadReport]);
+
+  // Поллинг без перезагрузки: планировщик — фоновый процесс, отправляет посты сам.
+  // Раз в 10 сек подтягиваем очередь и журнал, чтобы статус менялся вживую.
+  useEffect(() => {
+    const id = setInterval(() => { loadScheduled(); loadReport(); }, 10000);
+    return () => clearInterval(id);
+  }, [loadScheduled, loadReport]);
 
   function toggle(ch) {
     setSelected((prev) => {
@@ -1837,7 +1853,56 @@ function PublishView({ profile }) {
     // Запланированные (общий список: отмена + правка времени)
     h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
 
+    // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
+    h(SchedulerReport, { items: report }),
+
     showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
+  );
+}
+
+// ── Журнал планировщика: исполненные посты с поканальными итогами ─────────────
+// Данные из БД (scheduled_posts + publications + logs) — переживают перезагрузку.
+// Обновляется поллингом из PublishView. Само хранение — на сервере, здесь только показ.
+
+const REPORT_META = {
+  done: { cls: "success", label: "Отправлено" },
+  partial: { cls: "info", label: "Частично" },
+  failed: { cls: "error", label: "Не отправлено" },
+  unknown: { cls: "info", label: "Без итогов" },
+};
+
+function SchedulerReport({ items }) {
+  if (!items || items.length === 0) return null;
+  return h("div", null,
+    h("p", { className: "section-title", style: { marginTop: "24px" } }, "Журнал планировщика"),
+    h("div", { className: "outcome-grid" },
+      items.map((r) => h(ReportCard, { key: r.id, r })),
+    ),
+  );
+}
+
+function ReportCard({ r }) {
+  const meta = REPORT_META[r.overall] || REPORT_META.unknown;
+  const when = new Date(r.scheduled_at).toLocaleString("ru-RU",
+    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const preview = (r.text || "").slice(0, 80) || "(без текста)";
+  return h("div", { className: `outcome ${meta.cls}` },
+    h("div", { className: "outcome-head" },
+      h("span", { className: "outcome-ch" }, `${when} · ${preview}`),
+      h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
+    ),
+    // поканальные итоги — тот же язык, что и «Результат по каналам»
+    h("div", { className: "report-channels" },
+      r.outcomes.map((o) => {
+        const cm = OUTCOME_META[o.status] || { cls: "info", label: o.status };
+        return h("div", { className: "report-chan-row", key: o.channel },
+          h("span", { className: `outcome-badge ${cm.cls}` }, cm.label),
+          h("span", { className: "outcome-ch mono" }, o.channel),
+          o.error && h("span", { className: "outcome-err" }, o.error),
+          o.screenshot_path && h("span", { className: "text-3 mono" }, "📷 скриншот сбоя"),
+        );
+      }),
+    ),
   );
 }
 

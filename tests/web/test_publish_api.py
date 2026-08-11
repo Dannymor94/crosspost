@@ -283,6 +283,70 @@ async def test_schedule_list_cancel(client, factory):
     assert (await client.get(f"/api/profiles/{pid}/scheduled")).json() == []
 
 
+async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
+    """Журнал планировщика: исполненный пост читается из БД с поканальными итогами
+    и скриншотом сбоя. Переживает перезагрузку (данные не эфемерны)."""
+    from datetime import datetime
+
+    from crosspost.db.log_repo import LogRepository
+    from crosspost.db.models import PublicationStatus
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        post = await repo.create_scheduled(
+            content_type="post",
+            text="утренний пост",
+            title=None,
+            media_paths=[],
+            channels=["telegram", "vk_wall"],
+            scheduled_at=datetime(2026, 8, 10, 9, 0),
+        )
+        pubid = scheduled_publication_id(post.id)
+        # телега — ок, стена — упала (частичный успех)
+        await repo.set_status(pubid, "telegram", PublicationStatus.DONE, external_id="tg-42")
+        await repo.set_status(pubid, "vk_wall", PublicationStatus.FAILED, error="сессия протухла")
+        await SchedulerRepository(s).mark_published(post.id)
+        # скриншот браузерного сбоя — в логах
+        await LogRepository(s).add(
+            pid,
+            channel="vk_wall",
+            publication_id=pubid,
+            level="ERROR",
+            message="scheduler: vk_wall → failed",
+            screenshot_path="/shots/x.png",
+        )
+
+    # запланированные (ещё не отправленные) — пусто, пост уже исполнен
+    assert (await client.get(f"/api/profiles/{pid}/scheduled")).json() == []
+
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    assert resp.status_code == 200, resp.text
+    report = resp.json()
+    assert len(report) == 1
+    row = report[0]
+    assert row["text"] == "утренний пост"
+    assert row["overall"] == "partial"  # один успех, один провал
+    by = {o["channel"]: o for o in row["outcomes"]}
+    assert by["telegram"]["status"] == "done"
+    assert by["telegram"]["external_id"] == "tg-42"
+    assert by["vk_wall"]["status"] == "failed"
+    assert by["vk_wall"]["error"] == "сессия протухла"
+    assert by["vk_wall"]["screenshot_path"] == "/shots/x.png"
+
+
+async def test_scheduled_report_empty_when_nothing_executed(client, factory):
+    """Нет исполненных постов → отчёт пуст (не 500)."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 async def test_reschedule_updates_time(client, factory):
     pid = await _make_profile_with_live(factory, ["telegram"])
     resp = await client.post(

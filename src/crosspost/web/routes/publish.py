@@ -30,6 +30,7 @@ from crosspost.channels.validators import VALIDATORS
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import ContentValidationError, validate
+from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, CredentialKind, PublicationStatus
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
@@ -96,6 +97,22 @@ class ScheduledOut(BaseModel):
     channels: list[str]
     scheduled_at: str
     status: str
+
+
+class ScheduledReportOut(BaseModel):
+    """Итог поста, исполненного планировщиком (для «Журнала планировщика»).
+
+    Читается из УЖЕ сохранённого состояния (scheduled_posts + publications + logs),
+    поэтому переживает перезагрузку страницы. overall — свёртка поканальных
+    статусов: done (все успешны) / partial (часть упала) / failed (все упали).
+    """
+
+    id: int
+    content_type: str
+    text: str
+    scheduled_at: str
+    overall: str
+    outcomes: list[OutcomeOut]
 
 
 # ── Хелперы ───────────────────────────────────────────────────────────────────
@@ -317,6 +334,56 @@ async def list_scheduled(profile_id: int, session: SessionDep) -> list[Scheduled
     return [_scheduled_out(p) for p in await pub_repo.list_scheduled()]
 
 
+@router.get(
+    "/api/profiles/{profile_id}/scheduled/report",
+    response_model=list[ScheduledReportOut],
+)
+async def scheduled_report(profile_id: int, session: SessionDep) -> list[ScheduledReportOut]:
+    """Журнал планировщика: посты, которые он уже исполнил, с поканальными итогами.
+
+    Читаем ТОЛЬКО существующее состояние — новых записей в БД не создаём:
+      scheduled_posts (status=published) → publications (schedpost-<id>) → logs.
+    Поэтому отчёт переживает перезагрузку страницы; фронт поллит его без refresh.
+    """
+    # Локальный импорт: executor тянет crosspost.web.media — избегаем цикла загрузки.
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+
+    # Скриншоты сбоев — из логов профиля, один запрос. Индексируем по (pubid, channel);
+    # логи идут новыми сверху, поэтому первый увиденный скриншот — самый свежий.
+    shots: dict[tuple[str, str], str] = {}
+    for lg in await LogRepository(session).list_for_profile(profile_id):
+        if lg.screenshot_path and lg.publication_id and lg.channel:
+            shots.setdefault((lg.publication_id, lg.channel), lg.screenshot_path)
+
+    reports: list[ScheduledReportOut] = []
+    for post in await pub_repo.list_executed():
+        pubid = scheduled_publication_id(post.id)
+        outcomes = [
+            OutcomeOut(
+                channel=r.channel,
+                status=str(r.status),
+                external_id=r.external_id,
+                error=r.error,
+                screenshot_path=shots.get((pubid, r.channel)),
+            )
+            for r in await pub_repo.list_statuses(pubid)
+        ]
+        reports.append(
+            ScheduledReportOut(
+                id=post.id,
+                content_type=post.content_type,
+                text=post.text,
+                scheduled_at=post.scheduled_at.isoformat(),
+                overall=_overall_status(outcomes),
+                outcomes=outcomes,
+            )
+        )
+    return reports
+
+
 class RescheduleBody(BaseModel):
     scheduled_at: str  # ISO-8601
 
@@ -441,6 +508,22 @@ def _cleanup_if_final(profile_id: int, publication_id: str, outcomes) -> None:
     if all(o.status in _SUCCESS for o in outcomes):
         media_store.cleanup_media(publication_id)
         _RUNS.pop((profile_id, publication_id), None)
+
+
+def _overall_status(outcomes: list[OutcomeOut]) -> str:
+    """Свёртка поканальных статусов в общий вердикт для карточки журнала.
+
+    done — все каналы успешны (done/submitted); failed — все упали; partial —
+    часть упала. Пусто (нет строк) — unknown (пост помечен published без итогов).
+    """
+    if not outcomes:
+        return "unknown"
+    ok = sum(1 for o in outcomes if o.status in _SUCCESS)
+    if ok == len(outcomes):
+        return "done"
+    if ok == 0:
+        return "failed"
+    return "partial"
 
 
 def _scheduled_out(post) -> ScheduledOut:
