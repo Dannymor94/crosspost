@@ -19,7 +19,16 @@ from crosspost.config import load_config, parse_bool
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
-from crosspost.web.routes import auth, channels, import_plan, profiles, publish, tg_login, users
+from crosspost.web.routes import (
+    auth,
+    channels,
+    import_plan,
+    profiles,
+    publish,
+    settings,
+    tg_login,
+    users,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(tg_login.router)
     app.include_router(publish.router)
     app.include_router(import_plan.router)
+    app.include_router(settings.router)
 
     # Serve frontend SPA — must be after API routes
     if _FRONTEND_DIR.exists():

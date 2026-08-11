@@ -38,6 +38,34 @@ def parse_bool(value: str, default: bool = True) -> bool:
     return value.strip().lower() not in _FALSY
 
 
+def browser_headless() -> bool:
+    """Режим браузера для ПУБЛИКАЦИИ (open_page). Единственный источник истины.
+
+    Флаг BROWSER_HEADLESS, по умолчанию False — локальная отладка: окно видно,
+    удобно ловить смену DOM/капчу глазами. На сервере ставится BROWSER_HEADLESS=true.
+
+    ⚠ Применяется ТОЛЬКО к публикации. ЛОГИН (login_context / browser_login)
+    ВСЕГДА headful независимо от флага: пользователь обязан видеть окно, чтобы
+    войти руками (QR/код) — авто-логин паролем запрещён (CLAUDE.md).
+
+    Xvfb-задел (сервер, пока НЕ реализуем): если площадка палит headless-Chromium
+    антиботом, на headless-сервере гоняем headful-Chromium под виртуальным
+    дисплеем — `xvfb-run -a uvicorn ...` при BROWSER_HEADLESS=false. Тогда окно
+    «есть» для Chromium, но невидимо на безголовой машине. Логину это тоже даёт
+    среду для headful-входа по VNC/удалёнке.
+
+    Приоритет: UI-override (runtime_settings, тумблер в админке) → .env → дефолт.
+    Читается ПРИ КАЖДОЙ сборке адаптера, поэтому тумблер действует со следующей
+    публикации без рестарта процесса.
+    """
+    from crosspost import runtime_settings  # ленивый импорт: config — низкоуровневый
+
+    override = runtime_settings.get_browser_headless()
+    if override is not None:
+        return override
+    return parse_bool(load_config().get("BROWSER_HEADLESS", "false"), default=False)
+
+
 def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
     """Прочитать .env (+ окружение) в dict и вставить в os.environ.
 

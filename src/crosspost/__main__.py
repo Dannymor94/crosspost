@@ -19,7 +19,7 @@ from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.adapters.browser.yandex import YandexBrowserAdapter
-from crosspost.config import load_config, parse_bool
+from crosspost.config import browser_headless, load_config, parse_bool
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import validate
@@ -74,7 +74,7 @@ async def build_adapter(channel: str, store):
 
     if channel == "vk":
         # Браузерный тир: API заблокирован (err 27/214), работаем через Playwright.
-        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        headless = browser_headless()
         group_id = abs(int(cfg["VK_GROUP_ID"]))
         return VKBrowserAdapter(group_id, store, headless=headless)
 
@@ -87,18 +87,18 @@ async def build_adapter(channel: str, store):
         return VKAdapter(api, target=cfg["VK_GROUP_ID"], store=store, photo_upload=photo_upload)
 
     if channel == "yandex":
-        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        headless = browser_headless()
         org_id = cfg["YANDEX_ORG_ID"]
         return YandexBrowserAdapter(org_id, store, headless=headless)
 
     if channel == "vk_wall":
-        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        headless = browser_headless()
         screen_name = cfg.get("VK_GROUP_SCREEN_NAME", cfg.get("VK_GROUP_URL", "medithou"))
         return VKWallBrowserAdapter(screen_name, store, headless=headless)
 
     if channel == "vk_channel":
         # «Пост в канал» — мессенджер-composer. Сессия переиспользуется из vk_wall.
-        headless = parse_bool(cfg.get("BROWSER_HEADLESS", "false"))
+        headless = browser_headless()
         channel_id = cfg["VK_CHANNEL_ID"]
         return VKChannelBrowserAdapter(channel_id, store, headless=headless)
 
@@ -137,6 +137,8 @@ async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
         await asyncio.get_event_loop().run_in_executor(None, wait)
 
     print(f"Открываю браузер для {channel} ({url}) ...")
+    # ЛОГИН всегда headful: пользователь входит руками. BROWSER_HEADLESS сюда
+    # НЕ применяется (флаг — только для публикации, см. config.browser_headless).
     async with login_context(channel, headless=False) as (page, save_state):
         await page.goto(url, wait_until="domcontentloaded")
         print("\nВойдите в аккаунт в открывшемся браузере.")

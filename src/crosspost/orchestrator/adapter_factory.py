@@ -17,7 +17,7 @@ import logging
 from crosspost.adapters.base import ChannelAdapter
 from crosspost.channels.telegram_login import parse_credential_blob
 from crosspost.channels.validators import VALIDATORS, normalize_target
-from crosspost.config import load_config, parse_bool
+from crosspost.config import browser_headless
 from crosspost.db.models import CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.orchestrator.task import InMemoryIdempotencyStore
@@ -82,7 +82,7 @@ async def _build_telegram(cred: str, store) -> ChannelAdapter | None:
 
 def _build_browser(channel: str, storage_state: str, store, target: str) -> ChannelAdapter | None:
     """target — per-profile цель (screen_name / org_id / channel_id). НЕ из env."""
-    headless = parse_bool(load_config().get("BROWSER_HEADLESS", "true"))
+    headless = browser_headless()  # публикация уважает флаг; логин — всегда headful
 
     if channel == "yandex":
         from crosspost.adapters.browser.yandex import YandexBrowserAdapter  # noqa: PLC0415

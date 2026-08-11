@@ -86,7 +86,13 @@ def _validator(channel: str):
 
 
 async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str:
-    """Открыть окно входа (свежий пустой контекст) на странице логина канала."""
+    """Открыть окно входа (свежий пустой контекст) на странице логина канала.
+
+    ⚠ ЛОГИН всегда headful: пользователь обязан видеть окно, чтобы войти руками.
+    Дефолт headless=False неспроста и BROWSER_HEADLESS сюда НЕ прокидывается —
+    флаг управляет только ПУБЛИКАЦИЕЙ (config.browser_headless). Параметр headless
+    оставлен headless=True лишь для тестов (fake _launch без реального окна).
+    """
     v = _validator(channel)
     await cancel(profile_id, channel)  # закрыть возможное недоделанное окно
 
