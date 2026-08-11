@@ -170,10 +170,10 @@ TELEGRAM_GUIDE = ChannelGuide(
             field="api_id",
             label="Как получить api_id и api_hash?",
             steps=(
-                "Откройте my.telegram.org и войдите по своему номеру — код придёт в Telegram.",
-                "Зайдите в раздел «API development tools».",
-                "Создайте приложение: название любое (например «posting»), платформа — Desktop.",
-                "Скопируйте два значения: App api_id (число) и App api_hash (длинная строка).",
+                "Откройте my.telegram.org/apps и войдите по своему номеру — код придёт в Telegram.",
+                "Откроется «App configuration». Если приложения ещё нет — создайте: «App title» "
+                "любое (например crosspost), «Platform» — Desktop, «Create application».",
+                "На этой же странице скопируйте «App api_id» (число) и «App api_hash» (длинная строка).",
             ),
             link="https://my.telegram.org/apps",
             link_label="открыть my.telegram.org →",
@@ -218,14 +218,16 @@ TELEGRAM_GUIDE = ChannelGuide(
             title="Создайте приложение Telegram",
             body=(
                 "Нужны два кода из вашего аккаунта Telegram — они выдаются один раз на сайте "
-                "Telegram. Откройте сайт по кнопке ниже, при входе подтвердите вход кодом из "
-                "приложения, затем вернитесь сюда и вставьте оба значения."
+                "Telegram. Откройте сайт по кнопке ниже (при входе подтвердите вход кодом из "
+                "приложения). Откроется страница «App configuration» с этими двумя кодами — "
+                "вернитесь сюда и вставьте оба значения."
             ),
             landmark=(
-                "На странице найдите раздел «API development tools». Если приложения ещё нет — "
-                "создайте: «App title» — любое название (например posting), «Platform» — Desktop. "
-                "После создания на странице будут «App api_id» (число) и «App api_hash» "
-                "(длинная строка из букв и цифр)."
+                "Откроется страница «App configuration». Если приложение уже создано — прямо на "
+                "ней видны «App api_id» (число) и «App api_hash» (длинная строка из букв и цифр): "
+                "просто скопируйте их. Если приложения ещё нет — страница предложит его создать: "
+                "«App title» — любое название (например crosspost), «Platform» — Desktop, затем "
+                "нажмите «Create application», и значения появятся."
             ),
             link="https://my.telegram.org/apps",
             link_label="Открыть my.telegram.org",

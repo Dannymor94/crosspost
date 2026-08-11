@@ -263,6 +263,9 @@ async def test_external_steps_have_specific_link_and_landmark(client: AsyncClien
     app = next(s for s in tg["steps"] if s["key"] == "app")
     assert app["link"].rstrip("/").endswith("/apps")  # не главная, а раздел приложений
     assert app["landmark"]  # текстовый ориентир, что искать
+    # Ориентир называет то, что реально на странице /apps (App configuration с кодами),
+    # а не «API development tools» (это ссылка на главной, до создания приложения).
+    assert "api_id" in app["landmark"]
     assert app["link_label"]  # у кнопки есть подпись
 
     ya = (await client.get("/api/channels/yandex/guide")).json()
