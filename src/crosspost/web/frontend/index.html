@@ -1385,6 +1385,21 @@ function TargetEditor({ channel, profileId, label, hint, current, guide, onSaved
 
 // ── Channel card ───────────────────────────────────────────────────────────
 
+// Строим URL канала по target-значению (адрес/id) — для кнопки «Открыть канал».
+function channelUrl(channel, target) {
+  if (!target) return null;
+  const t = String(target).trim();
+  if (!t) return null;
+  switch (channel) {
+    case "telegram":   return `https://t.me/${t.replace(/^@/, "")}`;
+    case "vk_wall":    return `https://vk.com/${t.replace(/^@/, "")}`;
+    case "vk_channel": return `https://vk.com/channel${t.startsWith("-") ? t : "-" + t}`;
+    case "yandex":     return `https://yandex.ru/maps/org/${t}`;
+    case "telegraph":  return `https://telegra.ph`;
+    default:           return null;
+  }
+}
+
 function ChannelCard({ ch, profileId, onRefresh }) {
   const [validating, setValidating] = useState(false);
   const [wizard, setWizard] = useState(false);   // открыт мастер подключения
@@ -1450,6 +1465,10 @@ function ChannelCard({ ch, profileId, onRefresh }) {
         ? h("button", { className: "btn btn-primary btn-sm", onClick: () => { setMsg(null); setWizard(true); } },
             connectLabel)
         : null,
+      // Ссылка «Открыть канал» — только когда target задан и URL понятен.
+      (() => { const url = channelUrl(ch.channel, ch.target); return url
+        ? h("a", { href: url, target: "_blank", rel: "noopener", className: "btn btn-ghost btn-sm" }, "↗ Открыть канал")
+        : null; })(),
       hasSession && !resetConfirm
         ? h("button", { className: "btn btn-ghost btn-sm", onClick: handleValidate, disabled: validating },
             validating && h(Spinner), validating ? "Проверяю…" : "Проверить")
@@ -2011,13 +2030,17 @@ function ImportView({ profile }) {
     h("p", { className: "section-title", style: { marginTop: "20px" } }, "Куда публикуем"),
     targets === null
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
-      : eligibleCount === 0
+      : targets.length === 0
         ? h("div", { className: "empty-inline" },
             "Нет доступных каналов. Подключите канал во вкладке «Каналы».")
-        : h("div", { className: "target-grid" },
-            targets.map((t) => h(TargetToggle, {
-              key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
-            }))),
+        : h("div", null,
+            eligibleCount === 0 && h("div", { className: "empty-inline", style: { marginBottom: "10px" } },
+              "Каналы подключены, но у каждого не задана цель публикации. ",
+              "Откройте вкладку «Каналы» и заполните адрес группы / ID канала."),
+            h("div", { className: "target-grid" },
+              targets.map((t) => h(TargetToggle, {
+                key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
+              })))),
 
     h("div", { className: "publish-actions" },
       h("button", { className: "btn btn-ghost", onClick: preview, disabled: !canPreview },

@@ -422,7 +422,7 @@ async def validate_channel(
         raise HTTPException(status_code=404, detail=f"Channel '{channel}' not in registry")
 
     state = await validate_connection(repo, profile_id, channel)
-    msg = "Connection is live" if state == ConnectionState.LIVE else "Connection needs relogin"
+    msg = "Соединение активно" if state == ConnectionState.LIVE else "Требуется повторный вход"
     return ValidationResult(state=str(state), message=msg)
 
 
