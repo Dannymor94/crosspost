@@ -28,6 +28,8 @@
 
 from __future__ import annotations
 
+import re
+
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
 from crosspost.content.canonical import CanonicalContent
 from crosspost.content.telegram_text import (
@@ -40,12 +42,27 @@ from crosspost.orchestrator.task import IdempotencyStore
 
 _PHOTO_STEP = "#photo"  # суффикс publication_id для чекпоинта «фото ушло»
 
+# Публичный username канала: буквы/цифры/подчёркивания, начинается с буквы.
+_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
+
 
 def _first_id(sent) -> str:
     """id первого сообщения. send_file для альбома возвращает список; caption и
     шаринг-id несёт первое сообщение."""
     msg = sent[0] if isinstance(sent, list) else sent
     return str(msg.id)
+
+
+def _post_url(target: str, msg_id: str | None) -> str | None:
+    """Пермалинк поста t.me/<name>/<id> — только для ПУБЛИЧНОГО канала (@username).
+
+    Для числового chat_id / приватного инвайта публичной ссылки нет → None
+    (ссылку не выдумываем — §«не угадывать»). Нет msg_id → None.
+    """
+    if not msg_id:
+        return None
+    name = target.lstrip("@").removeprefix("https://t.me/").removeprefix("t.me/").strip("/")
+    return f"https://t.me/{name}/{msg_id}" if _USERNAME_RE.match(name) else None
 
 
 class TelegramAdapter:
@@ -74,6 +91,27 @@ class TelegramAdapter:
         media = content.media_paths
 
         try:
+            if not media:
+                # ── текст без медиа: одно текстовое сообщение (send_message) ────
+                # send_file без файла в Telethon невалиден — для text-only шлём
+                # обычное сообщение. Лимит — MESSAGE_LIMIT (чанкинг не поддержан).
+                if exceeds_message_limit(text):
+                    return ChannelResult(
+                        self.channel,
+                        ResultStatus.FAILED,
+                        error=f"текст длиннее {MESSAGE_LIMIT} симв.: одного сообщения мало, "
+                        "чанкинг не поддержан — сократите текст",
+                    )
+                sent = await self._client.send_message(self._target, text, parse_mode="html")
+                ext = _first_id(sent)
+                self._store.mark_done(publication_id, self.channel, external_id=ext)
+                return ChannelResult(
+                    self.channel,
+                    ResultStatus.DONE,
+                    external_id=ext,
+                    url=_post_url(self._target, ext),
+                )
+
             if caption_fits(text):
                 # ── режим «фото + подпись»: один вызов ─────────────────────────
                 sent = await self._client.send_file(
@@ -81,7 +119,12 @@ class TelegramAdapter:
                 )
                 ext = _first_id(sent)
                 self._store.mark_done(publication_id, self.channel, external_id=ext)
-                return ChannelResult(self.channel, ResultStatus.DONE, external_id=ext)
+                return ChannelResult(
+                    self.channel,
+                    ResultStatus.DONE,
+                    external_id=ext,
+                    url=_post_url(self._target, ext),
+                )
 
             # ── режим «фото, затем текст следом»: два вызова ───────────────────
             # Первая строка → подпись под фото (чтобы не висело немым), остальное —
@@ -113,7 +156,12 @@ class TelegramAdapter:
 
             # Оба сообщения прошли → канал done. Квитанция — id фото (визуальный якорь).
             self._store.mark_done(publication_id, self.channel, external_id=photo_id)
-            return ChannelResult(self.channel, ResultStatus.DONE, external_id=photo_id)
+            return ChannelResult(
+                self.channel,
+                ResultStatus.DONE,
+                external_id=photo_id,
+                url=_post_url(self._target, photo_id),
+            )
 
         except FloodWaitError as e:
             # Время ожидания — в error, чтобы ретрай не пришёл раньше срока (§6.3).

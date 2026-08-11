@@ -598,6 +598,8 @@ body {
 .outcome.warning { border-color: rgba(245,158,11,.3); }
 .outcome-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .outcome-ch { font-size: 13px; color: var(--text-1); font-weight: 600; }
+.outcome-link { text-decoration: none; cursor: pointer; }
+.outcome-link:hover { color: var(--accent); text-decoration: underline; }
 .outcome-badge {
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   padding: 3px 8px; border-radius: 20px;
@@ -1658,13 +1660,23 @@ function TargetToggle({ t, checked, onToggle }) {
 function OutcomeCard({ o, onRetry, retrying }) {
   const meta = OUTCOME_META[o.status] || { cls: "info", label: o.status };
   const canRetry = o.status === "failed" || o.status === "needs_relogin";
+  // Временная ссылка на канал приходит только в ответе публикации (в БД её нет),
+  // поэтому доступна сразу после отправки, но не после перезагрузки страницы.
   return h("div", { className: `outcome ${meta.cls}` },
     h("div", { className: "outcome-head" },
-      h("span", { className: "outcome-ch mono" }, o.channel),
+      o.url
+        ? h("a", { className: "outcome-ch mono outcome-link", href: o.url,
+            target: "_blank", rel: "noopener noreferrer",
+            title: "Открыть канал в новой вкладке" }, o.channel, " ↗")
+        : h("span", { className: "outcome-ch mono" }, o.channel),
       h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
     ),
     o.external_id && h("div", { className: "outcome-id mono" }, `id: ${o.external_id}`),
     o.error && h("div", { className: "outcome-err" }, o.error),
+    o.url && h("a", {
+      className: "btn btn-ghost btn-sm mt-2", href: o.url,
+      target: "_blank", rel: "noopener noreferrer",
+    }, "↗ Открыть канал"),
     canRetry && h("button", {
       className: "btn btn-ghost btn-sm mt-2", onClick: () => onRetry(o.channel), disabled: retrying,
     }, retrying ? h(Spinner) : null, retrying ? " Повторяю…" : "Повторить только его"),
@@ -1736,7 +1748,9 @@ function PublishView({ profile }) {
     return fd;
   }
 
-  const canSend = selected.size > 0 && files.length > 0 && !busy;
+  // Пост валиден, если есть текст ИЛИ фото (текстовый пост — норма).
+  const hasContent = text.trim().length > 0 || files.length > 0;
+  const canSend = selected.size > 0 && hasContent && !busy;
 
   async function publishNow() {
     setBusy(true); setAlert(null); setOutcomes(null);
@@ -1807,8 +1821,8 @@ function PublishView({ profile }) {
         "Запланировать"),
       selected.size === 0 && targets && eligibleCount > 0
         ? h("span", { className: "hint-inline" }, "выберите канал")
-        : files.length === 0
-          ? h("span", { className: "hint-inline" }, "добавьте фото")
+        : !hasContent
+          ? h("span", { className: "hint-inline" }, "добавьте текст или фото")
           : null,
     ),
     alert && h(Alert, { type: alert.type }, alert.text),
@@ -2154,9 +2168,44 @@ function LoginView({ onSuccess }) {
   );
 }
 
+// Тумблер видимости окна браузера при публикации (только админ).
+// Логин всегда виден — тумблер на него не влияет (бэкенд: config.browser_headless).
+function BrowserVisibilityToggle() {
+  const [headless, setHeadless] = useState(null); // null=грузим/недоступно
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get("/api/settings/browser")
+      .then(s => setHeadless(s.headless))
+      .catch(() => setHeadless(null));
+  }, []);
+
+  async function toggle() {
+    if (headless === null || busy) return;
+    setBusy(true);
+    try {
+      const s = await api.put("/api/settings/browser", { headless: !headless });
+      setHeadless(s.headless);
+    } catch (_) {} finally { setBusy(false); }
+  }
+
+  if (headless === null) return null;
+  const visible = !headless;
+  return h("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: toggle,
+    disabled: busy,
+    title: "Видимость окна браузера при публикации. Вход в аккаунт всегда виден.",
+  },
+    h("span", { className: `lamp ${visible ? "live" : "grey"}` }),
+    visible ? " Браузер виден" : " Браузер скрыт",
+  );
+}
+
 function TopBar({ me, onLogout }) {
   return h("div", { className: "topbar" },
     me.role === "client" && h("div", { className: "client-brand" }, "⊹ CROSSPOST"),
+    me.role === "admin" && h(BrowserVisibilityToggle),
     h("div", { className: "user-chip" },
       h("span", { className: `role-badge ${me.role}` }, me.role === "admin" ? "Админ" : "Клиент"),
       h("span", { className: "user-name" }, me.login),

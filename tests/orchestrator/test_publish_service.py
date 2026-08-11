@@ -80,6 +80,29 @@ async def test_publish_multichannel_all_done(session):
     assert {o.external_id for o in outcomes} == {"tg1", "vk1"}
 
 
+async def test_channel_url_forwarded_but_not_persisted(session):
+    """result.url прокидывается в ChannelOutcome, но в БД НЕ пишется (временная ссылка)."""
+    adapters = {
+        "vk_channel": _MockAdapter(
+            "vk_channel",
+            result=ChannelResult(
+                "vk_channel",
+                ResultStatus.DONE,
+                external_id="channel-item11",
+                url="https://vk.ru/im/channels/-240033402?entrypoint=channel",
+            ),
+        ),
+    }
+    svc = PublishService(_repo(session), _factory(adapters))
+
+    outcomes = await svc.publish(_post(), ["vk_channel"], publication_id="p1")
+
+    assert outcomes[0].url == "https://vk.ru/im/channels/-240033402?entrypoint=channel"
+    # В БД сохраняются только status/external_id/error — url там нет.
+    row = (await _repo(session).list_statuses("p1"))[0]
+    assert not hasattr(row, "url") or getattr(row, "url", None) is None
+
+
 async def test_partial_success_one_fails(session):
     adapters = {
         "telegram": _MockAdapter(

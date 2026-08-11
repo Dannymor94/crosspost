@@ -28,12 +28,18 @@ class ChannelResult:
 
     external_id — КВИТАНЦИЯ об успехе (для верификации/правки/удаления),
     НЕ ключ дедупа. Дедуп — по внутреннему publication_id (см. orchestrator.task).
+
+    url — ВРЕМЕННАЯ ссылка на канал/пост для перехода из UI («открыть канал»).
+    Живёт только в ответе публикации, в БД НЕ пишется (не квитанция, не ключ
+    дедупа — просто удобный переход сразу после отправки). Строится адаптером
+    из известного адреса назначения; None, если построить нельзя.
     """
 
     channel: str
     status: ResultStatus
     external_id: str | None = None
     error: str | None = None
+    url: str | None = None
 
 
 @runtime_checkable

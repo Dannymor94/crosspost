@@ -234,13 +234,25 @@ async def test_publish_rejects_non_live_channel(client, factory):
     assert "подключ" in resp.json()["detail"].lower()
 
 
-async def test_publish_requires_media_for_post(client, factory):
+async def test_publish_text_only_post_is_allowed(client, factory):
+    """Текстовый пост без медиа — норма (система доставляет готовый контент)."""
     pid = await _make_profile_with_live(factory, ["telegram"])
     with _patch_adapters({"telegram": _MockAdapter("telegram")}):
         resp = await client.post(
             f"/api/profiles/{pid}/publish",
             data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram"])},
-        )  # без media
+        )  # без media — допустимо
+    assert resp.status_code == 200
+
+
+async def test_publish_empty_post_rejected(client, factory):
+    """Пост без текста И без медиа — нечего публиковать → 422."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    with _patch_adapters({"telegram": _MockAdapter("telegram")}):
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "  ", "channels": json.dumps(["telegram"])},
+        )  # ни текста, ни медиа
     assert resp.status_code == 422
 
 

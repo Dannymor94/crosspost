@@ -144,6 +144,9 @@ async def test_publishes_text_only(store, publication_id):
     assert result.status is ResultStatus.DONE
     assert store.is_done(publication_id, "vk_channel")
 
+    # временная ссылка «открыть канал» — на сам канал мессенджера (id нормализован)
+    assert result.url == "https://vk.ru/im/channels/-240033402?entrypoint=channel"
+
     # навигация по URL канала мессенджера
     goto_calls = [c for c in page.goto.call_args_list if "im/channels" in str(c)]
     assert goto_calls, "ожидали goto на vk.com/im/channels/{id}"

@@ -50,6 +50,9 @@ class ChannelOutcome:
     external_id: str | None = None
     error: str | None = None
     screenshot_path: str | None = None  # диагностика браузерного сбоя (Блок 4)
+    # Временная ссылка «открыть канал» из ChannelResult. НЕ пишется в БД —
+    # живёт только в этом ответе (сразу после отправки), поллинг из БД её не вернёт.
+    url: str | None = None
 
 
 class PublishService:
@@ -144,7 +147,11 @@ class PublishService:
             error=result.error,
         )
         return ChannelOutcome(
-            channel, status.value, external_id=result.external_id, error=result.error
+            channel,
+            status.value,
+            external_id=result.external_id,
+            error=result.error,
+            url=result.url,
         )
 
     async def _existing_outcome(self, publication_id: str, channel: str) -> ChannelOutcome:

@@ -57,6 +57,70 @@ async def test_publishes_and_returns_receipt(
 
 
 @pytest.mark.asyncio
+async def test_public_username_yields_post_url(
+    store, publication_id, sample_post, fake_telethon_client
+):
+    """Публичный @username → временный пермалинк t.me/<name>/<msg_id> в result.url."""
+    adapter = TelegramAdapter(fake_telethon_client, target="@medithou", store=store)
+
+    result = await adapter.publish(sample_post, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert result.url == "https://t.me/medithou/12345"
+
+
+@pytest.mark.asyncio
+async def test_numeric_target_has_no_url(store, publication_id, sample_post, fake_telethon_client):
+    """Числовой chat_id — публичной ссылки нет (не выдумываем) → url=None."""
+    adapter = TelegramAdapter(fake_telethon_client, target="-1001234567890", store=store)
+
+    result = await adapter.publish(sample_post, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert result.url is None
+
+
+@pytest.mark.asyncio
+async def test_text_only_uses_send_message_not_send_file(
+    tmp_path, store, publication_id, fake_telethon_client
+):
+    """Пост без медиа → одно текстовое сообщение через send_message, не send_file."""
+    sent = _Req()  # объект с .id — send_message возвращает сообщение
+    sent.id = 777
+    fake_telethon_client.send_message.return_value = sent
+
+    content = CanonicalContent(type=ContentType.POST, text="просто текст", media_paths=[])
+    adapter = TelegramAdapter(fake_telethon_client, target="@medithou", store=store)
+
+    result = await adapter.publish(content, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert result.external_id == "777"
+    assert result.url == "https://t.me/medithou/777"
+    fake_telethon_client.send_file.assert_not_called()
+    _, kwargs = fake_telethon_client.send_message.call_args
+    assert kwargs["parse_mode"] == "html"
+    assert store.is_done(publication_id, "telegram")
+
+
+@pytest.mark.asyncio
+async def test_text_only_over_limit_fails(tmp_path, store, publication_id, fake_telethon_client):
+    """Текст без медиа длиннее MESSAGE_LIMIT → FAILED, ничего не отправляется."""
+    content = CanonicalContent(
+        type=ContentType.POST, text="я" * (MESSAGE_LIMIT + 1), media_paths=[]
+    )
+    adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store)
+
+    result = await adapter.publish(content, publication_id=publication_id)
+
+    assert result.status is ResultStatus.FAILED
+    assert str(MESSAGE_LIMIT) in result.error
+    fake_telethon_client.send_message.assert_not_called()
+    fake_telethon_client.send_file.assert_not_called()
+    assert not store.is_done(publication_id, "telegram")
+
+
+@pytest.mark.asyncio
 async def test_publishes_album_and_returns_first_message_id(
     store, publication_id, sample_album, fake_telethon_client_album
 ):

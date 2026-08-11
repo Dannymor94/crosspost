@@ -183,7 +183,9 @@ class VKChannelBrowserAdapter:
             external_id = await self._send(page, has_media=has_media)
 
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
+        # url — на сам канал (стабильного пост-URL мессенджер ВК не отдаёт):
+        # переход из UI открывает канал, свежий пост виден в ленте.
+        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
 
     # ── внутренние методы ────────────────────────────────────────────────────
 

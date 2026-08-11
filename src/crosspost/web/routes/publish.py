@@ -78,6 +78,9 @@ class OutcomeOut(BaseModel):
     external_id: str | None = None
     error: str | None = None
     screenshot_path: str | None = None
+    # Временная ссылка «открыть канал» — приходит из ChannelResult, в БД НЕ пишется.
+    # Поэтому есть в ответе publish/retry (из адаптера), но не в поллинге из БД.
+    url: str | None = None
 
 
 class PublishResult(BaseModel):

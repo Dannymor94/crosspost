@@ -131,7 +131,7 @@ class VKWallBrowserAdapter:
             if await self._find_post(page, content.text):
                 self._store.mark_done(publication_id, self.channel, external_id="posted:recovered")
                 return ChannelResult(
-                    self.channel, ResultStatus.DONE, external_id="posted:recovered"
+                    self.channel, ResultStatus.DONE, external_id="posted:recovered", url=url
                 )
 
             # 5) шаг 1: открыть форму → модалка
@@ -153,7 +153,8 @@ class VKWallBrowserAdapter:
             external_id = await self._publish_step2(page, content.text)
 
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
+        # url — на стену сообщества (свежий пост сверху): переход из UI после отправки.
+        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
 
     # ── внутренние методы ────────────────────────────────────────────────────
 

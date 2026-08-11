@@ -119,7 +119,10 @@ class YandexBrowserAdapter:
                     publication_id, self.channel, external_id="submitted:recovered"
                 )
                 return ChannelResult(
-                    self.channel, ResultStatus.SUBMITTED, external_id="submitted:recovered"
+                    self.channel,
+                    ResultStatus.SUBMITTED,
+                    external_id="submitted:recovered",
+                    url=url,
                 )
 
             # 5) вставить текст в поле публикации
@@ -139,7 +142,8 @@ class YandexBrowserAdapter:
 
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # SUBMITTED: пост ушёл на модерацию. Медиа можно чистить сразу.
-        return ChannelResult(self.channel, ResultStatus.SUBMITTED, external_id=external_id)
+        # url — кабинет «Публикации» Яндекс Бизнеса: там пост виден после модерации.
+        return ChannelResult(self.channel, ResultStatus.SUBMITTED, external_id=external_id, url=url)
 
     # ── внутренние методы ────────────────────────────────────────────────────
 
