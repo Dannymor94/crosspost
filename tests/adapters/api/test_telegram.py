@@ -339,3 +339,48 @@ def test_escaping_prevents_tag_injection():
     # с экранированием тег остался видимым текстом, только Bold
     assert esc_visible == injected
     assert [type(e).__name__ for e in esc_ents] == ["MessageEntityBold"]
+
+
+# ── 7) --schedule: проброс schedule= в send_file/send_message ─────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+_WHEN = datetime(2026, 8, 16, 7, 0, tzinfo=timezone(timedelta(hours=3)))
+
+
+@pytest.mark.asyncio
+async def test_schedule_passed_to_send_file(tmp_path, store, publication_id, fake_telethon_client):
+    content = _post(tmp_path, "Короткая афиша")
+    adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store, schedule=_WHEN)
+
+    await adapter.publish(content, publication_id=publication_id)
+
+    _, kwargs = fake_telethon_client.send_file.call_args
+    assert kwargs["schedule"] == _WHEN
+
+
+@pytest.mark.asyncio
+async def test_no_schedule_passes_none(tmp_path, store, publication_id, fake_telethon_client):
+    content = _post(tmp_path, "Короткая афиша")
+    adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store)  # без schedule
+
+    await adapter.publish(content, publication_id=publication_id)
+
+    _, kwargs = fake_telethon_client.send_file.call_args
+    assert kwargs["schedule"] is None       # обратная совместимость — немедленно
+
+
+@pytest.mark.asyncio
+async def test_schedule_on_both_messages_of_long_post(
+    tmp_path, store, publication_id, fake_telethon_client
+):
+    """Двухсообщённый пост: и фото, и текст-следом уходят на ОДНО запланированное время."""
+    content = _post(tmp_path, "я" * (CAPTION_LIMIT + 200))  # видимых > 1024 → два вызова
+    adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store, schedule=_WHEN)
+
+    await adapter.publish(content, publication_id=publication_id)
+
+    _, f_kwargs = fake_telethon_client.send_file.call_args
+    _, m_kwargs = fake_telethon_client.send_message.call_args
+    assert f_kwargs["schedule"] == _WHEN
+    assert m_kwargs["schedule"] == _WHEN

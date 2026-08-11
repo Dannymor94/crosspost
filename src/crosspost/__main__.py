@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime
 from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
@@ -46,8 +47,11 @@ _LOGIN_REJECT_FRAGMENTS: dict[str, tuple[str, ...]] = {
 }
 
 
-async def build_adapter(channel: str, store):
+async def build_adapter(channel: str, store, *, schedule: datetime | None = None):
     """Собрать адаптер канала из runtime/.env.
+
+    schedule (aware datetime) — отложенная публикация; поддерживает только telegram,
+    остальные каналы его игнорируют.
 
     "vk"     → VKBrowserAdapter (браузерный тир; API-путь заблокирован платформой).
     "vk_api" → VKAdapter (API-тир, ждёт рабочий токен — оставлен для будущего).
@@ -70,7 +74,9 @@ async def build_adapter(channel: str, store):
         await client.start()
         session_path.parent.mkdir(parents=True, exist_ok=True)
         session_path.write_text(client.session.save())
-        return TelegramAdapter(client, target=cfg["TG_TARGET_CHANNEL"], store=store)
+        return TelegramAdapter(
+            client, target=cfg["TG_TARGET_CHANNEL"], store=store, schedule=schedule
+        )
 
     if channel == "vk":
         # Браузерный тир: API заблокирован (err 27/214), работаем через Playwright.
@@ -159,7 +165,9 @@ async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
     return 0
 
 
-async def _run(content: CanonicalContent, channels: list[str], store) -> int:
+async def _run(
+    content: CanonicalContent, channels: list[str], store, *, schedule: datetime | None = None
+) -> int:
     validate(content)
     publication_id = new_publication_id()
     failures = 0
@@ -168,7 +176,7 @@ async def _run(content: CanonicalContent, channels: list[str], store) -> int:
             print(f"✗ {ch}: тип {content.type.value} не поддерживается")
             failures += 1
             continue
-        adapter = await build_adapter(ch, store)
+        adapter = await build_adapter(ch, store, schedule=schedule)
         result = await adapter.publish(content, publication_id=publication_id)
         mark = "✓" if result.error is None else "✗"
         print(
@@ -181,7 +189,8 @@ async def _run(content: CanonicalContent, channels: list[str], store) -> int:
 
 
 async def _run_with_sqlite(
-    content: CanonicalContent, channels: list[str], *, profile_id: int
+    content: CanonicalContent, channels: list[str], *, profile_id: int,
+    schedule: datetime | None = None,
 ) -> int:
     """Запуск публикации с SQLiteIdempotencyStore (дефолтный путь)."""
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -192,7 +201,7 @@ async def _run_with_sqlite(
     engine = await create_engine_and_tables()
     async with AsyncSession(engine, expire_on_commit=False) as session:
         store = SQLiteIdempotencyStore(session, profile_id=profile_id)
-        return await _run(content, channels, store)
+        return await _run(content, channels, store, schedule=schedule)
 
 
 async def _run_tg_session(api_id: int, api_hash: str) -> int:
@@ -315,6 +324,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk")
     p.add_argument("--state", default=None, help="путь к JSON-стору (устарело; умолч. → SQLite)")
     p.add_argument("--profile", type=int, default=1, help="profile_id в БД (умолч. 1)")
+    p.add_argument(
+        "--schedule", default=None,
+        help="ISO datetime со СМЕЩЕНИЕМ (напр. 2026-08-16T07:00:00+03:00) → нативный "
+             "отложенный пост Telegram; без него — сразу. Поддерживает только telegram.",
+    )
 
     lg = sub.add_parser("login", help="ручной логин в браузерный канал")
     lg.add_argument(
@@ -356,12 +370,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     channels = [c.strip() for c in args.to.split(",") if c.strip()]
 
+    schedule = None
+    if args.schedule:
+        schedule = datetime.fromisoformat(args.schedule)
+        if schedule.tzinfo is None:
+            # naive съедет между Маком (MSK) и VPS (UTC) — требуем смещение явно.
+            print("✗ --schedule должен быть со смещением (aware), напр. ...+03:00")
+            return 2
+
     if args.state:
         # обратная совместимость: явный --state → JSONIdempotencyStore
         store = JSONIdempotencyStore(args.state)
-        return asyncio.run(_run(content, channels, store))
+        return asyncio.run(_run(content, channels, store, schedule=schedule))
 
-    return asyncio.run(_run_with_sqlite(content, channels, profile_id=args.profile))
+    return asyncio.run(
+        _run_with_sqlite(content, channels, profile_id=args.profile, schedule=schedule)
+    )
 
 
 if __name__ == "__main__":

@@ -22,6 +22,11 @@
   FAILED; ретрай видит чекпоинт фото и досылает только текст, фото повторно не летит.
   Дедуп — по внутреннему publication_id, external_id в нём не участвует (§6.1).
 
+Отложенная публикация: конструктор принимает schedule (aware datetime). None →
+отправить сразу; datetime → нативный отложенный пост Telegram (schedule= во всех
+send_file/send_message). Владелец правит/удаляет его в «Отложенных» канала;
+квитанция external_id = id отложенного сообщения (у отложенных своё пространство id).
+
 Границу API↔браузер не нарушаем: сессионная логика (StringSession, start) живёт
 в CLI/фабрике, сюда приходит готовый клиент.
 """
@@ -29,6 +34,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
 from crosspost.content.canonical import CanonicalContent
@@ -68,10 +74,16 @@ def _post_url(target: str, msg_id: str | None) -> str | None:
 class TelegramAdapter:
     channel = "telegram"
 
-    def __init__(self, client, target: str, store: IdempotencyStore) -> None:
+    def __init__(
+        self, client, target: str, store: IdempotencyStore, *, schedule: datetime | None = None
+    ) -> None:
         self._client = client  # Telethon TelegramClient
         self._target = target  # канал назначения
         self._store = store
+        # None → отправить сразу; aware datetime → нативный отложенный пост Telegram
+        # (schedule= в Telethon). При двух сообщениях ОБА на одно время: фото создаётся
+        # первым → срабатывает первым (проверено), в ленте окажется над текстом.
+        self._schedule = schedule
 
     async def publish(
         self,
@@ -102,7 +114,9 @@ class TelegramAdapter:
                         error=f"текст длиннее {MESSAGE_LIMIT} симв.: одного сообщения мало, "
                         "чанкинг не поддержан — сократите текст",
                     )
-                sent = await self._client.send_message(self._target, text, parse_mode="html")
+                sent = await self._client.send_message(
+                    self._target, text, parse_mode="html", schedule=self._schedule
+                )
                 ext = _first_id(sent)
                 self._store.mark_done(publication_id, self.channel, external_id=ext)
                 return ChannelResult(
@@ -115,7 +129,7 @@ class TelegramAdapter:
             if caption_fits(text):
                 # ── режим «фото + подпись»: один вызов ─────────────────────────
                 sent = await self._client.send_file(
-                    self._target, media, caption=text, parse_mode="html"
+                    self._target, media, caption=text, parse_mode="html", schedule=self._schedule
                 )
                 ext = _first_id(sent)
                 self._store.mark_done(publication_id, self.channel, external_id=ext)
@@ -146,13 +160,15 @@ class TelegramAdapter:
                 photo_id = self._store.get_external_id(photo_pub, self.channel)
             else:
                 sent = await self._client.send_file(
-                    self._target, media, caption=caption, parse_mode="html"
+                    self._target, media, caption=caption, parse_mode="html", schedule=self._schedule
                 )
                 photo_id = _first_id(sent)
                 self._store.mark_done(photo_pub, self.channel, external_id=photo_id)
 
-            # Шаг 2 — тело (без заголовка) отдельным сообщением.
-            await self._client.send_message(self._target, body, parse_mode="html")
+            # Шаг 2 — тело (без заголовка) отдельным сообщением, на то же время.
+            await self._client.send_message(
+                self._target, body, parse_mode="html", schedule=self._schedule
+            )
 
             # Оба сообщения прошли → канал done. Квитанция — id фото (визуальный якорь).
             self._store.mark_done(publication_id, self.channel, external_id=photo_id)
