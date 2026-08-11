@@ -26,9 +26,24 @@ logger = logging.getLogger(__name__)
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 
+def _ensure_app_logging() -> None:
+    """Показывать INFO/WARNING логи crosspost (uvicorn их по умолчанию не выводит).
+
+    Нужно для диагностики (напр. telegram send_code type=…, ошибки исполнителя).
+    """
+    log = logging.getLogger("crosspost")
+    if not log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     load_config()  # инжектирует runtime/.env в os.environ до любых обращений к секретам
+    _ensure_app_logging()
     engine = await create_engine_and_tables(get_db_url())
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)

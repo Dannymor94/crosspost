@@ -34,6 +34,7 @@ from telethon.errors import (
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     PhoneNumberInvalidError,
+    SendCodeUnavailableError,
     SessionPasswordNeededError,
 )
 
@@ -159,6 +160,19 @@ async def request_code(profile_id: int, phone: str) -> str:
         raise TelegramLoginError(
             f"Слишком много попыток. Повторите через {exc.seconds} с."
         ) from exc
+    except SendCodeUnavailableError as exc:
+        # Telegram уже отправил код и отказывается слать ещё один этому номеру.
+        # Значит первый код уже ушёл (в приложение) — просить его заново бесполезно.
+        raise TelegramLoginError(
+            "Telegram уже отправил код и пока не присылает новый для этого номера. "
+            "Проверьте служебный чат «Telegram» в приложении — код (5 цифр) должен быть "
+            "там. Если его нет, закройте окно и начните вход заново через несколько минут."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — не отдаём 500, показываем причину пользователю
+        logger.warning("telegram send_code failed: %s", exc)
+        raise TelegramLoginError(
+            f"Не удалось отправить код: {exc}. Попробуйте начать вход заново чуть позже."
+        ) from exc
 
     sess.phone = phone
     sess.phone_code_hash = getattr(sent, "phone_code_hash", None)
@@ -194,6 +208,15 @@ async def submit_code(
             raise TelegramLoginError("Неверный код из Telegram.") from exc
         except PhoneCodeExpiredError as exc:
             raise TelegramLoginError("Код устарел — запросите новый.") from exc
+        except FloodWaitError as exc:
+            raise TelegramLoginError(
+                f"Слишком много попыток. Повторите через {exc.seconds} с."
+            ) from exc
+        except TelegramLoginError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — не 500, показываем причину
+            logger.warning("telegram sign_in(code) failed: %s", exc)
+            raise TelegramLoginError(f"Не удалось подтвердить код: {exc}") from exc
 
     # Шаг 2FA (если Telegram потребовал облачный пароль).
     if sess.awaiting_password:
@@ -203,6 +226,9 @@ async def submit_code(
             await sess.client.sign_in(password=password)
         except PasswordHashInvalidError as exc:
             raise TelegramLoginError("Неверный облачный пароль (2FA).") from exc
+        except Exception as exc:  # noqa: BLE001 — не 500, показываем причину
+            logger.warning("telegram sign_in(2fa) failed: %s", exc)
+            raise TelegramLoginError(f"Не удалось подтвердить пароль: {exc}") from exc
 
     return await _finalize(sess)
 
