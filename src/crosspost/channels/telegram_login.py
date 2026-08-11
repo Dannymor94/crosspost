@@ -86,6 +86,14 @@ def _build_client(api_id: int, api_hash: str) -> Any:
     return TelegramClient(StringSession(), api_id, api_hash)
 
 
+def _build_client_from_session(api_id: int, api_hash: str, session: str) -> Any:
+    """Клиент из ГОТОВОЙ StringSession (для импорта в обход входа по коду). Патчится в тестах."""
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    return TelegramClient(StringSession(session), api_id, api_hash)
+
+
 def _get_session(profile_id: int) -> TelegramLoginSession:
     sess = _LOGIN_SESSIONS.get(profile_id)
     if sess is None:
@@ -231,6 +239,51 @@ async def submit_code(
             raise TelegramLoginError(f"Не удалось подтвердить пароль: {exc}") from exc
 
     return await _finalize(sess)
+
+
+async def import_session(
+    profile_id: int,
+    *,
+    api_id: int,
+    api_hash: str,
+    target_channel: str,
+    session: str,
+) -> str:
+    """Импорт готовой StringSession в обход входа по коду.
+
+    Проверяет сессию через get_me() и возвращает валидную строку. Учётку в БД
+    пишет РОУТ (как и в обычном флоу). Полезно при флуд-лимите Telegram.
+    """
+    if not api_id or not api_hash:
+        raise TelegramLoginError("Укажите api_id и api_hash.")
+    if not target_channel:
+        raise TelegramLoginError("Укажите канал назначения (например, @mychannel).")
+    session = (session or "").strip()
+    if not session:
+        raise TelegramLoginError("Вставьте строку сессии (StringSession).")
+
+    # Закрыть возможный недоделанный флоу входа по коду этого профиля.
+    await _discard(profile_id)
+
+    client = _build_client_from_session(api_id, api_hash, session)
+    try:
+        await client.connect()
+        me = await client.get_me()
+    except Exception as exc:  # noqa: BLE001 — показываем причину, не 500
+        raise TelegramLoginError(
+            f"Не удалось проверить сессию: {exc}. Проверьте строку, api_id и api_hash."
+        ) from exc
+    finally:
+        try:
+            await client.disconnect()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("disconnect after import failed: %s", exc)
+
+    if me is None:
+        raise TelegramLoginError(
+            "Сессия недействительна или не авторизована (get_me вернул пусто)."
+        )
+    return session
 
 
 async def _finalize(sess: TelegramLoginSession) -> SignInResult:

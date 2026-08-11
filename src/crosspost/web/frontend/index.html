@@ -762,6 +762,9 @@ body {
 .wf-msg { font-size: 11.5px; color: var(--error); margin-top: 5px; line-height: 1.45; }
 .wiz-stuck { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .wiz-msg { font-family: var(--font-mono); font-size: 12px; resize: vertical; line-height: 1.5; }
+.wiz-alt { background: none; border: none; color: var(--accent); cursor: pointer;
+  font-size: 12px; padding: 2px 0; }
+.wiz-alt:hover { text-decoration: underline; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -1162,6 +1165,15 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   function goNext() { setErr(null); setIdx((i) => Math.min(i + 1, M - 1)); }
   function goBack() { setErr(null); setIdx((i) => Math.max(i - 1, 0)); }
 
+  // Перейти на необязательный шаг (напр. импорт сессии в обход входа по коду).
+  function gotoAlt(key) {
+    setErr(null);
+    const next = new Set(activated); next.add(key); setActivated(next);
+    const vis = allSteps.filter((s) => !s.optional || next.has(s.key));
+    const i = vis.findIndex((s) => s.key === key);
+    if (i >= 0) setIdx(i);
+  }
+
   async function cancelFlow() {
     // Закрыть возможное открытое окно/начатый вход (best-effort).
     try {
@@ -1219,6 +1231,15 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
       } else if (k === "target") {
         await api.put(`${pbase}/channels/${channel}/target`, { target: (values.target || "").trim() });
         setDone(true);
+      } else if (k === "tg_session") {
+        // Импорт готовой StringSession (обход входа по коду).
+        await api.post(`${pbase}/channels/telegram/login/import-session`, {
+          api_id: parseInt(values.api_id, 10),
+          api_hash: (values.api_hash || "").trim(),
+          target_channel: (values.target_channel || "").trim(),
+          session: (values.session || "").trim(),
+        });
+        setDone(true);
       }
     } catch (ex) {
       setErr(ex.message);
@@ -1242,6 +1263,7 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     tg_code: "Подтвердить код", tg_twofa: "Подтвердить пароль",
     simple_connect: "Проверить и сохранить", browser_open: "Войти",
     browser_confirm: "Я вошёл", target: "Сохранить и завершить",
+    tg_session: "Проверить сессию и подключить",
   };
 
   if (done) {
@@ -1289,6 +1311,11 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     })),
 
     err && h(Alert, { type: "error" }, err),
+
+    // Альтернативный путь (напр. «У меня уже есть готовая сессия» → импорт StringSession).
+    current.alt_step && current.alt_label && h("div", { style: { marginTop: "8px" } },
+      h("button", { className: "wiz-alt", onClick: () => gotoAlt(current.alt_step) }, current.alt_label),
+    ),
 
     // Пересыл кода Telegram (если шаг это объявляет).
     current.resend_label && current.kind === "tg_code" && h("div", { style: { marginTop: "8px" } },

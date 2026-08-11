@@ -94,6 +94,8 @@ class WizardStep:
     fields: tuple[WizardField, ...] = ()
     optional: bool = False  # шаг может быть пропущен (напр. 2FA — только если нужен)
     resend_label: str = ""  # если задан — кнопка «переслать» (напр. код Telegram заново)
+    alt_step: str = ""  # key необязательного шага, на который ведёт «альтернативная» ссылка
+    alt_label: str = ""  # текст этой ссылки (напр. «У меня уже есть готовая сессия»)
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,19 @@ _F_TWOFA = WizardField(
     placeholder="ваш пароль двухэтапной проверки",
     normalize="trim",
 )
+# Готовая строка сессии — СЕКРЕТ (полный доступ к аккаунту), поле маскируем.
+_F_SESSION = WizardField(
+    name="session",
+    label="Строка сессии (StringSession)",
+    secret=True,
+    placeholder="1BVtsOK...длинная строка",
+    hint="Секрет: даёт полный доступ к аккаунту. Никому не пересылайте.",
+    pattern=r"^\S{20,}$",
+    invalid_message="Вставьте строку сессии целиком, без пробелов.",
+    normalize="trim",
+)
+
+_ALT_SESSION_LABEL = "У меня уже есть готовая сессия →"
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
@@ -220,6 +235,11 @@ TELEGRAM_GUIDE = ChannelGuide(
             "Вводите последний присланный код (5 цифр) сразу — он действует недолго. Если "
             "устарел, отправьте заново.",
         ),
+        ErrorHint(
+            "Telegram блокирует вход из-за частых попыток (флуд-лимит)",
+            "Подождите указанное время. Если вы владелец — можно подключить в обход кода: на "
+            "шаге входа нажмите «У меня уже есть готовая сессия» и вставьте строку StringSession.",
+        ),
     ),
     steps=(
         WizardStep(
@@ -242,6 +262,8 @@ TELEGRAM_GUIDE = ChannelGuide(
             link="https://my.telegram.org/apps",
             link_label="Открыть my.telegram.org",
             fields=(_F_API_ID, _F_API_HASH),
+            alt_step="session",
+            alt_label=_ALT_SESSION_LABEL,
         ),
         WizardStep(
             key="channel",
@@ -252,6 +274,8 @@ TELEGRAM_GUIDE = ChannelGuide(
                 "администратором. Подойдёт @имя или ссылка t.me/имя."
             ),
             fields=(_F_TG_CHANNEL,),
+            alt_step="session",
+            alt_label=_ALT_SESSION_LABEL,
         ),
         WizardStep(
             key="phone",
@@ -262,6 +286,8 @@ TELEGRAM_GUIDE = ChannelGuide(
                 "Пароль мы не спрашиваем и не храним."
             ),
             fields=(_F_PHONE,),
+            alt_step="session",
+            alt_label=_ALT_SESSION_LABEL,
         ),
         WizardStep(
             key="code",
@@ -285,6 +311,29 @@ TELEGRAM_GUIDE = ChannelGuide(
                 "Telegram — это последний шаг."
             ),
             fields=(_F_TWOFA,),
+            optional=True,
+        ),
+        # Альтернатива входу по коду: импорт готовой StringSession (в обход флуд-лимита).
+        # Необязательный шаг — открывается по ссылке «У меня уже есть готовая сессия».
+        WizardStep(
+            key="session",
+            kind="tg_session",
+            title="Подключение по готовой сессии",
+            body=(
+                "Способ для владельца/продвинутых — в обход входа по коду (полезно, когда "
+                "Telegram блокирует повторные попытки флуд-лимитом). Обычный путь — вход по "
+                "коду. Здесь нужна готовая строка сессии (StringSession) для этого же номера; "
+                "api_id, api_hash и канал возьмутся из введённых выше (проверьте их)."
+            ),
+            landmark=(
+                "Получить строку сессии проще всего командой:\n"
+                "  python -m crosspost tg-session --api-id ВАШ_ID --api-hash ВАШ_HASH\n"
+                "Она интерактивно спросит код (и 2FA-пароль, если включён) и напечатает "
+                "строку сессии — скопируйте и вставьте сюда. "
+                "Если нет доступа к серверу — попросите оператора запустить команду и прислать "
+                "строку. Это секрет: даёт полный доступ к аккаунту, никому не пересылайте."
+            ),
+            fields=(_F_API_ID, _F_API_HASH, _F_TG_CHANNEL, _F_SESSION),
             optional=True,
         ),
     ),

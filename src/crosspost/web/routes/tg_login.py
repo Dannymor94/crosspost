@@ -44,6 +44,13 @@ class SignInBody(BaseModel):
     password: str | None = None
 
 
+class ImportSessionBody(BaseModel):
+    api_id: int
+    api_hash: str
+    target_channel: str
+    session: str
+
+
 class LoginStep(BaseModel):
     step: str  # "phone" | "code" | "password" | "done"
     state: str | None = None  # "live" когда step == "done"
@@ -112,6 +119,39 @@ async def login_sign_in(profile_id: int, body: SignInBody, repo: RepoDep) -> Log
     await repo.set_credential(profile_id, _CHANNEL, CredentialKind.API_TOKEN, blob)
     await repo.upsert_connection(profile_id, _CHANNEL, ConnectionState.LIVE)
     return LoginStep(step="done", state=str(ConnectionState.LIVE), message="Telegram подключён.")
+
+
+@router.post(
+    "/api/profiles/{profile_id}/channels/telegram/login/import-session",
+    response_model=LoginStep,
+)
+async def login_import_session(
+    profile_id: int, body: ImportSessionBody, repo: RepoDep
+) -> LoginStep:
+    """Альтернатива входу по коду: импорт готовой StringSession (обход флуд-лимита)."""
+    await _require_profile(repo, profile_id)
+    try:
+        session = await tl.import_session(
+            profile_id,
+            api_id=body.api_id,
+            api_hash=body.api_hash,
+            target_channel=body.target_channel,
+            session=body.session,
+        )
+    except tl.TelegramLoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    blob = tl.build_credential_blob(
+        api_id=body.api_id,
+        api_hash=body.api_hash,
+        target_channel=body.target_channel,
+        session=session,
+    )
+    await repo.set_credential(profile_id, _CHANNEL, CredentialKind.API_TOKEN, blob)
+    await repo.upsert_connection(profile_id, _CHANNEL, ConnectionState.LIVE)
+    return LoginStep(
+        step="done", state=str(ConnectionState.LIVE), message="Telegram подключён по сессии."
+    )
 
 
 @router.post("/api/profiles/{profile_id}/channels/telegram/login/cancel", response_model=LoginStep)

@@ -193,6 +193,66 @@ async def _run_with_sqlite(
         return await _run(content, channels, store)
 
 
+async def _run_tg_session(api_id: int, api_hash: str) -> int:
+    """Интерактивный вход Telethon → печатает StringSession для вставки в UI.
+
+    Сырые учётные данные остаются только в памяти; StringSession — единственный
+    вывод. Пользователь вставляет её в мастер подключения UI вместо входа по коду.
+
+    Не пишет ничего в БД и не сохраняет файлов — всё делает вызывающий.
+    """
+    import getpass
+
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    print("=" * 60)
+    print("Генерация строки сессии Telegram (StringSession)")
+    print("⚠  СЕКРЕТ — он даёт полный доступ к аккаунту.")
+    print("   Никому не пересылайте и не публикуйте.")
+    print("=" * 60)
+
+    client = TelegramClient(StringSession(), api_id, api_hash)
+
+    async def _ask_phone() -> str:
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: input("Номер телефона (+7...): ")
+        )
+
+    async def _ask_code() -> str:
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: input("Код из Telegram (5 цифр из приложения): ")
+        )
+
+    async def _ask_password() -> str:
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: getpass.getpass("Облачный пароль 2FA: ")
+        )
+
+    try:
+        await client.start(
+            phone=_ask_phone,
+            code_callback=_ask_code,
+            password=_ask_password,
+        )
+    except Exception as exc:
+        print(f"\n✗ Не удалось войти: {exc}")
+        return 1
+
+    session_string = client.session.save()
+    await client.disconnect()
+
+    print("\n" + "=" * 60)
+    print("✓ Строка сессии:")
+    print()
+    print(session_string)
+    print()
+    print("Скопируйте её и вставьте в мастер подключения UI")
+    print("(«У меня уже есть готовая сессия»).")
+    print("=" * 60)
+    return 0
+
+
 async def _run_user_add(login: str, role: str, profile_id: int | None, password: str | None) -> int:
     """Завести пользователя панели (первый admin — только так, регистрации нет).
 
@@ -259,6 +319,13 @@ def main(argv: list[str] | None = None) -> int:
         "--channel", required=True, help=f"канал: {', '.join(sorted(_LOGIN_SUPPORTED))}"
     )
 
+    tgs = sub.add_parser(
+        "tg-session",
+        help="интерактивный вход Telegram → печатает StringSession для мастера UI",
+    )
+    tgs.add_argument("--api-id", required=True, type=int, help="App api_id (my.telegram.org/apps)")
+    tgs.add_argument("--api-hash", required=True, help="App api_hash (my.telegram.org/apps)")
+
     ua = sub.add_parser("user-add", help="завести пользователя панели (admin/client)")
     ua.add_argument("--login", required=True, help="логин пользователя")
     ua.add_argument("--role", required=True, choices=["admin", "client"])
@@ -268,6 +335,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    if args.cmd == "tg-session":
+        return asyncio.run(_run_tg_session(args.api_id, args.api_hash))
 
     if args.cmd == "login":
         cfg = load_config()

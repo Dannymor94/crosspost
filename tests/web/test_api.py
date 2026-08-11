@@ -84,6 +84,26 @@ class FakeTgClient:
         return object()
 
 
+_UNSET = object()
+
+
+class FakeSessionClient:
+    """Мок клиента для импорта готовой StringSession (get_me → валидность)."""
+
+    def __init__(self, me: object | None = _UNSET) -> None:
+        # me=None означает «не авторизован»; по умолчанию — валидный аккаунт.
+        self._me = object() if me is _UNSET else me
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def get_me(self):
+        return self._me
+
+
 async def _login_telegram(
     client: AsyncClient, pid: int, *, saved_session: str = "STRING_SESSION_XYZ"
 ) -> None:
@@ -219,6 +239,7 @@ async def test_every_wizard_step_has_title_and_known_kind() -> None:
         "tg_phone",
         "tg_code",
         "tg_twofa",
+        "tg_session",
         "simple_connect",
         "browser_open",
         "browser_confirm",
@@ -234,8 +255,9 @@ async def test_every_wizard_step_has_title_and_known_kind() -> None:
 
 async def test_telegram_wizard_is_interactive_sequence(client: AsyncClient) -> None:
     g = (await client.get("/api/channels/telegram/guide")).json()
-    kinds = [s["kind"] for s in g["steps"]]
-    assert kinds == ["collect", "tg_begin", "tg_phone", "tg_code", "tg_twofa"]
+    # Основной путь входа по коду (необязательные шаги 2FA/сессия — в хвосте).
+    main = [s["kind"] for s in g["steps"] if not s["optional"]]
+    assert main == ["collect", "tg_begin", "tg_phone", "tg_code"]
     # У шага приложения — оба кода как поля.
     app = next(s for s in g["steps"] if s["key"] == "app")
     assert {f["name"] for f in app["fields"]} == {"api_id", "api_hash"}
@@ -308,6 +330,68 @@ async def test_telegram_code_step_clarifies_delivery_and_resend(client: AsyncCli
     assert "приложени" in (field["hint"] + field["invalid_message"]).lower()
     # В справке есть пункт про недоставку кода (для «Не получается?»).
     assert any("не приходит" in e["symptom"].lower() for e in g["errors"])
+
+
+async def test_telegram_has_session_import_alternative(client: AsyncClient) -> None:
+    """Есть альтернативный шаг импорта StringSession + ссылка на него со входа по коду."""
+    g = (await client.get("/api/channels/telegram/guide")).json()
+    sess = next(s for s in g["steps"] if s["kind"] == "tg_session")
+    assert sess["optional"] is True  # не в основном пути, только по ссылке
+    names = {f["name"] for f in sess["fields"]}
+    assert {"api_id", "api_hash", "target_channel", "session"} <= names
+    sf = next(f for f in sess["fields"] if f["name"] == "session")
+    assert sf["secret"] is True  # строка сессии — секрет
+    # На шаге телефона есть ссылка-альтернатива на этот шаг.
+    phone = next(s for s in g["steps"] if s["key"] == "phone")
+    assert phone["alt_step"] == "session"
+    assert phone["alt_label"]
+
+
+async def test_import_session_connects_and_saves(client: AsyncClient) -> None:
+    resp = await client.post("/api/profiles", json={"name": "sess-ok"})
+    pid = resp.json()["id"]
+    with patch.object(tl, "_build_client_from_session", lambda a, h, s: FakeSessionClient()):
+        r = await client.post(
+            f"/api/profiles/{pid}/channels/telegram/login/import-session",
+            json={
+                "api_id": 42,
+                "api_hash": "hash",
+                "target_channel": "@ch",
+                "session": "1BVtsOK000000000000000000session",
+            },
+        )
+    assert r.status_code == 200, r.text
+    assert r.json()["step"] == "done"
+    tg = next(
+        c
+        for c in (await client.get(f"/api/profiles/{pid}/channels")).json()
+        if c["channel"] == "telegram"
+    )
+    assert tg["state"] == "live"
+    assert tg["has_credential"] is True
+
+
+async def test_import_session_rejects_unauthorized(client: AsyncClient) -> None:
+    resp = await client.post("/api/profiles", json={"name": "sess-bad"})
+    pid = resp.json()["id"]
+    # get_me → None: сессия не авторизована.
+    with patch.object(tl, "_build_client_from_session", lambda a, h, s: FakeSessionClient(me=None)):
+        r = await client.post(
+            f"/api/profiles/{pid}/channels/telegram/login/import-session",
+            json={
+                "api_id": 42,
+                "api_hash": "hash",
+                "target_channel": "@ch",
+                "session": "1BVtsOK000000000000000000session",
+            },
+        )
+    assert r.status_code == 400
+    tg = next(
+        c
+        for c in (await client.get(f"/api/profiles/{pid}/channels")).json()
+        if c["channel"] == "telegram"
+    )
+    assert tg["state"] == "not_connected"
 
 
 async def test_every_channel_has_error_hints_for_stuck_panel() -> None:
