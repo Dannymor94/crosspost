@@ -339,6 +339,54 @@ async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
     assert by["vk_wall"]["screenshot_path"] == "/shots/x.png"
 
 
+async def test_scheduled_report_hides_screenshot_for_succeeded_channel(client, factory):
+    """Канал упал на попытке 1 (скриншот в логах), но дожался на ретрае (done).
+
+    Скриншот — артефакт СБОЯ; для успешного финального статуса он не должен
+    подтягиваться, иначе UI показывает «Отправлено» + «скриншот сбоя» — противоречие.
+    """
+    from datetime import datetime
+
+    from crosspost.db.log_repo import LogRepository
+    from crosspost.db.models import PublicationStatus
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        post = await repo.create_scheduled(
+            content_type="post",
+            text="дожали со второй попытки",
+            title=None,
+            media_paths=[],
+            channels=["vk_wall"],
+            scheduled_at=datetime(2026, 8, 10, 9, 0),
+        )
+        pubid = scheduled_publication_id(post.id)
+        # Попытка 1 упала → скриншот в логах. Финальный статус — done (ретрай дожал).
+        await LogRepository(s).add(
+            pid,
+            channel="vk_wall",
+            publication_id=pubid,
+            level="ERROR",
+            message="scheduler: vk_wall → failed (попытка 1)",
+            screenshot_path="/shots/stale.png",
+        )
+        await repo.set_status(pubid, "vk_wall", PublicationStatus.DONE, external_id="vk-7")
+        await SchedulerRepository(s).mark_published(post.id)
+
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    assert resp.status_code == 200, resp.text
+    row = resp.json()[0]
+    assert row["overall"] == "done"
+    o = row["outcomes"][0]
+    assert o["status"] == "done"
+    assert o["screenshot_path"] is None  # успех не тащит старый скриншот сбоя
+
+
 async def test_scheduled_report_empty_when_nothing_executed(client, factory):
     """Нет исполненных постов → отчёт пуст (не 500)."""
     pid = await _make_profile_with_live(factory, ["telegram"])

@@ -610,9 +610,41 @@ body {
 .outcome-badge.info    { background: var(--accent-dim); color: var(--accent); }
 .outcome-id { font-size: 10.5px; color: var(--text-3); margin-top: 6px; }
 .outcome-err { font-size: 12px; color: var(--error); margin-top: 6px; line-height: 1.4; }
-/* Журнал планировщика: строки поканальных итогов внутри карточки */
-.report-channels { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+/* ── Журнал планировщика: компактные строки, группировка по датам ─────────── */
+.report-toolbar { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; flex-wrap: wrap; }
+.report-filter { display: flex; gap: 4px; background: var(--surface-2); border-radius: 8px; padding: 3px; }
+.report-filter button {
+  border: none; background: none; cursor: pointer; font-size: 12px; font-weight: 600;
+  color: var(--text-2); padding: 4px 10px; border-radius: 6px;
+}
+.report-filter button.active { background: var(--surface-0, var(--surface-1)); color: var(--text-1); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.report-count { font-size: 12px; color: var(--text-3); }
+.report-day { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-3); margin: 14px 0 6px; }
+.report-rows { display: flex; flex-direction: column; gap: 4px; }
+
+.report-row { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.report-row.muted { opacity: .62; }
+.report-row.error   { border-left: 3px solid var(--error); }
+.report-row.info    { border-left: 3px solid var(--amber); }
+.report-row-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  border: none; background: none; cursor: pointer; padding: 8px 12px; font: inherit;
+}
+.report-row-head:hover { background: var(--surface-2); }
+.report-time { font-size: 12px; color: var(--text-3); flex-shrink: 0; }
+.report-preview { font-size: 13px; color: var(--text-1); flex: 1 1 auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.report-chips { display: flex; gap: 3px; flex-shrink: 0; }
+.report-chip { width: 8px; height: 8px; border-radius: 50%; }
+.report-chip.success { background: var(--live); }
+.report-chip.error   { background: var(--error); }
+.report-chip.warning { background: var(--amber); }
+.report-chip.info    { background: var(--accent); }
+.report-caret { font-size: 11px; color: var(--text-3); flex-shrink: 0; width: 12px; }
+.report-detail { padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
 .report-chan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.report-more { margin-top: 12px; }
 
 /* ── Target editor ───────────────────────────────────────────────────────── */
 .target-editor {
@@ -1866,33 +1898,89 @@ function PublishView({ profile }) {
 
 const REPORT_META = {
   done: { cls: "success", label: "Отправлено" },
-  partial: { cls: "info", label: "Частично" },
+  partial: { cls: "warning", label: "Частично" },
   failed: { cls: "error", label: "Не отправлено" },
   unknown: { cls: "info", label: "Без итогов" },
 };
+const REPORT_PAGE = 20;  // сколько показываем за раз (не грузим всю историю разом)
+const isReportProblem = (r) => r.overall === "partial" || r.overall === "failed";
+
+// Метка дня для группировки: «Сегодня» / «Вчера» / дд.мм.гггг
+function reportDayLabel(iso) {
+  const d = new Date(iso);
+  const today = new Date();
+  const yest = new Date(); yest.setDate(today.getDate() - 1);
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return "Сегодня";
+  if (same(d, yest)) return "Вчера";
+  return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
 function SchedulerReport({ items }) {
+  const [filter, setFilter] = useState("all");  // all | problems
+  const [limit, setLimit] = useState(REPORT_PAGE);
   if (!items || items.length === 0) return null;
+
+  const problemCount = items.filter(isReportProblem).length;
+  const filtered = filter === "problems" ? items.filter(isReportProblem) : items;
+  const shown = filtered.slice(0, limit);  // items уже отсортированы: свежие сверху
+
+  // Группировка по дням с сохранением порядка (свежие сверху).
+  const groups = [];
+  for (const r of shown) {
+    const label = reportDayLabel(r.scheduled_at);
+    let g = groups[groups.length - 1];
+    if (!g || g.label !== label) { g = { label, rows: [] }; groups.push(g); }
+    g.rows.push(r);
+  }
+
+  const setF = (f) => { setFilter(f); setLimit(REPORT_PAGE); };
   return h("div", null,
     h("p", { className: "section-title", style: { marginTop: "24px" } }, "Журнал планировщика"),
-    h("div", { className: "outcome-grid" },
-      items.map((r) => h(ReportCard, { key: r.id, r })),
+    h("div", { className: "report-toolbar" },
+      h("div", { className: "report-filter" },
+        h("button", { className: filter === "all" ? "active" : "", onClick: () => setF("all") }, "Все"),
+        h("button", { className: filter === "problems" ? "active" : "", onClick: () => setF("problems") },
+          `Проблемные${problemCount ? ` · ${problemCount}` : ""}`),
+      ),
+      h("span", { className: "report-count" }, `показано ${shown.length} из ${filtered.length}`),
     ),
+    filtered.length === 0
+      ? h("p", { className: "text-3", style: { fontSize: "13px" } }, "Проблемных постов нет — всё отправилось.")
+      : groups.map((g, i) => h("div", { key: i },
+          h("div", { className: "report-day" }, g.label),
+          h("div", { className: "report-rows" },
+            g.rows.map((r) => h(ReportRow, { key: r.id, r })),
+          ),
+        )),
+    shown.length < filtered.length && h("button", {
+      className: "btn-ghost report-more", onClick: () => setLimit(limit + REPORT_PAGE),
+    }, "Показать ещё"),
   );
 }
 
-function ReportCard({ r }) {
+// Компактная строка: время · превью · статус-точки каналов · раскрытие деталей по клику.
+// Успешные свёрнуты и приглушены; проблемные (partial/failed) раскрыты и заметны.
+function ReportRow({ r }) {
+  const problem = isReportProblem(r);
+  const [open, setOpen] = useState(problem);
   const meta = REPORT_META[r.overall] || REPORT_META.unknown;
-  const when = new Date(r.scheduled_at).toLocaleString("ru-RU",
-    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  const preview = (r.text || "").slice(0, 80) || "(без текста)";
-  return h("div", { className: `outcome ${meta.cls}` },
-    h("div", { className: "outcome-head" },
-      h("span", { className: "outcome-ch" }, `${when} · ${preview}`),
+  const when = new Date(r.scheduled_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const preview = (r.text || "").trim() || "(без текста)";
+  return h("div", { className: `report-row ${meta.cls}${problem ? "" : " muted"}` },
+    h("button", { className: "report-row-head", onClick: () => setOpen(!open) },
+      h("span", { className: "report-time mono" }, when),
       h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
+      h("span", { className: "report-preview" }, preview),
+      h("span", { className: "report-chips" },
+        r.outcomes.map((o) => {
+          const cm = OUTCOME_META[o.status] || { cls: "info" };
+          return h("span", { key: o.channel, className: `report-chip ${cm.cls}`, title: o.channel });
+        }),
+      ),
+      h("span", { className: "report-caret" }, open ? "▾" : "▸"),
     ),
-    // поканальные итоги — тот же язык, что и «Результат по каналам»
-    h("div", { className: "report-channels" },
+    open && h("div", { className: "report-detail" },
       r.outcomes.map((o) => {
         const cm = OUTCOME_META[o.status] || { cls: "info", label: o.status };
         return h("div", { className: "report-chan-row", key: o.channel },

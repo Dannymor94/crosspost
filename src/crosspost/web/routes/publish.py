@@ -361,16 +361,22 @@ async def scheduled_report(profile_id: int, session: SessionDep) -> list[Schedul
     reports: list[ScheduledReportOut] = []
     for post in await pub_repo.list_executed():
         pubid = scheduled_publication_id(post.id)
-        outcomes = [
-            OutcomeOut(
-                channel=r.channel,
-                status=str(r.status),
-                external_id=r.external_id,
-                error=r.error,
-                screenshot_path=shots.get((pubid, r.channel)),
+        outcomes = []
+        for r in await pub_repo.list_statuses(pubid):
+            status = str(r.status)
+            # Скриншот — артефакт СБОЯ. Канал мог упасть на попытке 1 (скриншот в логах),
+            # а на ретрае дожаться (status=done) — тогда старый скриншот к нему не относится.
+            # Показываем скриншот только если ФИНАЛЬНЫЙ статус канала — не успех.
+            screenshot = None if status in _SUCCESS else shots.get((pubid, r.channel))
+            outcomes.append(
+                OutcomeOut(
+                    channel=r.channel,
+                    status=status,
+                    external_id=r.external_id,
+                    error=r.error,
+                    screenshot_path=screenshot,
+                )
             )
-            for r in await pub_repo.list_statuses(pubid)
-        ]
         reports.append(
             ScheduledReportOut(
                 id=post.id,
