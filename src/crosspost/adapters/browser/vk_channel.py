@@ -33,11 +33,11 @@ from crosspost.orchestrator.task import IdempotencyStore
 
 # ── СЕЛЕКТОРЫ ────────────────────────────────────────────────────────────────
 
-# URL раздела мессенджера с каналом сообщества
-_CHANNEL_URL = "https://vk.com/im/channels/{channel_id}?entrypoint=channel"
+# URL раздела мессенджера с каналом сообщества (vk.ru — основной домен для каналов)
+_CHANNEL_URL = "https://vk.ru/im/channels/{channel_id}?entrypoint=channel"
 
 # Маркеры неавторизации (негативная проверка — как в vk_wall)
-_LOGIN_URL_FRAGMENTS = ("vk.com/login", "id.vk.com")
+_LOGIN_URL_FRAGMENTS = ("vk.com/login", "vk.ru/login", "id.vk.com")
 
 # Канал, из которого берём storageState-сессию (тот же аккаунт ВК)
 _SESSION_CHANNEL = "vk_wall"
@@ -68,10 +68,9 @@ _SEND_BUTTON_SELECTOR = 'button[aria-label="Отправить сообщени�
 _SEND_ACTIVE_CLASS = "ChannelComposer__button--submitActive"
 _SEND_LOADING_CLASS = "ChannelComposer__button--loading"
 
-# История постов канала — verify появления поста (надёжнее очистки поля)
-_POSTS_HISTORY_SELECTOR = (
-    '[class*="PostsHistory"] [data-post-id], [class*="PostsHistory"] [class*="Post"]'
-)
+# Элемент опубликованного поста в ленте канала (снято с живого DOM):
+# <div data-itemkey="N" class="PostsList__item VirtualScrollItem">. Для extract id.
+_POST_ITEM_SELECTOR = ".PostsList__item"
 
 # Ожидание превью прикреплённого фото в composer
 _PHOTO_PREVIEW_SELECTOR = '.ChannelComposer img, [class*="Composer"] img'
@@ -81,6 +80,15 @@ _NAV_TIMEOUT = 15_000
 _COMPOSER_TIMEOUT = 10_000
 _PHOTO_TIMEOUT = 15_000
 _SEND_TIMEOUT = 20_000
+# Окно ожидания активации кнопки отправки. С фото — дольше (идёт заливка на сервер
+# ВК); если по истечении кнопка всё ещё disabled/--loading, значит заливка упала.
+_SEND_ENABLE_TIMEOUT_TEXT = 8_000
+_SEND_ENABLE_TIMEOUT_MEDIA = 45_000
+_CLICK_TIMEOUT = 5_000
+# Пуллинг очистки composer после клика (verify приёма поста сервером).
+# ~20с суммарно: обычно опустошается за <1с, но даём запас на медленный XHR.
+_VERIFY_POLLS = 40
+_VERIFY_POLL_INTERVAL = 500  # мс
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -145,7 +153,12 @@ class VKChannelBrowserAdapter:
             storage_state=self._storage_state,
         ) as page:
             # 2) навигация в раздел канала мессенджера
-            url = _CHANNEL_URL.format(channel_id=self._channel_id)
+            # ID канала ВК — всегда отрицательный; добавляем '-' если пользователь
+            # сохранил без него (например, "240033402" вместо "-240033402").
+            channel_id = (
+                self._channel_id if self._channel_id.startswith("-") else f"-{self._channel_id}"
+            )
+            url = _CHANNEL_URL.format(channel_id=channel_id)
             await page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT)
 
             # 3) проверка сессии (негативная: нет URL логина = залогинен)
@@ -162,11 +175,12 @@ class VKChannelBrowserAdapter:
                 await composer.type(content.text)
 
             # 5) фото, если есть
-            if content.media_paths:
+            has_media = bool(content.media_paths)
+            if has_media:
                 await self._attach_photos(page, content.media_paths[:10])
 
             # 6) отправка
-            external_id = await self._send(page)
+            external_id = await self._send(page, has_media=has_media)
 
         self._store.mark_done(publication_id, self.channel, external_id=external_id)
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
@@ -221,60 +235,95 @@ class VKChannelBrowserAdapter:
         except Exception:
             pass  # превью не обязательно — отправка всё равно пройдёт
 
-    async def _send(self, page) -> str:
+    async def _send(self, page, *, has_media: bool) -> str:
         """Отправить пост кнопкой «Отправить сообщение».
 
         НЕ через Enter первым — в contenteditable Enter делает перенос строки.
-        1. Ждём, что кнопка активна (--submitActive) — значит текст/фото приняты.
-        2. Кликаем.
-        3. Verify: пост появился в PostsHistory (надёжнее очистки поля).
+        1. Ждём, что кнопка ГОТОВА: не disabled и не в состоянии --loading.
+           С фото ждём дольше — идёт заливка на сервер ВК. Если кнопка так и
+           осталась disabled/--loading, значит заливка фото упала («Ошибка при
+           загрузке») — не кликаем вслепую (это давало 30-сек зависание Playwright).
+        2. Кликаем с коротким таймаутом.
+        3. Verify: ВК очистил composer (снято с живого DOM — .ComposerInput__input
+           опустошается ТОЛЬКО после того, как сервер принял пост). Это надёжный
+           сигнал приёма И он ДЕРЖИТ страницу открытой до долёта XHR отправки —
+           раньше ложный verify закрывал браузер до отправки, и пост не уходил.
 
-        Бросает RuntimeError, если пост не появился в истории — не даём ложный done.
+        Бросает RuntimeError с человеческой причиной — open_page снимет скриншот.
         """
-        # 1) ждём активную кнопку отправки
         await page.wait_for_selector(_SEND_BUTTON_SELECTOR, timeout=_COMPOSER_TIMEOUT)
+
+        # 1) ждём готовность кнопки: НЕ disabled и НЕ --loading.
+        enable_timeout = _SEND_ENABLE_TIMEOUT_MEDIA if has_media else _SEND_ENABLE_TIMEOUT_TEXT
         try:
             await page.wait_for_function(
-                """([sel, cls]) => {
+                """([sel, loadingCls]) => {
                     const el = document.querySelector(sel);
-                    return el && el.className.includes(cls);
+                    if (!el) return false;
+                    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                    const loading = el.className.includes(loadingCls);
+                    return !disabled && !loading;
                 }""",
-                arg=[_SEND_BUTTON_SELECTOR, _SEND_ACTIVE_CLASS],
-                timeout=_COMPOSER_TIMEOUT,
+                arg=[_SEND_BUTTON_SELECTOR, _SEND_LOADING_CLASS],
+                timeout=enable_timeout,
             )
-        except Exception:
-            # кнопка могла не получить класс --submitActive в этой сборке —
-            # продолжаем, клик всё равно попробуем
-            pass
+        except Exception as exc:
+            if has_media:
+                raise RuntimeError(
+                    "vk_channel: фото не загрузилось в ВК (кнопка отправки осталась "
+                    "заблокирована — «Ошибка при загрузке»). Проверьте формат/размер "
+                    "изображения или опубликуйте пост без фото."
+                ) from exc
+            raise RuntimeError(
+                "vk_channel: кнопка отправки не активировалась (пустой пост или "
+                "изменился интерфейс ВК)."
+            ) from exc
 
-        # 2) клик
-        await page.locator(_SEND_BUTTON_SELECTOR).first.click()
+        # 2) клик с коротким таймаутом — кнопка уже готова, ждать 30с незачем
+        await page.locator(_SEND_BUTTON_SELECTOR).first.click(timeout=_CLICK_TIMEOUT)
 
-        # 3) verify: пост реально появился в истории канала
-        if not await self._verify_post_appeared(page):
-            raise RuntimeError("vk_channel: пост не появился в PostsHistory после отправки")
+        # 3) verify: ВК очистил composer → пост принят сервером
+        if not await self._verify_sent(page):
+            raise RuntimeError(
+                "vk_channel: пост не отправился (composer не очистился — ВК не принял "
+                "сообщение). Проверьте сессию/содержимое или повторите."
+            )
 
         return await self._extract_post_id(page)
 
-    async def _verify_post_appeared(self, page) -> bool:
-        """Дождаться появления поста в истории канала (PostsHistory заполнился).
+    async def _verify_sent(self, page) -> bool:
+        """Дождаться, что composer опустел → ВК принял пост (сигнал с живого DOM).
 
-        Надёжнее очистки поля: очистка бывает и без реальной отправки.
+        Contenteditable .ComposerInput__input очищается ТОЛЬКО после успешной
+        отправки на сервер. Пуллим inner_text до пустоты или таймаута. Ожидание
+        держит страницу открытой, пока XHR отправки не долетит (иначе браузер
+        закрывался раньше отправки → пост не уходил, а мы рапортовали done).
         """
-        try:
-            await page.wait_for_selector(_POSTS_HISTORY_SELECTOR, timeout=_SEND_TIMEOUT)
-            return True
-        except Exception:
-            return False
+        composer = page.locator(_COMPOSER_INPUT_SELECTOR).first
+        for _ in range(_VERIFY_POLLS):
+            try:
+                text = (await composer.inner_text()).strip()
+            except Exception:
+                return True  # composer исчез из DOM — тоже признак отправки
+            if text == "":
+                return True
+            await page.wait_for_timeout(_VERIFY_POLL_INTERVAL)
+        return False
 
     async def _extract_post_id(self, page) -> str:
-        """Попробовать вытащить id свежего поста из истории канала. Фолбэк 'posted'."""
+        """Вытащить ключ свежего поста из ленты канала. Фолбэк 'posted'.
+
+        Живой DOM: .PostsList__item[data-itemkey]. Стабильного post-id ВК в ленте
+        не отдаёт (канал-мессенджер), берём data-itemkey последнего элемента —
+        квитанция для верификации, НЕ ключ дедупа (дедуп — по publication_id).
+        """
         try:
-            post = page.locator("[data-post-id]").first
-            if await post.count() > 0:
-                post_id = await post.get_attribute("data-post-id") or ""
-                if post_id:
-                    return f"channel{post_id}"
+            items = page.locator(f"{_POST_ITEM_SELECTOR}[data-itemkey]")
+            count = await items.count()
+            if count > 0:
+                key = await items.nth(count - 1).get_attribute("data-itemkey") or ""
+                if key:
+                    return f"channel-item{key}"
         except Exception:
             pass
         return "posted"

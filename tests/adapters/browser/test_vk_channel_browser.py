@@ -53,6 +53,8 @@ def _make_page(*, file_input_exists: bool = True) -> AsyncMock:
         loc.type = AsyncMock()
         loc.press = AsyncMock()
         loc.all = AsyncMock(return_value=[])
+        # .nth() в Playwright синхронный и возвращает локатор — не корутину
+        loc.nth = MagicMock(return_value=loc.first)
         return loc
 
     page.locator = MagicMock(side_effect=_locator)
@@ -202,24 +204,51 @@ async def test_clicks_send_button_not_enter(store, publication_id):
 
 
 @pytest.mark.asyncio
-async def test_no_false_done_when_post_not_in_history(store, publication_id):
-    """Если пост НЕ появился в PostsHistory — НЕ done, mark_done не вызывается."""
+async def test_no_false_done_when_composer_not_cleared(store, publication_id, monkeypatch):
+    """Если composer НЕ очистился (ВК не принял пост) — НЕ done, mark_done не вызывается."""
+    from crosspost.adapters.browser import vk_channel as mod
+
+    monkeypatch.setattr(mod, "_VERIFY_POLLS", 2)  # не крутить 40 итераций в тесте
     adapter = _make_adapter(store)
     content = CanonicalContent(type=ContentType.POST, text="не ушёл", media_paths=[])
     page = _make_page()
 
-    # PostsHistory-ожидание падает → verify не прошёл
-    async def _wait_for_selector(selector, *a, **kw):
-        if "PostsHistory" in selector or "Post" in selector:
-            raise TimeoutError("PostsHistory пуст")
-        return AsyncMock()
+    # composer.inner_text ВСЕГДА непустой → verify_sent не дожидается очистки
+    def _locator_stuck(selector, **_kw):
+        loc = AsyncMock()
+        loc.first = AsyncMock()
+        loc.first.click = AsyncMock()
+        loc.first.type = AsyncMock()
+        loc.first.inner_text = AsyncMock(return_value="не ушёл")  # composer завис
+        loc.first.count = AsyncMock(return_value=1)
+        loc.count = AsyncMock(return_value=1)
+        loc.nth = MagicMock(return_value=AsyncMock())
+        return loc
 
-    page.wait_for_selector = AsyncMock(side_effect=_wait_for_selector)
+    page.locator = MagicMock(side_effect=_locator_stuck)
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="не отправился"):
             await adapter.publish(content, publication_id=publication_id)
 
+    assert not store.is_done(publication_id, "vk_channel")
+
+
+@pytest.mark.asyncio
+async def test_photo_upload_stuck_raises_clear_error(store, publication_id, sample_post):
+    """Фото не залилось (кнопка отправки осталась disabled) → понятная ошибка, не зависание."""
+    adapter = _make_adapter(store)
+    page = _make_page()
+
+    # wait_for_function для готовности кнопки падает → эмуляция застрявшей заливки фото
+    page.wait_for_function = AsyncMock(side_effect=TimeoutError("button still disabled"))
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        with pytest.raises(RuntimeError, match="фото не загрузилось"):
+            await adapter.publish(sample_post, publication_id=publication_id)
+
+    # клик по заблокированной кнопке НЕ делаем (иначе Playwright висит 30с):
+    # локатор кнопки мог быть создан для wait, но click() по нему не вызывался.
     assert not store.is_done(publication_id, "vk_channel")
 
 
