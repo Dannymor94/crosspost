@@ -46,6 +46,22 @@ def caption_fits(text_html: str) -> bool:
     return visible_length(text_html) <= CAPTION_LIMIT
 
 
+def split_headline(text_html: str) -> tuple[str, str]:
+    """Разбить длинный пост на заголовок-подпись и тело.
+
+    В двухсообщённом режиме фото не должно висеть немым: первая строка идёт
+    подписью под фото, остальное — отдельным сообщением. Заголовок убирается из
+    тела, чтобы не дублироваться.
+
+    Возвращает (caption, body). Откат к ("", text) — если первой строки нет
+    (нет перевода строки), она пустая, или не влезает в CAPTION_LIMIT.
+    """
+    head, sep, rest = text_html.partition("\n")
+    if not sep or not head.strip() or visible_length(head) > CAPTION_LIMIT:
+        return "", text_html
+    return head, rest.lstrip("\n")
+
+
 def exceeds_message_limit(text_html: str) -> bool:
     """Больше одного сообщения. Чанкинг не поддержан — вызывающий вернёт FAILED."""
     return visible_length(text_html) > MESSAGE_LIMIT

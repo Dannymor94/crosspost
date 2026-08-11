@@ -110,6 +110,7 @@ async def test_short_caption_single_call(tmp_path, store, publication_id, fake_t
 async def test_long_text_two_calls_photo_then_message(
     tmp_path, store, publication_id, fake_telethon_client
 ):
+    # без переводов строки — заголовка нет, подпись пустая, тело = весь текст
     long_text = "я" * (CAPTION_LIMIT + 200)  # видимых > 1024, но < 4096
     content = _post(tmp_path, long_text)
     adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store)
@@ -118,7 +119,7 @@ async def test_long_text_two_calls_photo_then_message(
 
     assert result.status is ResultStatus.DONE
     assert result.external_id == "12345"  # квитанция — id фото
-    # фото с пустой подписью…
+    # фото с пустой подписью (заголовок не выделился)…
     fake_telethon_client.send_file.assert_called_once()
     _, f_kwargs = fake_telethon_client.send_file.call_args
     assert f_kwargs["caption"] == ""
@@ -129,6 +130,29 @@ async def test_long_text_two_calls_photo_then_message(
     assert long_text in m_args
     assert m_kwargs["parse_mode"] == "html"
     assert store.is_done(publication_id, "telegram")
+
+
+@pytest.mark.asyncio
+async def test_long_text_first_line_becomes_caption(
+    tmp_path, store, publication_id, fake_telethon_client
+):
+    """Первая строка → подпись под фото, тело (без неё) → отдельным сообщением."""
+    headline = "Афиша месяца — август"
+    body = "тело поста " * 120  # так, чтобы весь текст был > 1024 видимых
+    content = _post(tmp_path, f"{headline}\n{body}")
+    adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store)
+
+    result = await adapter.publish(content, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    # фото получает заголовок подписью…
+    _, f_kwargs = fake_telethon_client.send_file.call_args
+    assert f_kwargs["caption"] == headline
+    # …а тело идёт следом БЕЗ заголовка (без дубля)
+    m_args, _ = fake_telethon_client.send_message.call_args
+    sent_body = m_args[-1]
+    assert sent_body == body
+    assert headline not in sent_body
 
 
 @pytest.mark.asyncio

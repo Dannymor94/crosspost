@@ -8,7 +8,8 @@
 
 Два режима по длине видимого текста (лимит подписи 1024):
   влезает    → одно сообщение: фото + подпись;
-  не влезает → фото с пустой подписью, следом отдельное сообщение с полным текстом.
+  не влезает → фото с подписью-заголовком (первая строка поста, чтобы не висело
+               немым), следом отдельное сообщение с телом (без заголовка).
   Тело > 4096 (одного сообщения мало) — FAILED, чанкинг сознательно не поддержан:
   риск дубля части текста в публичном канале дороже поддержки чанков.
 
@@ -33,6 +34,7 @@ from crosspost.content.telegram_text import (
     MESSAGE_LIMIT,
     caption_fits,
     exceeds_message_limit,
+    split_headline,
 )
 from crosspost.orchestrator.task import IdempotencyStore
 
@@ -82,7 +84,10 @@ class TelegramAdapter:
                 return ChannelResult(self.channel, ResultStatus.DONE, external_id=ext)
 
             # ── режим «фото, затем текст следом»: два вызова ───────────────────
-            if exceeds_message_limit(text):
+            # Первая строка → подпись под фото (чтобы не висело немым), остальное —
+            # отдельным сообщением. Тело проверяем на лимит сообщения.
+            caption, body = split_headline(text)
+            if exceeds_message_limit(body):
                 return ChannelResult(
                     self.channel,
                     ResultStatus.FAILED,
@@ -92,19 +97,19 @@ class TelegramAdapter:
 
             photo_pub = publication_id + _PHOTO_STEP
 
-            # Шаг 1 — фото с пустой подписью. Чекпоинт переживает падение шага 2:
-            # на ретрае фото не пересылается, id берём из стора.
+            # Шаг 1 — фото с короткой подписью-заголовком. Чекпоинт переживает
+            # падение шага 2: на ретрае фото не пересылается, id берём из стора.
             if self._store.is_done(photo_pub, self.channel):
                 photo_id = self._store.get_external_id(photo_pub, self.channel)
             else:
                 sent = await self._client.send_file(
-                    self._target, media, caption="", parse_mode="html"
+                    self._target, media, caption=caption, parse_mode="html"
                 )
                 photo_id = _first_id(sent)
                 self._store.mark_done(photo_pub, self.channel, external_id=photo_id)
 
-            # Шаг 2 — полный текст отдельным сообщением.
-            await self._client.send_message(self._target, text, parse_mode="html")
+            # Шаг 2 — тело (без заголовка) отдельным сообщением.
+            await self._client.send_message(self._target, body, parse_mode="html")
 
             # Оба сообщения прошли → канал done. Квитанция — id фото (визуальный якорь).
             self._store.mark_done(publication_id, self.channel, external_id=photo_id)
