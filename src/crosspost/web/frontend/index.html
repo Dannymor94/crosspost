@@ -1150,6 +1150,7 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   const [err, setErr] = useState(null);
   const [done, setDone] = useState(false);
   const [browserOpened, setBrowserOpened] = useState(false);
+  const [resent, setResent] = useState(false);   // код Telegram переслан заново
 
   const steps = allSteps.filter((s) => !s.optional || activated.has(s.key));
   const current = steps[idx];
@@ -1226,6 +1227,16 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     }
   }
 
+  // Переслать код Telegram заново (тот же send-code с сохранённым телефоном).
+  async function resendCode() {
+    setBusy(true); setErr(null); setResent(false);
+    try {
+      await api.post(`${pbase}/channels/telegram/login/send-code`, { phone: (values.phone || "").trim() });
+      setResent(true);
+    } catch (ex) { setErr(ex.message); }
+    finally { setBusy(false); }
+  }
+
   const ACTION_LABEL = {
     collect: "Далее", tg_begin: "Далее", tg_phone: "Отправить код",
     tg_code: "Подтвердить код", tg_twofa: "Подтвердить пароль",
@@ -1278,6 +1289,13 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     })),
 
     err && h(Alert, { type: "error" }, err),
+
+    // Пересыл кода Telegram (если шаг это объявляет).
+    current.resend_label && current.kind === "tg_code" && h("div", { style: { marginTop: "8px" } },
+      resent
+        ? h("p", { className: "form-hint", style: { color: "var(--live)" } }, "Код отправлен заново — проверьте чат «Telegram» в приложении.")
+        : h("button", { className: "btn btn-ghost btn-sm", onClick: resendCode, disabled: busy }, current.resend_label),
+    ),
 
     h("div", { className: "wiz-actions" },
       idx > 0 && h("button", { className: "btn btn-ghost btn-sm", onClick: goBack, disabled: busy }, "← Назад"),

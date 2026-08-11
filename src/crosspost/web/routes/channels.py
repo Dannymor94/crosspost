@@ -120,6 +120,7 @@ class WizardStepOut(BaseModel):
     link_label: str = ""
     fields: list[WizardFieldOut] = []
     optional: bool = False
+    resend_label: str = ""
 
 
 class ChannelGuideOut(BaseModel):
@@ -160,6 +161,7 @@ def _guide_out(guide) -> ChannelGuideOut | None:
                 link=s.link,
                 link_label=s.link_label,
                 optional=s.optional,
+                resend_label=s.resend_label,
                 fields=[
                     WizardFieldOut(
                         name=f.name,

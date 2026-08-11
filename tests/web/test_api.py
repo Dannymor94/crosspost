@@ -298,6 +298,18 @@ async def test_wizard_fields_declare_validation_rules(client: AsyncClient) -> No
                 assert f["normalize"] in known_norm, f"{ch}/{f['name']}: {f['normalize']}"
 
 
+async def test_telegram_code_step_clarifies_delivery_and_resend(client: AsyncClient) -> None:
+    """Код входа = 5 цифр В ПРИЛОЖЕНИИ, не буквенный код с сайта; есть пересыл."""
+    g = (await client.get("/api/channels/telegram/guide")).json()
+    code = next(s for s in g["steps"] if s["key"] == "code")
+    assert code["resend_label"]  # кнопка «отправить заново»
+    assert "приложени" in code["body"].lower()  # уточняем: код приходит в приложение
+    field = code["fields"][0]
+    assert "приложени" in (field["hint"] + field["invalid_message"]).lower()
+    # В справке есть пункт про недоставку кода (для «Не получается?»).
+    assert any("не приходит" in e["symptom"].lower() for e in g["errors"])
+
+
 async def test_every_channel_has_error_hints_for_stuck_panel() -> None:
     """Блок 4: у каждого включённого канала есть подсказки «Не получается?»."""
     from crosspost.channels.validators import VALIDATORS

@@ -113,7 +113,7 @@ async def begin(
     """Шаг 1: создать клиент, подключиться, запомнить конфиг. Возвращает следующий шаг."""
     if not api_id or not api_hash:
         raise TelegramLoginError(
-            "Укажите api_id и api_hash (my.telegram.org → API development tools)."
+            "Укажите api_id и api_hash (страница «App configuration» на my.telegram.org/apps)."
         )
     if not target_channel:
         raise TelegramLoginError("Укажите канал назначения (например, @mychannel).")
