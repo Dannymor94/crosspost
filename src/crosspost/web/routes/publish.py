@@ -102,15 +102,19 @@ class ScheduledOut(BaseModel):
 class ScheduledReportOut(BaseModel):
     """Итог поста, исполненного планировщиком (для «Журнала планировщика»).
 
-    Читается из УЖЕ сохранённого состояния (scheduled_posts + publications + logs),
+    Читается из УЖЕ сохранённого состояния (scheduled_posts + publications),
     поэтому переживает перезагрузку страницы. overall — свёртка поканальных
     статусов: done (все успешны) / partial (часть упала) / failed (все упали).
+    cursor — маркер published_at (ISO): фронт хранит его для since/before-догрузки.
+    Скриншоты сбоя здесь НЕ отдаём (тяжело) — их тянет отдельный эндпоинт при
+    раскрытии карточки.
     """
 
     id: int
     content_type: str
     text: str
     scheduled_at: str
+    cursor: str
     overall: str
     outcomes: list[OutcomeOut]
 
@@ -338,12 +342,23 @@ async def list_scheduled(profile_id: int, session: SessionDep) -> list[Scheduled
     "/api/profiles/{profile_id}/scheduled/report",
     response_model=list[ScheduledReportOut],
 )
-async def scheduled_report(profile_id: int, session: SessionDep) -> list[ScheduledReportOut]:
-    """Журнал планировщика: посты, которые он уже исполнил, с поканальными итогами.
+async def scheduled_report(
+    profile_id: int,
+    session: SessionDep,
+    limit: int = 20,
+    before: str | None = None,
+    since: str | None = None,
+) -> list[ScheduledReportOut]:
+    """Журнал планировщика: исполненные посты с поканальными итогами (без скриншотов).
 
     Читаем ТОЛЬКО существующее состояние — новых записей в БД не создаём:
-      scheduled_posts (status=published) → publications (schedpost-<id>) → logs.
-    Поэтому отчёт переживает перезагрузку страницы; фронт поллит его без refresh.
+      scheduled_posts (status=published) → publications (schedpost-<id>).
+    Пагинация/инкремент по published_at (см. list_executed):
+      • since=<iso> — только исполненные позже метки (догрузка новых, [] если нет);
+      • before=<iso> — страница «старше метки» («показать ещё»);
+      • limit — размер страницы (по умолчанию 20, потолок 100).
+    Скриншоты сбоя не в этом ответе — их подтягивает .../scheduled/{id}/screenshots
+    при раскрытии карточки. Отчёт переживает перезагрузку; фронт догружает без refresh.
     """
     # Локальный импорт: executor тянет crosspost.web.media — избегаем цикла загрузки.
     from crosspost.scheduler.executor import scheduled_publication_id
@@ -351,43 +366,70 @@ async def scheduled_report(profile_id: int, session: SessionDep) -> list[Schedul
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
 
-    # Скриншоты сбоев — из логов профиля, один запрос. Индексируем по (pubid, channel);
-    # логи идут новыми сверху, поэтому первый увиденный скриншот — самый свежий.
-    shots: dict[tuple[str, str], str] = {}
-    for lg in await LogRepository(session).list_for_profile(profile_id):
-        if lg.screenshot_path and lg.publication_id and lg.channel:
-            shots.setdefault((lg.publication_id, lg.channel), lg.screenshot_path)
+    limit = max(1, min(limit, 100))
+    before_dt = _parse_marker(before)
+    since_dt = _parse_marker(since)
 
     reports: list[ScheduledReportOut] = []
-    for post in await pub_repo.list_executed():
+    for post in await pub_repo.list_executed(limit=limit, before=before_dt, since=since_dt):
         pubid = scheduled_publication_id(post.id)
-        outcomes = []
-        for r in await pub_repo.list_statuses(pubid):
-            status = str(r.status)
-            # Скриншот — артефакт СБОЯ. Канал мог упасть на попытке 1 (скриншот в логах),
-            # а на ретрае дожаться (status=done) — тогда старый скриншот к нему не относится.
-            # Показываем скриншот только если ФИНАЛЬНЫЙ статус канала — не успех.
-            screenshot = None if status in _SUCCESS else shots.get((pubid, r.channel))
-            outcomes.append(
-                OutcomeOut(
-                    channel=r.channel,
-                    status=status,
-                    external_id=r.external_id,
-                    error=r.error,
-                    screenshot_path=screenshot,
-                )
+        outcomes = [
+            OutcomeOut(
+                channel=r.channel,
+                status=str(r.status),
+                external_id=r.external_id,
+                error=r.error,
             )
+            for r in await pub_repo.list_statuses(pubid)
+        ]
+        assert post.published_at is not None  # list_executed фильтрует published_at IS NOT NULL
         reports.append(
             ScheduledReportOut(
                 id=post.id,
                 content_type=post.content_type,
                 text=post.text,
                 scheduled_at=post.scheduled_at.isoformat(),
+                cursor=post.published_at.isoformat(),
                 overall=_overall_status(outcomes),
                 outcomes=outcomes,
             )
         )
     return reports
+
+
+@router.get("/api/profiles/{profile_id}/scheduled/{scheduled_id}/screenshots")
+async def scheduled_screenshots(
+    profile_id: int, scheduled_id: int, session: SessionDep
+) -> dict[str, str]:
+    """Скриншоты СБОЯ по каналам исполненного поста (подгружаются при раскрытии карточки).
+
+    Тяжёлый джойн по логам вынесен сюда, чтобы не тащить пути в общий ответ журнала.
+    Скриншот — артефакт сбоя: отдаём только для каналов с НЕуспешным финальным
+    статусом (канал мог упасть на попытке 1 и дожаться на ретрае — старый скриншот
+    к успеху не относится). Ключ — канал, значение — путь к скриншоту.
+    """
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+
+    pubid = scheduled_publication_id(scheduled_id)
+    failed = {
+        r.channel for r in await pub_repo.list_statuses(pubid) if str(r.status) not in _SUCCESS
+    }
+    if not failed:
+        return {}
+
+    shots: dict[str, str] = {}
+    for lg in await LogRepository(session).list_for_profile(profile_id):
+        if (
+            lg.screenshot_path
+            and lg.publication_id == pubid
+            and lg.channel in failed
+            and lg.channel not in shots  # логи новыми сверху → первый = самый свежий
+        ):
+            shots[lg.channel] = lg.screenshot_path
+    return shots
 
 
 class RescheduleBody(BaseModel):
@@ -514,6 +556,16 @@ def _cleanup_if_final(profile_id: int, publication_id: str, outcomes) -> None:
     if all(o.status in _SUCCESS for o in outcomes):
         media_store.cleanup_media(publication_id)
         _RUNS.pop((profile_id, publication_id), None)
+
+
+def _parse_marker(value: str | None) -> datetime | None:
+    """Разобрать курсор журнала (published_at ISO). Кривой/пустой → None (без фильтра)."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="cursor: ожидается ISO-8601") from exc
 
 
 def _overall_status(outcomes: list[OutcomeOut]) -> str:

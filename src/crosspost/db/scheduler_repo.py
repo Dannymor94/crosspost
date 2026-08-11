@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,11 +54,16 @@ class SchedulerRepository:
 
         «Исполнен» = все каналы финализировались (успех ИЛИ исчерпан ретрай).
         Поканальные итоги живут в publications; здесь только флаг «не брать снова».
+        published_at — момент исполнения (маркер журнала); ставим только при первом
+        переходе scheduled → published, чтобы курсор/since не «пересдвигались».
         """
         result = await self._s.execute(
             sql_update(ScheduledPost)
-            .where(ScheduledPost.id == scheduled_id)
-            .values(status=ScheduledPostStatus.PUBLISHED)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.status != ScheduledPostStatus.PUBLISHED,
+            )
+            .values(status=ScheduledPostStatus.PUBLISHED, published_at=datetime.now(UTC))
         )
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0

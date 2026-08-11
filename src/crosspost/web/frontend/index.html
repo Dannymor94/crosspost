@@ -1748,6 +1748,7 @@ function PublishView({ profile }) {
   const [retryCh, setRetryCh] = useState(null);
   const [scheduled, setScheduled] = useState([]);
   const [report, setReport] = useState([]);
+  const [reportMore, setReportMore] = useState(false);  // есть ли ещё старые страницы
   const [showSchedule, setShowSchedule] = useState(false);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
@@ -1764,19 +1765,61 @@ function PublishView({ profile }) {
     try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
   }, [base]);
 
-  // Журнал планировщика — итоги уже исполненных постов из БД (переживают перезагрузку).
-  const loadReport = useCallback(async () => {
-    try { setReport(await api.get(`${base}/scheduled/report`)); } catch (_) {}
+  // Журнал планировщика — итоги исполненных постов из БД (переживают перезагрузку).
+  // Историю грузим ОДИН раз (первая страница) и дополняем инкрементально по курсору
+  // published_at: since — новые сверху, before — старые по кнопке «показать ещё».
+  const newestCursor = useRef(null);  // published_at самой свежей записи — для since
+  const oldestCursor = useRef(null);  // published_at самой старой — для before
+  useEffect(() => {
+    newestCursor.current = report.length ? report[0].cursor : null;
+    oldestCursor.current = report.length ? report[report.length - 1].cursor : null;
+  }, [report]);
+
+  const loadReportInitial = useCallback(async () => {
+    try {
+      const rows = await api.get(`${base}/scheduled/report?limit=${REPORT_PAGE}`);
+      setReport(rows);
+      setReportMore(rows.length === REPORT_PAGE);
+    } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); loadScheduled(); loadReport(); }, [loadTargets, loadScheduled, loadReport]);
+  // Инкремент: тянем только исполненное ПОЗЖЕ маркера. Пусто → ничего не перерисовываем.
+  const loadReportDelta = useCallback(async () => {
+    const since = newestCursor.current;
+    if (!since) { loadReportInitial(); return; }
+    try {
+      const rows = await api.get(`${base}/scheduled/report?since=${encodeURIComponent(since)}`);
+      if (rows.length) setReport((prev) => mergeReports(prev, rows));
+    } catch (_) {}
+  }, [base, loadReportInitial]);
+
+  const loadReportMore = useCallback(async () => {
+    const before = oldestCursor.current;
+    if (!before) return;
+    try {
+      const rows = await api.get(`${base}/scheduled/report?before=${encodeURIComponent(before)}&limit=${REPORT_PAGE}`);
+      setReport((prev) => mergeReports(prev, rows));
+      setReportMore(rows.length === REPORT_PAGE);
+    } catch (_) {}
+  }, [base]);
+
+  useEffect(() => { loadTargets(); loadScheduled(); loadReportInitial(); }, [loadTargets, loadScheduled, loadReportInitial]);
 
   // Поллинг без перезагрузки: планировщик — фоновый процесс, отправляет посты сам.
-  // Раз в 10 сек подтягиваем очередь и журнал, чтобы статус менялся вживую.
+  // Очередь меняется часто → поллим каждые 10 сек; журнал — только инкремент (since).
+  // Page Visibility: на скрытой вкладке поллинг на паузе; при возврате — сразу тик.
   useEffect(() => {
-    const id = setInterval(() => { loadScheduled(); loadReport(); }, 10000);
-    return () => clearInterval(id);
-  }, [loadScheduled, loadReport]);
+    let timer = null;
+    const tick = () => { loadScheduled(); loadReportDelta(); };
+    const start = () => { if (!timer) timer = setInterval(tick, 10000); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const onVis = () => {
+      if (document.visibilityState === "visible") { tick(); start(); } else stop();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    if (document.visibilityState === "visible") start();
+    return () => { document.removeEventListener("visibilitychange", onVis); stop(); };
+  }, [loadScheduled, loadReportDelta]);
 
   function toggle(ch) {
     setSelected((prev) => {
@@ -1886,15 +1929,16 @@ function PublishView({ profile }) {
     h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
 
     // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
-    h(SchedulerReport, { items: report }),
+    h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore }),
 
     showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
 }
 
 // ── Журнал планировщика: исполненные посты с поканальными итогами ─────────────
-// Данные из БД (scheduled_posts + publications + logs) — переживают перезагрузку.
-// Обновляется поллингом из PublishView. Само хранение — на сервере, здесь только показ.
+// Данные из БД (scheduled_posts + publications) — переживают перезагрузку.
+// Пагинация и since-инкремент — на сервере; здесь показ + фильтр + докачка.
+// Скриншоты сбоя грузятся лениво при раскрытии карточки (отдельным запросом).
 
 const REPORT_META = {
   done: { cls: "success", label: "Отправлено" },
@@ -1902,8 +1946,18 @@ const REPORT_META = {
   failed: { cls: "error", label: "Не отправлено" },
   unknown: { cls: "info", label: "Без итогов" },
 };
-const REPORT_PAGE = 20;  // сколько показываем за раз (не грузим всю историю разом)
+const REPORT_PAGE = 20;  // размер страницы (совпадает с limit на сервере)
 const isReportProblem = (r) => r.overall === "partial" || r.overall === "failed";
+
+// Слить страницы журнала: дедуп по id, сортировка по курсору (published_at) — свежие
+// сверху. cursor — ISO в UTC, поэтому строковое сравнение = хронологическое.
+function mergeReports(prev, rows) {
+  if (!rows || !rows.length) return prev;
+  const byId = new Map(prev.map((r) => [r.id, r]));
+  rows.forEach((r) => byId.set(r.id, r));
+  return [...byId.values()].sort((a, b) =>
+    a.cursor < b.cursor ? 1 : a.cursor > b.cursor ? -1 : b.id - a.id);
+}
 
 // Метка дня для группировки: «Сегодня» / «Вчера» / дд.мм.гггг
 function reportDayLabel(iso) {
@@ -1916,56 +1970,59 @@ function reportDayLabel(iso) {
   return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
-function SchedulerReport({ items }) {
+function SchedulerReport({ base, items, hasMore, onMore }) {
   const [filter, setFilter] = useState("all");  // all | problems
-  const [limit, setLimit] = useState(REPORT_PAGE);
   if (!items || items.length === 0) return null;
 
   const problemCount = items.filter(isReportProblem).length;
-  const filtered = filter === "problems" ? items.filter(isReportProblem) : items;
-  const shown = filtered.slice(0, limit);  // items уже отсортированы: свежие сверху
+  const shown = filter === "problems" ? items.filter(isReportProblem) : items;
 
-  // Группировка по дням с сохранением порядка (свежие сверху).
+  // Группировка по дням с сохранением порядка (свежие сверху; курсор — published_at).
   const groups = [];
   for (const r of shown) {
-    const label = reportDayLabel(r.scheduled_at);
+    const label = reportDayLabel(r.cursor);
     let g = groups[groups.length - 1];
     if (!g || g.label !== label) { g = { label, rows: [] }; groups.push(g); }
     g.rows.push(r);
   }
 
-  const setF = (f) => { setFilter(f); setLimit(REPORT_PAGE); };
   return h("div", null,
     h("p", { className: "section-title", style: { marginTop: "24px" } }, "Журнал планировщика"),
     h("div", { className: "report-toolbar" },
       h("div", { className: "report-filter" },
-        h("button", { className: filter === "all" ? "active" : "", onClick: () => setF("all") }, "Все"),
-        h("button", { className: filter === "problems" ? "active" : "", onClick: () => setF("problems") },
+        h("button", { className: filter === "all" ? "active" : "", onClick: () => setFilter("all") }, "Все"),
+        h("button", { className: filter === "problems" ? "active" : "", onClick: () => setFilter("problems") },
           `Проблемные${problemCount ? ` · ${problemCount}` : ""}`),
       ),
-      h("span", { className: "report-count" }, `показано ${shown.length} из ${filtered.length}`),
+      h("span", { className: "report-count" }, `загружено ${items.length}`),
     ),
-    filtered.length === 0
-      ? h("p", { className: "text-3", style: { fontSize: "13px" } }, "Проблемных постов нет — всё отправилось.")
+    filter === "problems" && shown.length === 0
+      ? h("p", { className: "text-3", style: { fontSize: "13px" } }, "Проблемных постов среди загруженных нет.")
       : groups.map((g, i) => h("div", { key: i },
           h("div", { className: "report-day" }, g.label),
           h("div", { className: "report-rows" },
-            g.rows.map((r) => h(ReportRow, { key: r.id, r })),
+            g.rows.map((r) => h(ReportRow, { key: r.id, base, r })),
           ),
         )),
-    shown.length < filtered.length && h("button", {
-      className: "btn-ghost report-more", onClick: () => setLimit(limit + REPORT_PAGE),
-    }, "Показать ещё"),
+    hasMore && h("button", { className: "btn-ghost report-more", onClick: onMore }, "Показать ещё"),
   );
 }
 
 // Компактная строка: время · превью · статус-точки каналов · раскрытие деталей по клику.
 // Успешные свёрнуты и приглушены; проблемные (partial/failed) раскрыты и заметны.
-function ReportRow({ r }) {
+// Скриншоты сбоя тянем лениво (только для проблемных) при первом раскрытии.
+function ReportRow({ base, r }) {
   const problem = isReportProblem(r);
   const [open, setOpen] = useState(problem);
+  const [shots, setShots] = useState(null);  // null=не грузили, {} или {channel: path}
+  useEffect(() => {
+    if (open && problem && shots === null) {
+      api.get(`${base}/scheduled/${r.id}/screenshots`).then(setShots).catch(() => setShots({}));
+    }
+  }, [open, problem, shots, base, r.id]);
+
   const meta = REPORT_META[r.overall] || REPORT_META.unknown;
-  const when = new Date(r.scheduled_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const when = new Date(r.cursor).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const preview = (r.text || "").trim() || "(без текста)";
   return h("div", { className: `report-row ${meta.cls}${problem ? "" : " muted"}` },
     h("button", { className: "report-row-head", onClick: () => setOpen(!open) },
@@ -1983,11 +2040,12 @@ function ReportRow({ r }) {
     open && h("div", { className: "report-detail" },
       r.outcomes.map((o) => {
         const cm = OUTCOME_META[o.status] || { cls: "info", label: o.status };
+        const shot = shots && shots[o.channel];
         return h("div", { className: "report-chan-row", key: o.channel },
           h("span", { className: `outcome-badge ${cm.cls}` }, cm.label),
           h("span", { className: "outcome-ch mono" }, o.channel),
           o.error && h("span", { className: "outcome-err" }, o.error),
-          o.screenshot_path && h("span", { className: "text-3 mono" }, "📷 скриншот сбоя"),
+          shot && h("span", { className: "text-3 mono" }, "📷 скриншот сбоя"),
         );
       }),
     ),

@@ -166,22 +166,40 @@ class PublicationRepository:
         )
         return list(result.scalars().all())
 
-    async def list_executed(self, *, limit: int = 100) -> list[ScheduledPost]:
+    async def list_executed(
+        self,
+        *,
+        limit: int = 20,
+        before: datetime | None = None,
+        since: datetime | None = None,
+    ) -> list[ScheduledPost]:
         """Исполненные планировщиком посты профиля (status=published), новые сверху.
 
         Для «Журнала планировщика»: пост в published переходит, когда ВСЕ его
         каналы финализировались (успех ИЛИ исчерпан ретрай). Поканальные итоги —
         отдельно, в publications по ключу schedpost-<id> (см. роут отчёта).
+
+        Курсор/инкремент — по published_at (момент исполнения, монотонный):
+          • since — только исполненные ПОЗЖЕ метки (published_at > since): фронт
+            догружает новые записи, не перекачивая историю. Нет новых → [].
+          • before — страница «старше метки» (published_at < before): «показать ещё».
+          • без курсора — последние `limit` записей.
+        Индекс ix_scheduled_report (profile_id, status, published_at) покрывает запрос.
+        Строки без published_at (легаси до фичи) в журнал не попадают — у них нет курсора.
         """
-        result = await self._s.execute(
-            select(ScheduledPost)
-            .where(
-                ScheduledPost.profile_id == self._pid,
-                ScheduledPost.status == ScheduledPostStatus.PUBLISHED,
-            )
-            .order_by(ScheduledPost.scheduled_at.desc(), ScheduledPost.id.desc())
-            .limit(limit)
+        stmt = select(ScheduledPost).where(
+            ScheduledPost.profile_id == self._pid,
+            ScheduledPost.status == ScheduledPostStatus.PUBLISHED,
+            ScheduledPost.published_at.isnot(None),
         )
+        if since is not None:
+            stmt = stmt.where(ScheduledPost.published_at > since)
+        if before is not None:
+            stmt = stmt.where(ScheduledPost.published_at < before)
+        stmt = stmt.order_by(ScheduledPost.published_at.desc(), ScheduledPost.id.desc()).limit(
+            limit
+        )
+        result = await self._s.execute(stmt)
         return list(result.scalars().all())
 
     async def get_scheduled(self, scheduled_id: int) -> ScheduledPost | None:

@@ -283,43 +283,84 @@ async def test_schedule_list_cancel(client, factory):
     assert (await client.get(f"/api/profiles/{pid}/scheduled")).json() == []
 
 
-async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
-    """Журнал планировщика: исполненный пост читается из БД с поканальными итогами
-    и скриншотом сбоя. Переживает перезагрузку (данные не эфемерны)."""
+async def _make_executed(
+    factory,
+    pid: int,
+    *,
+    text: str,
+    channels: dict[str, tuple],  # channel -> (PublicationStatus, external_id|error)
+    published_at,
+    screenshots: dict[str, str] | None = None,
+):
+    """Создать пост, проставить поканальные статусы, исполнить (published_at детермин.).
+
+    published_at выставляем явно — курсор/since/before тестируем без гонки с часами.
+    """
     from datetime import datetime
 
+    from sqlalchemy import update as sql_update
+
     from crosspost.db.log_repo import LogRepository
-    from crosspost.db.models import PublicationStatus
+    from crosspost.db.models import PublicationStatus, ScheduledPost
     from crosspost.db.publication_repo import PublicationRepository
     from crosspost.db.scheduler_repo import SchedulerRepository
     from crosspost.scheduler.executor import scheduled_publication_id
-
-    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
 
     async with factory() as s:
         repo = PublicationRepository(s, profile_id=pid)
         post = await repo.create_scheduled(
             content_type="post",
-            text="утренний пост",
+            text=text,
             title=None,
             media_paths=[],
-            channels=["telegram", "vk_wall"],
+            channels=list(channels),
             scheduled_at=datetime(2026, 8, 10, 9, 0),
         )
         pubid = scheduled_publication_id(post.id)
-        # телега — ок, стена — упала (частичный успех)
-        await repo.set_status(pubid, "telegram", PublicationStatus.DONE, external_id="tg-42")
-        await repo.set_status(pubid, "vk_wall", PublicationStatus.FAILED, error="сессия протухла")
+        for ch, (status, extra) in channels.items():
+            if status == PublicationStatus.DONE:
+                await repo.set_status(pubid, ch, status, external_id=extra)
+            else:
+                await repo.set_status(pubid, ch, status, error=extra)
+        for ch, path in (screenshots or {}).items():
+            await LogRepository(s).add(
+                pid,
+                channel=ch,
+                publication_id=pubid,
+                level="ERROR",
+                message=f"scheduler: {ch} → failed",
+                screenshot_path=path,
+            )
         await SchedulerRepository(s).mark_published(post.id)
-        # скриншот браузерного сбоя — в логах
-        await LogRepository(s).add(
-            pid,
-            channel="vk_wall",
-            publication_id=pubid,
-            level="ERROR",
-            message="scheduler: vk_wall → failed",
-            screenshot_path="/shots/x.png",
+        # Детерминированный маркер исполнения (перебиваем реальные часы mark_published).
+        await s.execute(
+            sql_update(ScheduledPost)
+            .where(ScheduledPost.id == post.id)
+            .values(published_at=published_at)
         )
+        await s.commit()
+        return post.id
+
+
+async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
+    """Журнал планировщика: исполненный пост читается из БД с поканальными итогами.
+    Переживает перезагрузку (данные не эфемерны). Скриншоты — отдельным запросом."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    post_id = await _make_executed(
+        factory,
+        pid,
+        text="утренний пост",
+        channels={
+            "telegram": (PublicationStatus.DONE, "tg-42"),
+            "vk_wall": (PublicationStatus.FAILED, "сессия протухла"),
+        },
+        published_at=datetime(2026, 8, 10, 9, 5, tzinfo=UTC),
+        screenshots={"vk_wall": "/shots/x.png"},
+    )
 
     # запланированные (ещё не отправленные) — пусто, пост уже исполнен
     assert (await client.get(f"/api/profiles/{pid}/scheduled")).json() == []
@@ -331,60 +372,142 @@ async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
     row = report[0]
     assert row["text"] == "утренний пост"
     assert row["overall"] == "partial"  # один успех, один провал
+    assert row["cursor"].startswith("2026-08-10T09:05")  # курсор = published_at
     by = {o["channel"]: o for o in row["outcomes"]}
     assert by["telegram"]["status"] == "done"
     assert by["telegram"]["external_id"] == "tg-42"
     assert by["vk_wall"]["status"] == "failed"
     assert by["vk_wall"]["error"] == "сессия протухла"
-    assert by["vk_wall"]["screenshot_path"] == "/shots/x.png"
+    # Скриншоты НЕ в общем ответе журнала (грузятся лениво).
+    assert by["vk_wall"].get("screenshot_path") is None
+
+    # Ленивая подгрузка скриншотов сбоя — отдельный эндпоинт.
+    shots = (await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/screenshots")).json()
+    assert shots == {"vk_wall": "/shots/x.png"}
 
 
-async def test_scheduled_report_hides_screenshot_for_succeeded_channel(client, factory):
+async def test_scheduled_screenshots_only_for_failed_channel(client, factory):
     """Канал упал на попытке 1 (скриншот в логах), но дожался на ретрае (done).
 
-    Скриншот — артефакт СБОЯ; для успешного финального статуса он не должен
-    подтягиваться, иначе UI показывает «Отправлено» + «скриншот сбоя» — противоречие.
+    Скриншот — артефакт СБОЯ; для успешного финального статуса он не отдаётся,
+    иначе UI показал бы «Отправлено» + «скриншот сбоя» — противоречие.
     """
-    from datetime import datetime
+    from datetime import UTC, datetime
 
-    from crosspost.db.log_repo import LogRepository
     from crosspost.db.models import PublicationStatus
-    from crosspost.db.publication_repo import PublicationRepository
-    from crosspost.db.scheduler_repo import SchedulerRepository
-    from crosspost.scheduler.executor import scheduled_publication_id
 
     pid = await _make_profile_with_live(factory, ["vk_wall"])
+    post_id = await _make_executed(
+        factory,
+        pid,
+        text="дожали со второй попытки",
+        channels={"vk_wall": (PublicationStatus.DONE, "vk-7")},
+        published_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+        screenshots={"vk_wall": "/shots/stale.png"},  # старый скриншот попытки 1
+    )
 
-    async with factory() as s:
-        repo = PublicationRepository(s, profile_id=pid)
-        post = await repo.create_scheduled(
-            content_type="post",
-            text="дожали со второй попытки",
-            title=None,
-            media_paths=[],
-            channels=["vk_wall"],
-            scheduled_at=datetime(2026, 8, 10, 9, 0),
-        )
-        pubid = scheduled_publication_id(post.id)
-        # Попытка 1 упала → скриншот в логах. Финальный статус — done (ретрай дожал).
-        await LogRepository(s).add(
-            pid,
-            channel="vk_wall",
-            publication_id=pubid,
-            level="ERROR",
-            message="scheduler: vk_wall → failed (попытка 1)",
-            screenshot_path="/shots/stale.png",
-        )
-        await repo.set_status(pubid, "vk_wall", PublicationStatus.DONE, external_id="vk-7")
-        await SchedulerRepository(s).mark_published(post.id)
-
-    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
-    assert resp.status_code == 200, resp.text
-    row = resp.json()[0]
+    row = (await client.get(f"/api/profiles/{pid}/scheduled/report")).json()[0]
     assert row["overall"] == "done"
-    o = row["outcomes"][0]
-    assert o["status"] == "done"
-    assert o["screenshot_path"] is None  # успех не тащит старый скриншот сбоя
+
+    shots = (await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/screenshots")).json()
+    assert shots == {}  # успех не тащит старый скриншот сбоя
+
+
+async def test_scheduled_report_paginates_limit_and_before(client, factory):
+    """limit ограничивает набор (последние N по published_at); before отдаёт старше метки."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ids = []
+    for i in range(5):  # published_at растёт: пост i исполнен в 09:0i
+        ids.append(
+            await _make_executed(
+                factory,
+                pid,
+                text=f"пост {i}",
+                channels={"telegram": (PublicationStatus.DONE, f"tg-{i}")},
+                published_at=datetime(2026, 8, 10, 9, i, tzinfo=UTC),
+            )
+        )
+
+    # Первая страница — 2 самых свежих (посты 4 и 3), новые сверху.
+    page1 = (await client.get(f"/api/profiles/{pid}/scheduled/report?limit=2")).json()
+    assert [r["text"] for r in page1] == ["пост 4", "пост 3"]
+
+    # «Показать ещё»: before = курсор последней записи (пост 3) → следующие 2 старше.
+    cursor = page1[-1]["cursor"]
+    page2 = (
+        await client.get(f"/api/profiles/{pid}/scheduled/report?limit=2&before={cursor}")
+    ).json()
+    assert [r["text"] for r in page2] == ["пост 2", "пост 1"]
+
+
+async def test_scheduled_report_since_returns_only_newer(client, factory):
+    """since отдаёт только исполненное ПОЗЖЕ метки; нет новых → пустой ответ."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    await _make_executed(
+        factory,
+        pid,
+        text="старый",
+        channels={"telegram": (PublicationStatus.DONE, "tg-old")},
+        published_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+    )
+
+    full = (await client.get(f"/api/profiles/{pid}/scheduled/report")).json()
+    newest_cursor = full[0]["cursor"]
+
+    # Ничего нового после последней метки → [].
+    assert (
+        await client.get(f"/api/profiles/{pid}/scheduled/report?since={newest_cursor}")
+    ).json() == []
+
+    # Исполнили новый пост позже метки — since отдаёт только его.
+    await _make_executed(
+        factory,
+        pid,
+        text="свежий",
+        channels={"telegram": (PublicationStatus.DONE, "tg-new")},
+        published_at=datetime(2026, 8, 10, 9, 30, tzinfo=UTC),
+    )
+    delta = (await client.get(f"/api/profiles/{pid}/scheduled/report?since={newest_cursor}")).json()
+    assert [r["text"] for r in delta] == ["свежий"]
+
+
+async def test_scheduled_report_isolated_by_profile(client, factory):
+    """Журнал и скриншоты строго scoped по profile_id — чужие посты не видны."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid_a = await _make_profile_with_live(factory, ["telegram"], name="client-a")
+    pid_b = await _make_profile_with_live(factory, ["telegram"], name="client-b")
+    id_a = await _make_executed(
+        factory,
+        pid_a,
+        text="пост A",
+        channels={"telegram": (PublicationStatus.DONE, "tg-a")},
+        published_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+    )
+    await _make_executed(
+        factory,
+        pid_b,
+        text="пост B",
+        channels={"telegram": (PublicationStatus.DONE, "tg-b")},
+        published_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+    )
+
+    report_b = (await client.get(f"/api/profiles/{pid_b}/scheduled/report")).json()
+    assert [r["text"] for r in report_b] == ["пост B"]  # чужого поста A нет
+
+    # Пост A под профилем B не читается (scoping list_statuses по profile_id).
+    shots = (await client.get(f"/api/profiles/{pid_b}/scheduled/{id_a}/screenshots")).json()
+    assert shots == {}
 
 
 async def test_scheduled_report_empty_when_nothing_executed(client, factory):

@@ -20,6 +20,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -195,6 +196,9 @@ class ScheduledPost(Base):
     """
 
     __tablename__ = "scheduled_posts"
+    # Джойн «Журнала планировщика»: фильтр (profile_id, status=published) + курсор/
+    # сортировка по published_at. Индекс покрывает и пагинацию, и since-инкремент.
+    __table_args__ = (Index("ix_scheduled_report", "profile_id", "status", "published_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     profile_id: Mapped[int] = mapped_column(
@@ -212,6 +216,10 @@ class ScheduledPost(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now()
     )
+    # Момент ИСПОЛНЕНИЯ (перехода в published). Проставляется один раз в mark_published.
+    # Монотонный маркер: сортировка/курсор журнала и since-инкремент строятся на нём,
+    # а не на scheduled_at (то — плановое время, при publish-now скачет в будущее).
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     profile: Mapped[Profile] = relationship("Profile")
 
