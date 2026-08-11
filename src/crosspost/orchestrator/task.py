@@ -39,6 +39,15 @@ def new_publication_id() -> str:
 class IdempotencyStore(Protocol):
     def is_done(self, publication_id: str, channel: str) -> bool: ...
     def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None: ...
+    def get_external_id(self, publication_id: str, channel: str) -> str | None:
+        """Квитанция по ключу (publication_id, channel), либо None.
+
+        Нужна адаптерам с многошаговой отправкой: при ретрае после падения
+        второго вызова позволяет прочитать id уже отправленного первого
+        сообщения, не пересылая его повторно (см. TelegramAdapter, двухсообщённый
+        режим). external_id — квитанция, НЕ ключ дедупа (§6.1).
+        """
+        ...
 
 
 class InMemoryIdempotencyStore:
@@ -52,6 +61,9 @@ class InMemoryIdempotencyStore:
 
     def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None:
         self._done[(publication_id, channel)] = external_id
+
+    def get_external_id(self, publication_id: str, channel: str) -> str | None:
+        return self._done.get((publication_id, channel))
 
 
 class JSONIdempotencyStore:
@@ -83,3 +95,6 @@ class JSONIdempotencyStore:
     def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None:
         self._done[(publication_id, channel)] = external_id
         self._flush()
+
+    def get_external_id(self, publication_id: str, channel: str) -> str | None:
+        return self._done.get((publication_id, channel))
