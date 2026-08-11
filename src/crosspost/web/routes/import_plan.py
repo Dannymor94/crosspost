@@ -61,6 +61,7 @@ class ProblemOut(BaseModel):
 class PreviewOut(BaseModel):
     resolved: list[ResolvedOut]
     problems: list[ProblemOut]
+    warnings: list[ProblemOut]  # файл не найден → пост выйдет без фото
     unmatched_files: list[str]
     resolved_count: int
     problem_count: int
@@ -69,6 +70,7 @@ class PreviewOut(BaseModel):
 class CommitOut(BaseModel):
     created: int
     problems: list[ProblemOut]
+    warnings: list[ProblemOut]  # посты без фото (файл не был загружен)
     skipped_count: int  # число строк, не попавших в БД
 
 
@@ -107,6 +109,10 @@ def _to_preview(report: ImportReport) -> PreviewOut:
         problems=[
             ProblemOut(row_number=p.row_number, file=p.file, reason=p.reason)
             for p in report.problems
+        ],
+        warnings=[
+            ProblemOut(row_number=w.row_number, file=w.file, reason=w.reason)
+            for w in report.warnings
         ],
         unmatched_files=report.unmatched_files,
         resolved_count=report.matched_count,
@@ -228,17 +234,24 @@ async def import_commit(
     report = build_plan(rows, available_names, rule)
 
     problems: list[RowProblem] = list(report.problems)
+    commit_warnings: list[RowProblem] = list(report.warnings)
     created = 0
 
     for rrow in report.resolved:
-        upload = media_by_basename.get(_basename_lower(rrow.file))
-        if upload is None:
-            problems.append(RowProblem(rrow.row_number, rrow.file, "файл не загружен на сервер"))
-            continue
-
-        await upload.seek(0)
-        key = f"sched-{new_publication_id()}"
-        saved_paths = await media_store.save_uploads([upload], key)
+        saved_paths: list[str] = []
+        if rrow.file:
+            upload = media_by_basename.get(_basename_lower(rrow.file))
+            if upload is None:
+                # Файл был указан, но реально не загружен — публикуем без фото.
+                commit_warnings.append(
+                    RowProblem(
+                        rrow.row_number, rrow.file, "картинка не загружена — пост выйдет без фото"
+                    )
+                )
+            else:
+                await upload.seek(0)
+                key = f"sched-{new_publication_id()}"
+                saved_paths = await media_store.save_uploads([upload], key)
 
         await pub_repo.create_scheduled(
             content_type=content_type,
@@ -254,6 +267,10 @@ async def import_commit(
         created=created,
         problems=[
             ProblemOut(row_number=p.row_number, file=p.file, reason=p.reason) for p in problems
+        ],
+        warnings=[
+            ProblemOut(row_number=w.row_number, file=w.file, reason=w.reason)
+            for w in commit_warnings
         ],
         skipped_count=len(problems),
     )

@@ -113,7 +113,8 @@ async def test_preview_links_all_rows(client, factory):
     assert all(r["source"] == "rule" for r in body["resolved"])
 
 
-async def test_preview_missing_file_reported_as_problem(client, factory):
+async def test_preview_missing_file_becomes_warning(client, factory):
+    """Файл указан, но не загружен → предупреждение, пост планируется без фото."""
     pid = await _make_profile_with_live(factory, [], name="prev-miss")
     resp = await client.post(
         f"/api/profiles/{pid}/import/preview",
@@ -126,9 +127,10 @@ async def test_preview_missing_file_reported_as_problem(client, factory):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["resolved_count"] == 0
-    assert body["problem_count"] == 1
-    assert "не найден" in body["problems"][0]["reason"]
+    assert body["resolved_count"] == 1  # запланирован
+    assert body["problem_count"] == 0  # не ошибка
+    assert len(body["warnings"]) == 1
+    assert "без фото" in body["warnings"][0]["reason"]
     assert body["unmatched_files"] == ["other.jpg"]
 
 
@@ -297,8 +299,8 @@ async def test_commit_rejects_non_live_channel(client, factory):
     assert "подключ" in resp.json()["detail"].lower()
 
 
-async def test_commit_partial_skip_missing_media(client, factory):
-    """02.jpg не загружен → 1 created + 1 problem, не 422."""
+async def test_commit_missing_media_becomes_warning(client, factory):
+    """02.jpg не загружен → пост создаётся без фото (warning), не пропускается."""
     pid = await _make_profile_with_live(factory, ["telegram"], name="com-partial")
     csv = _csv("файл,текст\n01.jpg,Пост 1\n02.jpg,Пост 2\n")
     resp = await client.post(
@@ -317,13 +319,14 @@ async def test_commit_partial_skip_missing_media(client, factory):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["created"] == 1
-    assert body["skipped_count"] == 1
-    assert "загружен" in body["problems"][0]["reason"]
+    assert body["created"] == 2  # оба поста созданы
+    assert body["skipped_count"] == 0
+    assert len(body["warnings"]) == 1
+    assert "без фото" in body["warnings"][0]["reason"]
 
     async with factory() as s:
         posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
-    assert len(posts) == 1
+    assert len(posts) == 2
 
 
 async def test_commit_explicit_dates_no_rule(client, factory):

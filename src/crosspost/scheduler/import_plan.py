@@ -173,7 +173,15 @@ def parse_table(data: bytes, filename: str) -> list[PlanRow]:
 
 
 def _read_csv(data: bytes) -> list[list]:
-    text = data.decode("utf-8-sig", errors="replace")
+    # Пробуем UTF-8 (с BOM), затем cp1251 — типичный экспорт Windows/Excel на ru-локали.
+    for enc in ("utf-8-sig", "cp1251"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = data.decode("utf-8-sig", errors="replace")
     # Определяем разделитель (запятая или точка с запятой — частый экспорт из Excel).
     sample = text[:2048]
     delimiter = ";" if sample.count(";") > sample.count(",") else ","
@@ -275,11 +283,18 @@ class ImportReport:
 
     resolved: list[ResolvedRow] = field(default_factory=list)
     problems: list[RowProblem] = field(default_factory=list)
+    warnings: list[RowProblem] = field(default_factory=list)  # файл не найден → текст без картинки
     unmatched_files: list[str] = field(default_factory=list)  # картинки без строки в плане
 
     @property
     def matched_count(self) -> int:
         return len(self.resolved)
+
+
+def _first_number(name: str) -> int | None:
+    """Первое число в имени файла: 'cover_1.png' → 1, '02.jpg' → 2, 'photo' → None."""
+    m = re.search(r"\d+", _basename(name))
+    return int(m.group()) if m else None
 
 
 def build_plan(
@@ -290,32 +305,56 @@ def build_plan(
     """Связать строки с файлами и назначить время. Не пишет ничего — только считает.
 
     available_files — имена загруженных картинок (сопоставление по basename,
-    регистронезависимо). rule может быть None, если ВСЕ строки с явной датой.
+    регистронезависимо). Сопоставление двухэтапное:
+      1. Точное совпадение имени (регистронезависимо).
+      2. Гибкое: первое число в имени файла CSV = первое число в имени загруженного файла
+         (например, '1.jpg' совпадает с 'cover_1.png').
+    rule может быть None, если ВСЕ строки с явной датой.
     """
-    # Индекс доступных файлов: lower(basename) → оригинальное имя.
+    # Индекс точного совпадения: lower(basename) → оригинальное имя.
     avail_index: dict[str, str] = {}
+    # Индекс гибкого совпадения: первое число → оригинальное имя (первый wins).
+    number_index: dict[int, str] = {}
     for name in available_files:
         base = _basename(name)
         avail_index.setdefault(base.lower(), name)
+        n = _first_number(base)
+        if n is not None:
+            number_index.setdefault(n, name)
 
     report = ImportReport()
     used_files: set[str] = set()
     rule_candidates: list[tuple[PlanRow, str]] = []  # (row, matched_original_name)
 
     for row in rows:
-        if not row.file:
-            report.problems.append(RowProblem(row.row_number, "", "пустое имя файла"))
-            continue
         if not row.text:
             report.problems.append(RowProblem(row.row_number, row.file, "пустой текст поста"))
             continue
-        matched = avail_index.get(_basename(row.file).lower())
-        if matched is None:
-            report.problems.append(
-                RowProblem(row.row_number, row.file, "файл не найден среди загруженных картинок")
-            )
-            continue
-        used_files.add(matched)
+
+        matched: str
+        if not row.file:
+            matched = ""  # нет колонки файла — текстовый пост без предупреждения
+        else:
+            row_base = _basename(row.file)
+            exact = avail_index.get(row_base.lower())
+            if exact is not None:
+                matched = exact
+                used_files.add(matched)
+            else:
+                # Гибкое сопоставление по первому числу в имени.
+                n = _first_number(row_base)
+                flex = number_index.get(n) if n is not None else None
+                if flex is not None:
+                    matched = flex
+                    used_files.add(matched)
+                else:
+                    # Файл не найден ни одним способом — текстовый пост + предупреждение.
+                    report.warnings.append(
+                        RowProblem(
+                            row.row_number, row.file, "картинка не загружена — пост выйдет без фото"
+                        )
+                    )
+                    matched = ""
 
         if row.explicit_date is not None:
             # Явная дата — приоритет над правилом. Время: из строки, иначе первое
@@ -343,7 +382,9 @@ def build_plan(
                     )
                 )
         else:
-            rule_candidates.sort(key=lambda rc: natural_key(rc[1]))
+            # Сортируем по оригинальному имени из CSV (rc[0].file), а не по matched —
+            # иначе гибкое совпадение 'cover_1.png' ломает порядок '1.jpg < 2.jpg < 10.jpg'.
+            rule_candidates.sort(key=lambda rc: natural_key(rc[0].file or rc[1]))
             for ordinal, (row, matched) in enumerate(rule_candidates):
                 report.resolved.append(
                     ResolvedRow(

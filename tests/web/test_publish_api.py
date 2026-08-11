@@ -306,6 +306,112 @@ async def test_reschedule_missing_post_404(client, factory):
     assert resp.status_code == 404
 
 
+# ── Publish now (немедленная отправка запланированного) ───────────────────────
+
+
+class _FakeExecutor:
+    """Мок исполнителя: пишет статусы каналов как реальный, без браузера."""
+
+    def __init__(self, factory, statuses: dict[str, tuple[str, str | None]]):
+        self._factory = factory
+        self._statuses = statuses  # channel → (status, error)
+
+    async def publish_post_now(self, post_id: int) -> None:
+        from crosspost.db.publication_repo import PublicationRepository
+        from crosspost.scheduler.executor import scheduled_publication_id
+
+        pubid = scheduled_publication_id(post_id)
+        async with self._factory() as s:
+            post = await PublicationRepository(s, profile_id=1).get_scheduled(post_id)
+            repo = PublicationRepository(s, profile_id=post.profile_id)
+            for ch, (st, err) in self._statuses.items():
+                from crosspost.db.models import PublicationStatus
+
+                await repo.set_status(pubid, ch, PublicationStatus(st), error=err)
+
+
+async def _schedule_one(client, pid, channels: list[str]) -> int:
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "now-or-never",
+            "channels": json.dumps(channels),
+            "scheduled_at": "2026-08-01T12:00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"]
+
+
+async def _client_with_executor(factory, executor):
+    """Отдельный клиент с executor в app.state (основной фикстурный его не ставит)."""
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.user_repo import UserRepository
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        yield
+
+    app = FastAPI(lifespan=_lifespan)
+    for r in (profiles, channels, tg_login, publish):
+        app.include_router(r.router)
+    app.state.executor = executor
+
+    async with factory() as s:
+        admin = await UserRepository(s).create_user("adm2", "pw", role=Role.ADMIN)
+        admin_id = admin.id
+    c = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    c.cookies.set("session", sign_session(admin_id))
+    return c
+
+
+async def test_publish_now_reports_success(factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ex = _FakeExecutor(factory, {"telegram": ("done", None)})
+    c = await _client_with_executor(factory, ex)
+    async with c:
+        sched_id = await _schedule_one(c, pid, ["telegram"])
+        resp = await c.post(f"/api/profiles/{pid}/scheduled/{sched_id}/publish-now")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["all_done"] is True
+    assert body["results"] == [{"channel": "telegram", "status": "done", "error": None}]
+
+
+async def test_publish_now_reports_failure(factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ex = _FakeExecutor(factory, {"telegram": ("failed", "ВК: пост не появился в истории")})
+    c = await _client_with_executor(factory, ex)
+    async with c:
+        sched_id = await _schedule_one(c, pid, ["telegram"])
+        resp = await c.post(f"/api/profiles/{pid}/scheduled/{sched_id}/publish-now")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["all_done"] is False
+    assert body["results"][0]["status"] == "failed"
+    assert "не появился" in body["results"][0]["error"]
+
+
+async def test_publish_now_missing_post_404(factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ex = _FakeExecutor(factory, {})
+    c = await _client_with_executor(factory, ex)
+    async with c:
+        resp = await c.post(f"/api/profiles/{pid}/scheduled/99999/publish-now")
+    assert resp.status_code == 404
+
+
+async def test_publish_now_no_executor_503(client, factory):
+    """Если исполнитель не запущен (SCHEDULER_ENABLED=false) — понятная 503, не 500."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _schedule_one(client, pid, ["telegram"])
+    resp = await client.post(f"/api/profiles/{pid}/scheduled/{sched_id}/publish-now")
+    assert resp.status_code == 503
+
+
 # ── Изоляция ──────────────────────────────────────────────────────────────────
 
 

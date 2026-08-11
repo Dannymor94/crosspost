@@ -231,26 +231,31 @@ def test_build_plan_reports_unmatched_files():
     assert report.unmatched_files == ["orphan1.jpg", "orphan2.jpg"]
 
 
-def test_build_plan_reports_row_without_matching_file():
+def test_build_plan_missing_file_becomes_warning_not_problem():
+    """Файл указан, но не загружен → предупреждение, пост всё равно планируется (без фото)."""
     rows = [_row(1, "missing.jpg", "Нет картинки")]
     rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
     report = build_plan(rows, ["other.jpg"], rule)
-    assert report.matched_count == 0
-    assert len(report.problems) == 1
-    assert report.problems[0].row_number == 1
-    assert "не найден" in report.problems[0].reason
+    assert report.matched_count == 1  # пост запланирован
+    assert len(report.problems) == 0  # не ошибка
+    assert len(report.warnings) == 1
+    assert report.warnings[0].row_number == 1
+    assert "без фото" in report.warnings[0].reason
+    assert report.resolved[0].file == ""  # файл не привязан
 
 
 def test_build_plan_reports_empty_text_and_empty_file():
     rows = [
-        _row(1, "", "Текст без файла"),
-        _row(2, "x.jpg", ""),
+        _row(1, "", "Текст без файла"),  # пустой файл → текстовый пост, OK
+        _row(2, "x.jpg", ""),  # пустой текст → ошибка
     ]
     rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
     report = build_plan(rows, ["x.jpg"], rule)
-    reasons = {p.row_number: p.reason for p in report.problems}
-    assert "пустое имя файла" in reasons[1]
-    assert "пустой текст" in reasons[2]
+    # строка 1: пустой файл теперь допускается (текстовый пост)
+    assert report.matched_count == 1
+    assert len(report.problems) == 1
+    assert report.problems[0].row_number == 2
+    assert "пустой текст" in report.problems[0].reason
 
 
 def test_build_plan_case_insensitive_filename_match():
@@ -258,6 +263,34 @@ def test_build_plan_case_insensitive_filename_match():
     rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
     report = build_plan(rows, ["photo.jpg"], rule)
     assert report.matched_count == 1
+
+
+def test_build_plan_flexible_number_match():
+    """'1.jpg' в CSV совпадает с 'cover_1.png' по первому числу в имени."""
+    rows = [
+        _row(1, "1.jpg", "Первый"),
+        _row(2, "2.jpg", "Второй"),
+        _row(3, "10.jpg", "Десятый"),
+    ]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan(rows, ["cover_1.png", "photo_2.jpg", "image_10.png"], rule)
+    assert report.matched_count == 3
+    assert len(report.warnings) == 0
+    assert len(report.problems) == 0
+    # Файл совпал по числу, не по имени
+    assert report.resolved[0].file == "cover_1.png"
+    assert report.resolved[1].file == "photo_2.jpg"
+    assert report.resolved[2].file == "image_10.png"
+
+
+def test_build_plan_exact_match_wins_over_flex():
+    """Точное совпадение имени приоритетнее гибкого числового."""
+    rows = [_row(1, "1.jpg", "Точное совпадение")]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    # Оба файла содержат '1', но '1.jpg' — точное совпадение
+    report = build_plan(rows, ["1.jpg", "cover_1.png"], rule)
+    assert report.matched_count == 1
+    assert report.resolved[0].file == "1.jpg"
 
 
 def test_build_plan_no_rule_and_no_date_is_a_problem():

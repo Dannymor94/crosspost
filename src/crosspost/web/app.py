@@ -52,7 +52,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Выключается флагом SCHEDULER_ENABLED=false (напр. в тестах/CLI).
     scheduler_task: asyncio.Task | None = None
     if parse_bool(os.environ.get("SCHEDULER_ENABLED", "true")):
-        scheduler_task = asyncio.create_task(ScheduledExecutor.from_env(factory).run_forever())
+        executor = ScheduledExecutor.from_env(factory)
+        app.state.executor = executor
+        scheduler_task = asyncio.create_task(executor.run_forever())
 
     try:
         yield

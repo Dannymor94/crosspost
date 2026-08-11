@@ -8,6 +8,7 @@
   POST .../scheduled                            — запланировать (сохранить, не исполнять)
   GET  .../scheduled                            — список запланированных
   DELETE .../scheduled/{id}                     — отменить запланированный
+  POST   .../scheduled/{id}/publish-now         — опубликовать немедленно
 
 Публикация синхронная: запрос ждёт поканальные итоги (частичный успех — норма).
 Медиа во временном хранилище; чистим, когда все каналы финализировались успешно.
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from crosspost.channels.validators import VALIDATORS
@@ -350,6 +351,41 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
         parent = Path(media_paths[0]).parent
         media_store.cleanup_media(parent.name)
     return {"cancelled": True}
+
+
+@router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/publish-now")
+async def publish_scheduled_now(
+    profile_id: int, scheduled_id: int, request: Request, session: SessionDep
+) -> dict:
+    """Немедленно опубликовать запланированный пост, не дожидаясь тика исполнителя.
+
+    Возвращает поканальные итоги: status (done/failed/needs_relogin), error.
+    """
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+
+    post = await pub_repo.get_scheduled(scheduled_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+
+    executor = getattr(request.app.state, "executor", None)
+    if executor is None:
+        raise HTTPException(
+            status_code=503, detail="Исполнитель расписания недоступен (SCHEDULER_ENABLED=false)"
+        )
+
+    await executor.publish_post_now(scheduled_id)
+
+    # Читаем итоги из БД (executor пишет в свои сессии, коммитит до return)
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pubid = scheduled_publication_id(scheduled_id)
+    statuses = await pub_repo.list_statuses(pubid)
+    results = [
+        {"channel": s.channel, "status": str(s.status), "error": s.error or None} for s in statuses
+    ]
+    all_done = all(str(s.status) in _SUCCESS for s in statuses) if statuses else False
+    return {"triggered": True, "results": results, "all_done": all_done}
 
 
 # ── Внутреннее ────────────────────────────────────────────────────────────────

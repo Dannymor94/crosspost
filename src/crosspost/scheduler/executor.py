@@ -93,7 +93,14 @@ class ScheduledExecutor:
             poll_seconds=float(os.environ.get("SCHEDULER_POLL_SECONDS", "30")),
         )
 
-    # ── Публичный цикл ────────────────────────────────────────────────────────
+    # ── Публичный API ─────────────────────────────────────────────────────────
+
+    async def publish_post_now(self, post_id: int) -> None:
+        """Немедленно опубликовать запланированный пост, не дожидаясь тика.
+
+        Идемпотентно: если пост уже исполнен или отменён — ничего не делает.
+        """
+        await self._process_post(post_id)
 
     async def run_forever(self) -> None:
         """Бесконечный цикл поллинга. Отменяется через task.cancel() в lifespan."""

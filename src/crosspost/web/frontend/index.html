@@ -630,6 +630,10 @@ body {
 .sched-chans { font-size: 11px; color: var(--text-3); }
 .sched-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .sched-edit { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sched-result { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.sched-result-row { font-size: 12px; }
+.sched-result-row.ok   { color: var(--success, #4ade80); }
+.sched-result-row.fail { color: var(--error); }
 
 /* ── Import: план ─────────────────────────────────────────────────────────── */
 .import-drop {
@@ -665,7 +669,8 @@ body {
   padding: 9px 12px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--bg-card);
 }
-.plan-row.bad { border-color: rgba(248,113,113,.3); }
+.plan-row.bad  { border-color: rgba(248,113,113,.3); }
+.plan-row.warn { border-color: rgba(251,191,36,.35); }
 .plan-when { font-size: 11px; color: var(--accent); flex-shrink: 0; width: 130px; }
 .plan-file { font-size: 11px; color: var(--text-3); flex-shrink: 0; width: 100px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1393,7 +1398,7 @@ function channelUrl(channel, target) {
   switch (channel) {
     case "telegram":   return `https://t.me/${t.replace(/^@/, "")}`;
     case "vk_wall":    return `https://vk.com/${t.replace(/^@/, "")}`;
-    case "vk_channel": return `https://vk.com/channel${t.startsWith("-") ? t : "-" + t}`;
+    case "vk_channel": return `https://vk.ru/im/channels/${t.startsWith("-") ? t : "-" + t}`;
     case "yandex":     return `https://yandex.ru/maps/org/${t}`;
     case "telegraph":  return `https://telegra.ph`;
     default:           return null;
@@ -1828,6 +1833,8 @@ function SchedItem({ base, s, onChanged }) {
   const [editing, setEditing] = useState(false);
   const [when, setWhen] = useState(() => toLocalInput(s.scheduled_at));
   const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null); // {all_done, results}
   const [err, setErr] = useState(null);
 
   async function save() {
@@ -1841,6 +1848,14 @@ function SchedItem({ base, s, onChanged }) {
   async function cancel() {
     try { await api.del(`${base}/scheduled/${s.id}`); onChanged?.(); }
     catch (ex) { setErr(ex.message); }
+  }
+  async function sendNow() {
+    setSending(true); setErr(null); setSendResult(null);
+    try {
+      const res = await api.post(`${base}/scheduled/${s.id}/publish-now`, {});
+      setSendResult(res);
+      if (res.all_done) onChanged?.(); // пост опубликован — убрать из списка
+    } catch (ex) { setErr(ex.message); } finally { setSending(false); }
   }
 
   return h("div", { className: "sched-item" },
@@ -1857,8 +1872,20 @@ function SchedItem({ base, s, onChanged }) {
       h("div", { className: "sched-text" }, s.text || "(без текста)"),
       h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
       err && h("div", { className: "outcome-err" }, err),
+      sendResult && h("div", { className: "sched-result" },
+        (sendResult.results || []).map((r, i) => h("div", {
+          key: i,
+          className: `sched-result-row ${r.status === "done" || r.status === "submitted" ? "ok" : "fail"}`,
+        },
+          h("span", { className: "mono" }, r.channel),
+          h("span", null, " → "),
+          h("span", null, r.status === "done" || r.status === "submitted" ? "✓ опубликовано" : `✗ ${r.error || r.status}`),
+        )),
+      ),
     ),
     !editing && h("div", { className: "sched-actions" },
+      h("button", { className: "btn btn-primary btn-sm", onClick: sendNow, disabled: sending },
+        sending && h(Spinner), sending ? " Отправляю…" : "Отправить сейчас"),
       h("button", { className: "btn btn-ghost btn-sm",
         onClick: () => { setWhen(toLocalInput(s.scheduled_at)); setEditing(true); } }, "Время"),
       h("button", { className: "btn btn-danger btn-sm", onClick: cancel }, "Отменить"),
@@ -1911,10 +1938,12 @@ function RuleFields({ startDate, times, onStart, onTimes }) {
 }
 
 function ImportReportView({ report }) {
+  const warnings = report.warnings || [];
   return h("div", null,
     h("div", { className: "report-chips" },
-      h("span", { className: "chip ok" }, `Связалось: ${report.resolved_count}`),
-      report.problem_count > 0 && h("span", { className: "chip err" }, `Проблем: ${report.problem_count}`),
+      h("span", { className: "chip ok" }, `Запланировано: ${report.resolved_count}`),
+      warnings.length > 0 && h("span", { className: "chip warn" }, `Без фото: ${warnings.length}`),
+      report.problem_count > 0 && h("span", { className: "chip err" }, `Пропущено: ${report.problem_count}`),
       report.unmatched_files.length > 0
         && h("span", { className: "chip warn" }, `Файлов без строк: ${report.unmatched_files.length}`),
     ),
@@ -1923,13 +1952,22 @@ function ImportReportView({ report }) {
       h("div", { className: "plan-rows" },
         report.resolved.map((r, i) => h("div", { key: i, className: "plan-row" },
           h("span", { className: "plan-when mono" }, new Date(r.scheduled_at).toLocaleString("ru-RU")),
-          h("span", { className: "plan-file mono" }, r.file),
+          h("span", { className: "plan-file mono" }, r.file || "текст"),
           h("span", { className: "plan-text" }, r.text || "(без текста)"),
           h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата"),
         ))),
     ),
+    warnings.length > 0 && h("div", null,
+      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Предупреждения — посты выйдут без фото"),
+      h("div", { className: "plan-rows" },
+        warnings.map((w, i) => h("div", { key: i, className: "plan-row warn" },
+          h("span", { className: "plan-file mono" }, `стр. ${w.row_number}`),
+          h("span", { className: "plan-file mono" }, w.file || "—"),
+          h("span", { className: "plan-reason" }, w.reason),
+        ))),
+    ),
     report.problems.length > 0 && h("div", null,
-      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Проблемные строки"),
+      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Пропущенные строки"),
       h("div", { className: "plan-rows" },
         report.problems.map((p, i) => h("div", { key: i, className: "plan-row bad" },
           h("span", { className: "plan-file mono" }, `стр. ${p.row_number}`),
@@ -1997,6 +2035,7 @@ function ImportView({ profile }) {
       appendRule(fd);
       const res = await api.postForm(`${base}/import/commit`, fd);
       const parts = [`создано ${res.created}`];
+      if ((res.warnings || []).length > 0) parts.push(`без фото: ${res.warnings.length}`);
       if (res.skipped_count > 0) parts.push(`пропущено ${res.skipped_count}`);
       setAlert({ type: res.created > 0 ? "success" : "error", text: `Запланировано: ${parts.join(", ")}.` });
       setReport(null); setTable(null); setImages([]);
