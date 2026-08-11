@@ -144,6 +144,13 @@ async def request_code(profile_id: int, phone: str) -> str:
     sess = _get_session(profile_id)
     try:
         sent = await sess.client.send_code_request(phone)
+        # Диагностика: КАКИМ способом Telegram отправил код (app/sms/call) и что
+        # предложит следующим. Помогает, если код «не приходит» (в приложение vs SMS).
+        logger.info(
+            "telegram send_code type=%s next_type=%s",
+            type(getattr(sent, "type", None)).__name__,
+            type(getattr(sent, "next_type", None)).__name__,
+        )
     except PhoneNumberInvalidError as exc:
         raise TelegramLoginError("Неверный номер телефона.") from exc
     except ApiIdInvalidError as exc:
