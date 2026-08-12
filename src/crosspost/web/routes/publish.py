@@ -62,6 +62,7 @@ class _Run:
     media_key: str
     article_text: str | None = None  # задан → ретрай канала идёт через связку статьи
     article_title: str | None = None
+    link_phrase: str | None = None  # фраза ссылки (NULL → «Подробнее»)
 
 
 _RUNS: dict[tuple[int, str], _Run] = {}
@@ -222,6 +223,7 @@ async def publish_now(
     title: str | None = Form(None),
     channels: str = Form(...),  # JSON-массив каналов
     article_text: str = Form(""),  # тело лонгрида → статья Telegraph + ссылка в посте
+    link_phrase: str = Form(""),  # фраза ссылки на статью (пусто → «Подробнее»)
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -249,6 +251,7 @@ async def publish_now(
         publication_id=publication_id,
         article_text=article_text or None,
         article_title=title or None,
+        link_phrase=link_phrase or None,
     )
 
     _RUNS[(profile_id, publication_id)] = _Run(
@@ -257,6 +260,7 @@ async def publish_now(
         publication_id,
         article_text=article_text or None,
         article_title=title or None,
+        link_phrase=link_phrase or None,
     )
     _cleanup_if_final(profile_id, publication_id, outcomes)
     return PublishResult(
@@ -306,6 +310,7 @@ async def publish_retry(
             publication_id=publication_id,
             article_text=run.article_text,
             article_title=run.article_title,
+            link_phrase=run.link_phrase,
         )
         outcome = next((o for o in outcomes if o.channel == channel), outcomes[-1])
     else:
@@ -331,6 +336,7 @@ async def schedule_post(
     title: str | None = Form(None),
     channels: str = Form(...),
     article_text: str = Form(""),  # тело лонгрида → статья Telegraph при исполнении
+    link_phrase: str = Form(""),  # фраза ссылки на статью (пусто → «Подробнее»)
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> ScheduledOut:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -362,6 +368,7 @@ async def schedule_post(
         channels=channel_list,
         scheduled_at=when,
         article_text=article_text or None,
+        link_phrase=link_phrase or None,
     )
     return _scheduled_out(post)
 

@@ -45,13 +45,16 @@ class _Recorder:
         return ChannelOutcome(channel, "failed", error="no-article")
 
 
-async def _run(rec, *, article_text="", channels=("telegram",), content=None):
+async def _run(
+    rec, *, article_text="", channels=("telegram",), content=None, link_phrase="Подробнее"
+):
     return await run_binding(
         content=content or _post(),
         channels=list(channels),
         article_text=article_text,
         article_title="Заголовок",
-        template="{text} → {url}",
+        template="{text} → {url} ({phrase})",
+        link_phrase=link_phrase,
         step=rec.step,
         fail_closed=rec.fail_closed,
     )
@@ -80,7 +83,7 @@ async def test_happy_path_article_first_then_url_substituted():
     assert rec.calls[0][1] == "тело лонгрида"  # телом статьи ушёл article_text
     assert rec.calls[1][0] == "telegram"
     # В текст канала подставлен url статьи по шаблону "{text} → {url}".
-    assert rec.calls[1][1] == "Короткий → https://telegra.ph/Long-08-12"
+    assert rec.calls[1][1] == "Короткий → https://telegra.ph/Long-08-12 (Подробнее)"
     assert res.pending is False
     # Итог статьи присутствует в outcomes.
     assert any(o.channel == _ARTICLE_CHANNEL for o in res.outcomes)

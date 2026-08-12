@@ -34,7 +34,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from crosspost.content.article_link import LINK_TEMPLATE, NO_ARTICLE_REASON
+from crosspost.content.article_link import DEFAULT_LINK_PHRASE, LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import Publication, PublicationStatus, ScheduledPost
@@ -171,6 +171,7 @@ class ScheduledExecutor:
                 article_text=post.article_text or "",
                 article_title=post.title,
                 template=LINK_TEMPLATE,
+                link_phrase=post.link_phrase or DEFAULT_LINK_PHRASE,
                 step=step,
                 fail_closed=fail_closed,
             )

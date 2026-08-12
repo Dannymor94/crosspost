@@ -1837,6 +1837,7 @@ function ScheduleModal({ onClose, onConfirm }) {
 function PublishView({ profile }) {
   const [text, setText] = useState("");
   const [articleText, setArticleText] = useState("");
+  const [linkPhrase, setLinkPhrase] = useState("");
   const [files, setFiles] = useState([]);
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
@@ -1932,6 +1933,7 @@ function PublishView({ profile }) {
     fd.append("content_type", "post");
     fd.append("text", text);
     fd.append("article_text", articleText);
+    fd.append("link_phrase", linkPhrase);
     fd.append("channels", JSON.stringify([...selected]));
     files.forEach((f) => fd.append("media", f));
     Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
@@ -1968,7 +1970,7 @@ function PublishView({ profile }) {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
       await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleText(""); setFiles([]); setOutcomes(null);
+      setText(""); setArticleText(""); setLinkPhrase(""); setFiles([]); setOutcomes(null);
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); }
@@ -2003,6 +2005,19 @@ function PublishView({ profile }) {
           ? h("p", { className: "hint-inline", style: { marginTop: "6px" } },
               "Статья опубликуется первой; пост получит ссылку на неё.")
           : null,
+        articleText.trim() && h("div", { className: "mt-2" },
+          h("label", { className: "form-label" }, "Текст ссылки"),
+          h("input", {
+            className: "form-input",
+            type: "text",
+            placeholder: "Подробнее",
+            value: linkPhrase,
+            onChange: (e) => setLinkPhrase(e.target.value),
+            maxLength: 64,
+          }),
+          h("p", { className: "form-hint" },
+            `В посте появится: «${(linkPhrase.trim() || "Подробнее")} → https://telegra.ph/…»`),
+        ),
       ),
     ),
 

@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from crosspost.adapters.base import ChannelAdapter, ResultStatus
-from crosspost.content.article_link import LINK_TEMPLATE, NO_ARTICLE_REASON
+from crosspost.content.article_link import DEFAULT_LINK_PHRASE, LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import validate
@@ -73,6 +73,7 @@ class PublishService:
         publication_id: str,
         article_text: str | None = None,
         article_title: str | None = None,
+        link_phrase: str | None = None,
     ) -> list[ChannelOutcome]:
         """Опубликовать во все каналы. Возвращает поканальные итоги (частичный успех — норма).
 
@@ -99,6 +100,7 @@ class PublishService:
             article_text=article_text or "",
             article_title=article_title,
             template=LINK_TEMPLATE,
+            link_phrase=link_phrase or DEFAULT_LINK_PHRASE,
             step=_step,
             fail_closed=_fail_closed,
         )

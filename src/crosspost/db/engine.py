@@ -31,6 +31,7 @@ def _migrate_sqlite(conn) -> None:
     ни новая колонка, ни новый индекс. Здесь идемпотентно доводим схему:
       • scheduled_posts.published_at — колонка добавлена позже (маркер исполнения);
       • scheduled_posts.article_text — тело лонгрида для связки Telegraph→канал;
+      • scheduled_posts.link_phrase — текст ссылки на статью (NULL → «Подробнее»);
       • ix_scheduled_report — составной индекс джойна журнала.
     Все операции idempotent (guard по table_info / IF NOT EXISTS)."""
     cols = {c["name"] for c in sa.inspect(conn).get_columns("scheduled_posts")}
@@ -38,6 +39,8 @@ def _migrate_sqlite(conn) -> None:
         conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN published_at DATETIME")
     if "article_text" not in cols:
         conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN article_text TEXT")
+    if "link_phrase" not in cols:
+        conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN link_phrase VARCHAR(128)")
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_scheduled_report "
         "ON scheduled_posts (profile_id, status, published_at)"

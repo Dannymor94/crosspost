@@ -209,6 +209,8 @@ class ScheduledPost(Base):
     # Тело лонгрида для связки Telegraph→канал. Пусто/NULL → обычный пост (см.
     # orchestrator/article_flow.run_binding). Отдельно от text (короткая подпись TG).
     article_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Фраза-текст ссылки на статью (например «Подробнее»). NULL → DEFAULT_LINK_PHRASE.
+    link_phrase: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     media_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

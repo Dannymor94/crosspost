@@ -14,20 +14,28 @@ from __future__ import annotations
 
 from crosspost.content.canonical import CanonicalContent, ContentType
 
-# Дефолтный шаблон подстановки: короткий текст поста + строка со ссылкой на статью.
-LINK_TEMPLATE = "{text}\n\nЧитать полностью → {url}"
+# Дефолтный текст ссылки (фраза перед URL / гиперссылка): пользователь может переопределить.
+DEFAULT_LINK_PHRASE = "Подробнее"
+
+# Шаблон подстановки: поддерживает {text}, {url}, {phrase}.
+LINK_TEMPLATE = "{text}\n\n{phrase} → {url}"
 
 # Причина fail-closed: статья не создана (исчерпаны ретраи) → пост не публикуется.
 NO_ARTICLE_REASON = "статья Telegraph не создана — пост не опубликован"
 
 
-def render_with_link(text: str, url: str, template: str = LINK_TEMPLATE) -> str:
-    """Подставить текст поста и URL статьи в шаблон.
+def render_with_link(
+    text: str,
+    url: str,
+    template: str = LINK_TEMPLATE,
+    link_phrase: str = DEFAULT_LINK_PHRASE,
+) -> str:
+    """Подставить текст поста, URL статьи и фразу ссылки в шаблон.
 
-    При пустом `text` не оставляем ведущих переносов/пробелов (иначе пост начинался
-    бы с пустых строк перед «Читать полностью →»).
+    При пустом `text` не оставляем ведущих переносов/пробелов.
+    `link_phrase` — текст, отображаемый вместо сырого URL (например «Подробнее»).
     """
-    rendered = template.format(text=text, url=url)
+    rendered = template.format(text=text, url=url, phrase=link_phrase or DEFAULT_LINK_PHRASE)
     return rendered.lstrip("\n ") if not text else rendered
 
 

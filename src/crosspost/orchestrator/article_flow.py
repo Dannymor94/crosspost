@@ -67,6 +67,7 @@ async def run_binding(
     article_text: str,
     article_title: str | None,
     template: str,
+    link_phrase: str,
     step: Step,
     fail_closed: FailClosed,
 ) -> FlowResult:
@@ -92,7 +93,9 @@ async def run_binding(
     # DONE: подставляем url статьи в текст поста, публикуем каналы.
     # external_id у DONE-статьи — URL страницы (квитанция Telegraph); "" быть не должно.
     art_url = art.external_id or ""
-    post_content = replace(content, text=render_with_link(content.text, art_url, template))
+    post_content = replace(
+        content, text=render_with_link(content.text, art_url, template, link_phrase)
+    )
     results = [await step(ch, post_content) for ch in channels]
     pending = any(r.state is StepState.PENDING for r in results)
     return FlowResult([*[r.outcome for r in results], art.outcome], pending)
