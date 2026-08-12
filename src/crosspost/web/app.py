@@ -22,6 +22,7 @@ from crosspost.web import deps
 from crosspost.web.routes import (
     auth,
     channels,
+    errors,
     import_plan,
     profiles,
     publish,
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(publish.router)
     app.include_router(import_plan.router)
     app.include_router(settings.router)
+    app.include_router(errors.router)
 
     # Serve frontend SPA — must be after API routes
     if _FRONTEND_DIR.exists():

@@ -664,6 +664,48 @@ body {
 .report-chan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .report-more { margin-top: 12px; }
 
+/* ── Admin error console (Трек C) ────────────────────────────────────────── */
+.console-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 16px; }
+.console-stat {
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-card); display: flex; flex-direction: column; gap: 2px; min-width: 120px;
+}
+.console-stat-num { font-size: 22px; font-weight: 700; color: var(--text-1); }
+.console-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.console-chan-stats { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.console-chan-pill {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg-input); color: var(--text-2);
+}
+.console-chan-pill b { color: var(--error); font-variant-numeric: tabular-nums; }
+.console-filters {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px;
+}
+.console-filters .form-input, .console-filters select.form-input { width: auto; min-width: 130px; }
+.console-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.log-rows { display: flex; flex-direction: column; gap: 3px; }
+.log-row {
+  display: grid; grid-template-columns: auto auto auto 1fr auto;
+  gap: 10px; align-items: center; padding: 7px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  border-left: 3px solid transparent; background: var(--bg-card);
+}
+.log-row.ERROR   { border-left-color: var(--error); }
+.log-row.WARNING { border-left-color: var(--amber); }
+.log-row.INFO    { border-left-color: var(--accent); }
+.log-time { font-size: 12px; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.log-level { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; }
+.log-level.ERROR   { background: var(--error-bg); color: var(--error); }
+.log-level.WARNING { background: var(--amber-bg); color: var(--amber); }
+.log-level.INFO    { background: var(--accent-dim); color: var(--accent); }
+.log-client { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; font: inherit; text-decoration: underline dotted; }
+.log-msg { font-size: 13px; color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-chan { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); }
+.log-shot-btn { font-size: 11px; }
+.log-shot-img { margin-top: 6px; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); }
+.channel-card.focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ── Target editor ───────────────────────────────────────────────────────── */
 .target-editor {
   padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -1532,14 +1574,20 @@ function channelUrl(channel, target) {
   }
 }
 
-function ChannelCard({ ch, profileId, onRefresh }) {
+function ChannelCard({ ch, profileId, onRefresh, focus }) {
   const [validating, setValidating] = useState(false);
   const [wizard, setWizard] = useState(false);   // открыт мастер подключения
   const [resetConfirm, setResetConfirm] = useState(false);
   const [msg, setMsg] = useState(null);
+  const cardRef = useRef(null);
 
   const state = ch.state;
-  const cardClass = `channel-card ${state === "live" ? "live-card" : state === "needs_relogin" ? "amber-card" : ""}`;
+  const cardClass = `channel-card ${state === "live" ? "live-card" : state === "needs_relogin" ? "amber-card" : ""}${focus ? " focus" : ""}`;
+
+  // Переход из консоли ошибок: подсветить и прокрутить к нужному каналу.
+  useEffect(() => {
+    if (focus && cardRef.current) cardRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focus]);
 
   async function handleValidate() {
     setValidating(true); setMsg(null);
@@ -1570,7 +1618,7 @@ function ChannelCard({ ch, profileId, onRefresh }) {
   const icon = CHANNEL_ICONS[ch.channel] ?? ch.channel.slice(0, 2).toUpperCase();
   const connectLabel = ch.has_credential ? "Переподключить" : (ch.kind === "browser" ? "Войти" : "Подключить");
 
-  return h("div", { className: cardClass },
+  return h("div", { className: cardClass, ref: cardRef },
     h("div", { className: "card-header" },
       h("div", { className: "card-icon", "aria-hidden": true }, icon),
       h("div", { className: "card-names" },
@@ -1632,7 +1680,7 @@ function ChannelCard({ ch, profileId, onRefresh }) {
 
 // ── Channels view ──────────────────────────────────────────────────────────
 
-function ChannelsView({ profile }) {
+function ChannelsView({ profile, focusChannel }) {
   const [channels, setChannels] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -1662,6 +1710,7 @@ function ChannelsView({ profile }) {
             key: ch.channel,
             ch, profileId: profile.id,
             onRefresh: load,
+            focus: focusChannel === ch.channel,
           }))
         ),
     channels?.length === 0 && h("div", { className: "empty-state" },
@@ -1687,10 +1736,18 @@ function NoProfileView() {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
-function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient }) {
+function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConsole, consoleActive }) {
   return h("nav", { className: "sidebar", "aria-label": "Профили" },
     h("div", { className: "sidebar-header" },
       h("div", { className: "logo" }, h("span", null, "⊹"), " CROSSPOST"),
+    ),
+    h("button", {
+      className: `profile-item ${consoleActive ? "active" : ""}`,
+      onClick: onOpenConsole,
+      "aria-current": consoleActive ? "page" : undefined,
+    },
+      h("span", { className: "profile-avatar" }, "⚠"),
+      h("span", null, "Консоль ошибок"),
     ),
     h("p", { className: "sidebar-section-label" }, "Клиенты"),
     profiles.length === 0
@@ -1715,6 +1772,182 @@ function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient }) {
         onClick: onNewClient, disabled: profiles.length === 0,
         title: profiles.length === 0 ? "Сначала создайте профиль" : "",
       }, "＋ Аккаунт клиента"),
+    ),
+  );
+}
+
+// ── Admin error console (Трек C) ─────────────────────────────────────────────
+
+const LOG_PAGE = 20;
+// Пресеты периода: метка → сколько назад в мс (null = за всё время).
+const PERIODS = [["24h", "24 часа", 864e5], ["7d", "7 дней", 6048e5], ["30d", "30 дней", 2592e6], ["all", "всё время", null]];
+
+function fmtLogTime(iso) {
+  const d = new Date(iso);
+  return `${_pad(d.getDate())}.${_pad(d.getMonth()+1)} ${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+}
+
+// from_time для выбранного пресета. Считаем в компоненте (не в модуле): Date.now живой.
+function periodFrom(preset) {
+  const span = (PERIODS.find(p => p[0] === preset) || [])[2];
+  if (span == null) return "";
+  const d = new Date(Date.now() - span);
+  // naive-local ISO (без Z): бэкенд сравнивает по локальному created_at.
+  return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`;
+}
+
+function LogRow({ row, onGoToProfile }) {
+  const [shot, setShot] = useState(false);  // ленивый показ картинки по клику
+  const chan = row.channel ? (CHANNEL_ICONS[row.channel] || row.channel) : "—";
+  return h("div", null,
+    h("div", { className: `log-row ${row.level}` },
+      h("span", { className: "log-time" }, fmtLogTime(row.created_at)),
+      h("span", { className: `log-level ${row.level}` }, row.level),
+      h("button", {
+        className: "log-client",
+        title: "Открыть профиль клиента на этом канале",
+        onClick: () => onGoToProfile(row.profile_id, row.channel),
+      }, row.profile_name),
+      h("span", { className: "log-msg", title: row.message },
+        h("span", { className: "log-chan" }, chan), "  ", row.message),
+      row.has_screenshot
+        ? h("button", { className: "btn btn-ghost btn-sm log-shot-btn", onClick: () => setShot(s => !s) },
+            shot ? "Скрыть скриншот" : "📷 Скриншот")
+        : h("span", null),
+    ),
+    shot && h("img", {
+      className: "log-shot-img",
+      src: `/api/admin/logs/${row.id}/screenshot`,
+      alt: `Скриншот сбоя ${row.channel || ""}`,
+    }),
+  );
+}
+
+function ErrorConsole({ profiles, onGoToProfile }) {
+  const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [more, setMore] = useState(false);
+  const [err, setErr] = useState(null);
+  const [onlyProblems, setOnlyProblems] = useState(true);
+  const [profileId, setProfileId] = useState("");
+  const [channel, setChannel] = useState("");
+  const [level, setLevel] = useState("");
+  const [period, setPeriod] = useState("7d");
+
+  // Строка query из активных фильтров (без курсора). from_time считается по пресету.
+  const filterQS = useCallback((extra = {}) => {
+    const p = new URLSearchParams();
+    p.set("only_problems", onlyProblems ? "true" : "false");
+    if (profileId) p.set("profile_id", profileId);
+    if (channel) p.set("channel", channel);
+    if (level) p.set("level", level);
+    const from = periodFrom(period);
+    if (from) p.set("from_time", from);
+    for (const [k, v] of Object.entries(extra)) p.set(k, v);
+    return p.toString();
+  }, [onlyProblems, profileId, channel, level, period]);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const [feed, sum] = await Promise.all([
+        api.get(`/api/admin/logs?${filterQS({ limit: LOG_PAGE })}`),
+        api.get(`/api/admin/logs/summary${periodFrom(period) ? `?from_time=${encodeURIComponent(periodFrom(period))}` : ""}`),
+      ]);
+      setRows(feed);
+      setMore(feed.length === LOG_PAGE);
+      setSummary(sum);
+    } catch (ex) { setErr(ex.message); }
+  }, [filterQS, period]);
+
+  // Инкремент: тянем только записи новее самого свежего курсора (since).
+  const loadDelta = useCallback(async () => {
+    if (rows.length === 0) return load();
+    try {
+      const fresh = await api.get(`/api/admin/logs?${filterQS({ since: rows[0].cursor, limit: LOG_PAGE })}`);
+      if (fresh.length) {
+        setRows(prev => [...fresh, ...prev]);
+        api.get(`/api/admin/logs/summary${periodFrom(period) ? `?from_time=${encodeURIComponent(periodFrom(period))}` : ""}`).then(setSummary).catch(() => {});
+      }
+    } catch (_) {}
+  }, [filterQS, period, rows, load]);
+
+  async function loadMore() {
+    try {
+      const older = await api.get(`/api/admin/logs?${filterQS({ before: rows[rows.length-1].cursor, limit: LOG_PAGE })}`);
+      setRows(prev => [...prev, ...older]);
+      setMore(older.length === LOG_PAGE);
+    } catch (ex) { setErr(ex.message); }
+  }
+
+  // Перезагрузка при смене фильтров.
+  useEffect(() => { load(); }, [load]);
+
+  // Поллинг только при видимой вкладке (Page Visibility): инкремент каждые 15 сек.
+  useEffect(() => {
+    let timer = null;
+    const start = () => { if (!timer) timer = setInterval(loadDelta, 15000); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const onVis = () => {
+      if (document.visibilityState === "visible") { loadDelta(); start(); } else stop();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    if (document.visibilityState === "visible") start();
+    return () => { document.removeEventListener("visibilitychange", onVis); stop(); };
+  }, [loadDelta]);
+
+  return h("div", null,
+    h("h1", { className: "page-title" }, "Консоль ошибок"),
+    h("p", { className: "page-subtitle" }, "ПРОБЛЕМЫ ПО ВСЕМ КЛИЕНТАМ"),
+
+    summary && h("div", { className: "console-summary" },
+      h("div", { className: "console-stat" },
+        h("span", { className: "console-stat-num" }, summary.clients_with_problems),
+        h("span", { className: "console-stat-label" }, "клиентов с проблемами"),
+      ),
+      h("div", { className: "console-stat", style: { flex: "1 1 auto" } },
+        h("span", { className: "console-stat-label" }, "падают чаще"),
+        h("div", { className: "console-chan-stats" },
+          summary.channels.length === 0
+            ? h("span", { className: "text-3" }, "— нет сбоев за период")
+            : summary.channels.map(cs => h("span", { className: "console-chan-pill", key: cs.channel },
+                (CHANNEL_ICONS[cs.channel] || cs.channel), h("b", null, cs.count))),
+        ),
+      ),
+    ),
+
+    h("div", { className: "console-filters" },
+      h("label", { className: "console-toggle" },
+        h("input", { type: "checkbox", checked: onlyProblems,
+          onChange: e => setOnlyProblems(e.target.checked) }),
+        "только проблемы",
+      ),
+      h("select", { className: "form-input", value: profileId, onChange: e => setProfileId(e.target.value) },
+        h("option", { value: "" }, "все клиенты"),
+        profiles.map(p => h("option", { key: p.id, value: p.id }, p.name)),
+      ),
+      h("input", { className: "form-input", type: "text", placeholder: "канал",
+        value: channel, onChange: e => setChannel(e.target.value.trim()) }),
+      h("select", { className: "form-input", value: level, onChange: e => setLevel(e.target.value) },
+        h("option", { value: "" }, "любой уровень"),
+        ["ERROR", "WARNING", "INFO"].map(l => h("option", { key: l, value: l }, l)),
+      ),
+      h("select", { className: "form-input", value: period, onChange: e => setPeriod(e.target.value) },
+        PERIODS.map(([id, label]) => h("option", { key: id, value: id }, label)),
+      ),
+    ),
+
+    err && h(Alert, { type: "error" }, err),
+    rows.length === 0 && !err
+      ? h("div", { className: "empty-state" },
+          h("span", { className: "empty-icon" }, "✓"),
+          h("h2", { className: "empty-title" }, "Проблем не найдено"),
+          h("p", { className: "empty-body" }, "За выбранный период сбоев нет. Расширьте период или снимите «только проблемы»."))
+      : h("div", { className: "log-rows" },
+          rows.map(row => h(LogRow, { key: row.id, row, onGoToProfile })),
+        ),
+    more && h("div", { className: "report-more" },
+      h("button", { className: "btn btn-ghost btn-sm", onClick: loadMore }, "Показать ещё"),
     ),
   );
 }
@@ -2645,6 +2878,8 @@ function App() {
   const [profiles, setProfiles] = useState([]);
   const [active, setActive] = useState(null);
   const [view, setView] = useState("publish");
+  const [consoleOpen, setConsoleOpen] = useState(false);  // admin: консоль ошибок поверх профилей
+  const [focusChannel, setFocusChannel] = useState(null); // подсветить канал после перехода из консоли
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
@@ -2682,16 +2917,30 @@ function App() {
     setActive(p);
   }
 
+  function selectProfile(p) { setConsoleOpen(false); setFocusChannel(null); setActive(p); }
+
+  // Переход из строки консоли: открыть профиль клиента на вкладке «Каналы», подсветить канал.
+  function goToProfile(pid, channel) {
+    const p = profiles.find(x => x.id === pid);
+    if (!p) return;
+    setConsoleOpen(false);
+    setActive(p);
+    setView("channels");
+    setFocusChannel(channel || null);
+  }
+
   const mainBody = loadingProfiles
     ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
-    : active
+    : (isAdmin && consoleOpen)
+      ? h(ErrorConsole, { key: "console", profiles, onGoToProfile: goToProfile })
+      : active
       ? h("div", null,
           h(ViewTabs, { view, onChange: setView }),
           view === "publish"
             ? h(PublishView, { key: `pub-${active.id}`, profile: active })
             : view === "import"
               ? h(ImportView, { key: `imp-${active.id}`, profile: active })
-              : h(ChannelsView, { key: active.id, profile: active }),
+              : h(ChannelsView, { key: active.id, profile: active, focusChannel }),
         )
       : (isAdmin ? h(NoProfileView) : h(NoAccessView));
 
@@ -2699,10 +2948,12 @@ function App() {
     // Список клиентов слева — ТОЛЬКО у админа. Клиент идёт сразу в свой профиль.
     isAdmin && h(Sidebar, {
       profiles,
-      activeId: active?.id,
-      onSelect: setActive,
+      activeId: consoleOpen ? null : active?.id,
+      onSelect: selectProfile,
       onNew: () => setShowNewProfile(true),
       onNewClient: () => setShowNewClient(true),
+      onOpenConsole: () => setConsoleOpen(true),
+      consoleActive: consoleOpen,
     }),
     h("main", { className: "main" },
       h(TopBar, { me, onLogout: logout }),
