@@ -420,17 +420,35 @@ body {
 .step-sep { flex: 1; height: 1px; background: var(--border); min-width: 8px; }
 
 /* ── Alert / message ─────────────────────────────────────────────────────── */
+@keyframes alert-in  { from { opacity:0; transform:translateY(-5px); } to { opacity:1; transform:translateY(0); } }
+@keyframes alert-out { from { opacity:1; transform:translateY(0); }    to { opacity:0; transform:translateY(-5px); } }
+
 .alert {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 12px 14px;
   border-radius: var(--radius);
   font-size: 13px; line-height: 1.5;
   margin-top: 14px;
+  animation: alert-in .18s ease-out both;
 }
-.alert.success { background: var(--live-bg);  color: var(--live);  border: 1px solid rgba(34,197,94,.2); }
-.alert.error   { background: var(--error-bg); color: var(--error); border: 1px solid rgba(248,113,113,.2); }
-.alert.warning { background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(245,158,11,.2); }
+.alert.dismissing { animation: alert-out .15s ease-in both; }
+@media (prefers-reduced-motion: reduce) { .alert, .alert.dismissing { animation: none; } }
+
+.alert.success { background: var(--live-bg);   color: var(--live);   border: 1px solid rgba(34,197,94,.25); }
+.alert.error   { background: var(--error-bg);  color: var(--error);  border: 1px solid rgba(248,113,113,.4); font-weight: 500; }
+.alert.warning { background: var(--amber-bg);  color: var(--amber);  border: 1px solid rgba(245,158,11,.25); }
 .alert.info    { background: var(--accent-dim); color: var(--text-2); border: 1px solid rgba(59,130,246,.2); }
+
+.alert-icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; display: flex; align-items: center; }
+.alert-body { flex: 1; min-width: 0; overflow-wrap: break-word; max-height: 120px; overflow-y: auto; }
+.alert-close {
+  flex-shrink: 0; align-self: flex-start;
+  background: none; border: none; cursor: pointer;
+  color: currentColor; opacity: .45;
+  font-size: 16px; line-height: 1; padding: 0 0 0 6px; margin-top: -1px;
+  transition: opacity .12s;
+}
+.alert-close:hover { opacity: 1; }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .empty-state {
@@ -949,8 +967,60 @@ function Spinner() {
   return h("span", { className: "spinner" });
 }
 
-function Alert({ type, children }) {
-  return h("div", { className: `alert ${type}` }, children);
+const _ALERT_ICONS = {
+  success: h("svg", { width:16, height:16, viewBox:"0 0 16 16", fill:"none", "aria-hidden":"true" },
+    h("circle", { cx:8, cy:8, r:7, stroke:"currentColor", strokeWidth:1.5 }),
+    h("path", { d:"M5 8.5l2 2L11 5.5", stroke:"currentColor", strokeWidth:1.5, strokeLinecap:"round", strokeLinejoin:"round" })
+  ),
+  error: h("svg", { width:16, height:16, viewBox:"0 0 16 16", fill:"none", "aria-hidden":"true" },
+    h("circle", { cx:8, cy:8, r:7, stroke:"currentColor", strokeWidth:1.75 }),
+    h("path", { d:"M8 4.5v3.5", stroke:"currentColor", strokeWidth:1.75, strokeLinecap:"round" }),
+    h("circle", { cx:8, cy:11.25, r:.9, fill:"currentColor" })
+  ),
+  warning: h("svg", { width:16, height:16, viewBox:"0 0 16 16", fill:"none", "aria-hidden":"true" },
+    h("path", { d:"M8 2.5L14 13.5H2L8 2.5z", stroke:"currentColor", strokeWidth:1.5, strokeLinejoin:"round" }),
+    h("path", { d:"M8 7v2.5", stroke:"currentColor", strokeWidth:1.5, strokeLinecap:"round" }),
+    h("circle", { cx:8, cy:11.75, r:.8, fill:"currentColor" })
+  ),
+  info: h("svg", { width:16, height:16, viewBox:"0 0 16 16", fill:"none", "aria-hidden":"true" },
+    h("circle", { cx:8, cy:8, r:7, stroke:"currentColor", strokeWidth:1.5 }),
+    h("path", { d:"M8 7.5v3.5", stroke:"currentColor", strokeWidth:1.5, strokeLinecap:"round" }),
+    h("circle", { cx:8, cy:5.5, r:.8, fill:"currentColor" })
+  ),
+};
+const _ALERT_AUTO_MS  = { success: 5000, info: 5000 };
+const _ALERT_CLOSEABLE = new Set(["success", "warning", "info"]);
+
+function Alert({ type, children, onDismiss }) {
+  const [phase, setPhase] = useState("in"); // "in" | "out" | "gone"
+  const timerRef = useRef(null);
+
+  useEffect(() => { setPhase("in"); }, [type, children]);
+
+  useEffect(() => {
+    const ms = _ALERT_AUTO_MS[type];
+    if (!ms || phase !== "in") return;
+    timerRef.current = setTimeout(dismiss, ms);
+    return () => clearTimeout(timerRef.current);
+  }, [type, phase]);
+
+  function dismiss() {
+    clearTimeout(timerRef.current);
+    setPhase("out");
+    setTimeout(() => { setPhase("gone"); onDismiss?.(); }, 150);
+  }
+
+  if (phase === "gone") return null;
+  return h("div", {
+    className: `alert ${type}${phase === "out" ? " dismissing" : ""}`,
+    role: type === "error" ? "alert" : "status",
+  },
+    h("span", { className: "alert-icon" }, _ALERT_ICONS[type]),
+    h("span", { className: "alert-body" }, children),
+    _ALERT_CLOSEABLE.has(type) && h("button", {
+      className: "alert-close", onClick: dismiss, "aria-label": "Закрыть",
+    }, "×"),
+  );
 }
 
 function Modal({ title, onClose, children }) {
