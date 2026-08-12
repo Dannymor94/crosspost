@@ -17,12 +17,15 @@ def test_default_template_substitutes_text_and_url():
     assert "Короткий текст" in out
     assert "https://telegra.ph/Test-08-12" in out
     assert DEFAULT_LINK_PHRASE in out
+    # Шаблон — HTML: ссылка обёрнута в <a href>
+    assert '<a href="https://telegra.ph/Test-08-12">' in out
 
 
 def test_default_template_shape():
     assert "{text}" in LINK_TEMPLATE
     assert "{url}" in LINK_TEMPLATE
     assert "{phrase}" in LINK_TEMPLATE
+    assert "<a href=" in LINK_TEMPLATE
 
 
 def test_empty_text_no_leading_newlines():
@@ -34,8 +37,7 @@ def test_empty_text_no_leading_newlines():
 
 def test_custom_link_phrase():
     out = render_with_link("текст", "https://telegra.ph/T", link_phrase="Читать")
-    assert "Читать" in out
-    assert "https://telegra.ph/T" in out
+    assert '<a href="https://telegra.ph/T">Читать</a>' in out
 
 
 def test_custom_template():

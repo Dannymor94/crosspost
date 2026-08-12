@@ -2016,7 +2016,7 @@ function PublishView({ profile }) {
             maxLength: 64,
           }),
           h("p", { className: "form-hint" },
-            `В посте появится: «${(linkPhrase.trim() || "Подробнее")} → https://telegra.ph/…»`),
+            `В посте слово «${linkPhrase.trim() || "Подробнее"}» станет кликабельной ссылкой на статью.`),
         ),
       ),
     ),

@@ -17,8 +17,9 @@ from crosspost.content.canonical import CanonicalContent, ContentType
 # Дефолтный текст ссылки (фраза перед URL / гиперссылка): пользователь может переопределить.
 DEFAULT_LINK_PHRASE = "Подробнее"
 
-# Шаблон подстановки: поддерживает {text}, {url}, {phrase}.
-LINK_TEMPLATE = "{text}\n\n{phrase} → {url}"
+# Шаблон подстановки: {phrase} становится кликабельным HTML-тегом <a href>.
+# Telegram-адаптер уже использует parse_mode="html" → тег рендерится как гиперссылка.
+LINK_TEMPLATE = '{text}\n\n<a href="{url}">{phrase}</a>'
 
 # Причина fail-closed: статья не создана (исчерпаны ретраи) → пост не публикуется.
 NO_ARTICLE_REASON = "статья Telegraph не создана — пост не опубликован"
