@@ -305,3 +305,56 @@ def test_build_plan_all_explicit_needs_no_rule():
     report = build_plan(rows, ["a.jpg"], rule=None)
     assert report.matched_count == 1
     assert report.resolved[0].scheduled_at == datetime(2026, 5, 1, 12, 0)
+
+
+# ── БЛОК 1: сквозное поле article_text (лонгрид для Telegraph) ─────────────────
+
+
+def test_detect_columns_article_synonyms():
+    from crosspost.scheduler.import_plan import detect_columns
+
+    for header in (
+        ["файл", "текст", "статья"],
+        ["file", "text", "article"],
+        ["файл", "текст", "лонгрид"],
+    ):
+        cols = detect_columns(header)
+        assert "article" in cols
+
+
+def test_parse_csv_reads_article_column():
+    data = "файл,текст,статья\n1.jpg,Короткий,Полное тело лонгрида\n".encode()
+    rows = parse_table(data, "plan.csv")
+    assert rows[0].article_text == "Полное тело лонгрида"
+
+
+def test_parse_csv_article_column_absent_defaults_empty():
+    data = "файл,текст\n1.jpg,Только пост\n".encode()
+    rows = parse_table(data, "plan.csv")
+    assert rows[0].article_text == ""
+
+
+def test_build_plan_threads_article_text_rule():
+    row = PlanRow(row_number=1, file="1.jpg", text="Короткий", article_text="Лонгрид")
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan([row], ["1.jpg"], rule)
+    assert report.resolved[0].article_text == "Лонгрид"
+
+
+def test_build_plan_threads_article_text_explicit():
+    row = PlanRow(
+        row_number=1,
+        file="1.jpg",
+        text="Короткий",
+        article_text="Лонгрид",
+        explicit_date=date(2026, 12, 1),
+    )
+    report = build_plan([row], ["1.jpg"], rule=None)
+    assert report.resolved[0].article_text == "Лонгрид"
+
+
+def test_build_plan_no_article_defaults_empty():
+    row = PlanRow(row_number=1, file="1.jpg", text="Только пост")
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan([row], ["1.jpg"], rule)
+    assert report.resolved[0].article_text == ""

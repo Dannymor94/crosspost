@@ -214,3 +214,100 @@ async def test_status_isolation_between_profiles(session):
     repo_b = _repo(session, profile_id=2)
     assert await repo_b.list_statuses("shared") == []
     assert await repo_b.is_done("shared", "telegram") is False
+
+
+# ── Связка статья→канал (article_text) ────────────────────────────────────────
+
+
+class _CapturingAdapter:
+    """Мок: запоминает text каждого publish (для проверки подстановки url)."""
+
+    def __init__(self, channel, *, result=None, raises=None):
+        self.channel = channel
+        self._result = result
+        self._raises = raises
+        self.texts: list[str] = []
+        self.calls = 0
+
+    async def publish(self, content, *, publication_id):
+        self.calls += 1
+        self.texts.append(content.text)
+        if self._raises is not None:
+            raise self._raises
+        return self._result or ChannelResult(self.channel, ResultStatus.DONE, external_id="x1")
+
+
+async def test_publish_with_article_creates_telegraph_first_and_substitutes_url(session):
+    url = "https://telegra.ph/Long-08-12"
+    tgraph = _CapturingAdapter(
+        "telegraph", result=ChannelResult("telegraph", ResultStatus.DONE, external_id=url)
+    )
+    tg = _CapturingAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    svc = PublishService(
+        session and _repo(session), _factory({"telegraph": tgraph, "telegram": tg})
+    )
+
+    outcomes = await svc.publish(
+        CanonicalContent(type=ContentType.POST, text="Короткий", media_paths=[Path("a.jpg")]),
+        ["telegram"],
+        publication_id="p1",
+        article_text="Тело лонгрида",
+        article_title="Заголовок",
+    )
+    # Статья создана раньше, телом ушёл article_text.
+    assert tgraph.calls == 1
+    assert tgraph.texts == ["Тело лонгрида"]
+    # В текст TG подставлен url статьи.
+    assert url in tg.texts[0]
+    assert "Короткий" in tg.texts[0]
+    # Итоги включают и telegraph, и telegram.
+    assert {o.channel for o in outcomes} == {"telegram", "telegraph"}
+
+
+async def test_publish_article_failed_fail_closed_channel_not_sent(session):
+    from crosspost.content.article_link import NO_ARTICLE_REASON
+
+    tgraph = _CapturingAdapter(
+        "telegraph", result=ChannelResult("telegraph", ResultStatus.FAILED, error="boom")
+    )
+    tg = _CapturingAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    svc = PublishService(_repo(session), _factory({"telegraph": tgraph, "telegram": tg}))
+
+    outcomes = await svc.publish(
+        CanonicalContent(type=ContentType.POST, text="Короткий", media_paths=[Path("a.jpg")]),
+        ["telegram"],
+        publication_id="p1",
+        article_text="Тело",
+    )
+    # TG не публиковался (fail-closed).
+    assert tg.calls == 0
+    by = {o.channel: o for o in outcomes}
+    assert by["telegram"].status == "failed"
+    assert by["telegram"].error == NO_ARTICLE_REASON
+    # Персистентно: TG помечен failed с причиной.
+    statuses = {
+        p.channel: (str(p.status), p.error) for p in await _repo(session).list_statuses("p1")
+    }
+    assert statuses["telegram"][0] == "failed"
+    assert statuses["telegram"][1] == NO_ARTICLE_REASON
+
+
+async def test_publish_article_idempotent_no_second_page(session):
+    url = "https://telegra.ph/Long-08-12"
+    tgraph = _CapturingAdapter(
+        "telegraph", result=ChannelResult("telegraph", ResultStatus.DONE, external_id=url)
+    )
+    tg = _CapturingAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    svc = PublishService(_repo(session), _factory({"telegraph": tgraph, "telegram": tg}))
+
+    args = {
+        "channels": ["telegram"],
+        "publication_id": "p1",
+        "article_text": "Тело",
+        "article_title": "T",
+    }
+    content = CanonicalContent(type=ContentType.POST, text="Короткий", media_paths=[Path("a.jpg")])
+    await svc.publish(content, **args)
+    await svc.publish(content, **args)  # повтор — вторая страница не создаётся
+    assert tgraph.calls == 1
+    assert tg.calls == 1

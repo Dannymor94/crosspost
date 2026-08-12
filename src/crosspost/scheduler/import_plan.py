@@ -37,6 +37,7 @@ _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "text": ("текст", "text", "подпись", "caption", "описание", "content", "пост"),
     "date": ("дата", "date", "день"),
     "time": ("время", "time", "час"),
+    "article": ("статья", "article", "лонгрид", "longread", "тело"),
 }
 
 
@@ -73,6 +74,7 @@ class PlanRow:
     row_number: int  # 1-based номер строки данных (для сообщений об ошибках)
     file: str
     text: str
+    article_text: str = ""  # тело лонгрида для Telegraph; пусто → обычный пост
     explicit_date: date | None = None
     explicit_time: time | None = None
 
@@ -153,8 +155,10 @@ def parse_table(data: bytes, filename: str) -> list[PlanRow]:
 
         file_val = cell("file")
         text_val = cell("text")
+        article_val = cell("article")
         file_str = "" if file_val is None else str(file_val).strip()
         text_str = "" if text_val is None else str(text_val).strip()
+        article_str = "" if article_val is None else str(article_val).strip()
 
         # Полностью пустая строка — молча пропускаем (хвост таблицы).
         if not file_str and not text_str:
@@ -165,6 +169,7 @@ def parse_table(data: bytes, filename: str) -> list[PlanRow]:
                 row_number=i,
                 file=file_str,
                 text=text_str,
+                article_text=article_str,
                 explicit_date=_parse_date(cell("date")),
                 explicit_time=_parse_time(cell("time")),
             )
@@ -266,6 +271,7 @@ class ResolvedRow:
     text: str
     scheduled_at: datetime
     source: Literal["explicit", "rule"]
+    article_text: str = ""  # тело лонгрида для Telegraph; пусто → обычный пост
 
 
 @dataclass
@@ -367,6 +373,7 @@ def build_plan(
                     row.text,
                     datetime.combine(row.explicit_date, t),
                     source="explicit",
+                    article_text=row.article_text,
                 )
             )
         else:
@@ -393,6 +400,7 @@ def build_plan(
                         row.text,
                         rule.slot_datetime(ordinal),
                         source="rule",
+                        article_text=row.article_text,
                     )
                 )
 

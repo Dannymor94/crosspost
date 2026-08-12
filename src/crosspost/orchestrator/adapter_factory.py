@@ -46,6 +46,11 @@ async def build_profile_adapter(
     if channel == "telegram":
         return await _build_telegram(cred, store)
 
+    if channel == "telegraph":
+        from crosspost.adapters.api.telegraph import TelegraphAdapter  # noqa: PLC0415
+
+        return TelegraphAdapter(cred, store)  # cred — raw access_token, цель не нужна
+
     # per-profile ЦЕЛЬ постинга: своя у каждого профиля (изоляция клиентов).
     target = ""
     if validator.needs_target:

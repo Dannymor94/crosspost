@@ -51,11 +51,17 @@ _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
 
 @dataclass
 class _Run:
-    """Снимок публикации для ретрая (в памяти; медиа — на диске)."""
+    """Снимок публикации для ретрая (в памяти; медиа — на диске).
+
+    content — ИСХОДНЫЙ пост (короткий текст без ссылки): подстановку url статьи
+    делает run_binding при ретрае, поэтому храним «сырой» текст, а не рендер.
+    """
 
     content: CanonicalContent
     channels: list[str]
     media_key: str
+    article_text: str | None = None  # задан → ретрай канала идёт через связку статьи
+    article_title: str | None = None
 
 
 _RUNS: dict[tuple[int, str], _Run] = {}
@@ -97,6 +103,7 @@ class ScheduledOut(BaseModel):
     channels: list[str]
     scheduled_at: str
     status: str
+    has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
 
 
 class ScheduledReportOut(BaseModel):
@@ -214,6 +221,7 @@ async def publish_now(
     text: str = Form(""),
     title: str | None = Form(None),
     channels: str = Form(...),  # JSON-массив каналов
+    article_text: str = Form(""),  # тело лонгрида → статья Telegraph + ссылка в посте
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -235,9 +243,21 @@ async def publish_now(
     _validate_or_422(content)
 
     svc = _make_service(profile_repo, pub_repo, profile_id)
-    outcomes = await svc.publish(content, channel_list, publication_id=publication_id)
+    outcomes = await svc.publish(
+        content,
+        channel_list,
+        publication_id=publication_id,
+        article_text=article_text or None,
+        article_title=title or None,
+    )
 
-    _RUNS[(profile_id, publication_id)] = _Run(content, channel_list, publication_id)
+    _RUNS[(profile_id, publication_id)] = _Run(
+        content,
+        channel_list,
+        publication_id,
+        article_text=article_text or None,
+        article_title=title or None,
+    )
     _cleanup_if_final(profile_id, publication_id, outcomes)
     return PublishResult(
         publication_id=publication_id,
@@ -276,7 +296,20 @@ async def publish_retry(
         raise HTTPException(status_code=404, detail="Канал не входит в публикацию")
 
     svc = _make_service(profile_repo, pub_repo, profile_id)
-    outcome = await svc.retry_channel(run.content, channel, publication_id=publication_id)
+    if run.article_text:
+        # Ретрай канала при связке со статьёй идёт через тот же секвенсор:
+        # статья идемпотентно переиспользуется (url подставится), fail-closed сохраняется.
+        # Не ретраим сам telegraph поштучно — он часть фазы статьи.
+        outcomes = await svc.publish(
+            run.content,
+            [channel],
+            publication_id=publication_id,
+            article_text=run.article_text,
+            article_title=run.article_title,
+        )
+        outcome = next((o for o in outcomes if o.channel == channel), outcomes[-1])
+    else:
+        outcome = await svc.retry_channel(run.content, channel, publication_id=publication_id)
 
     all_now = await pub_repo.list_statuses(publication_id)
     if all(str(s.status) in _SUCCESS for s in all_now):
@@ -297,6 +330,7 @@ async def schedule_post(
     text: str = Form(""),
     title: str | None = Form(None),
     channels: str = Form(...),
+    article_text: str = Form(""),  # тело лонгрида → статья Telegraph при исполнении
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> ScheduledOut:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -327,6 +361,7 @@ async def schedule_post(
         media_paths=media_paths,
         channels=channel_list,
         scheduled_at=when,
+        article_text=article_text or None,
     )
     return _scheduled_out(post)
 
@@ -593,4 +628,5 @@ def _scheduled_out(post) -> ScheduledOut:
         channels=list(post.channels or []),
         scheduled_at=post.scheduled_at.isoformat(),
         status=str(post.status),
+        has_article=bool(post.article_text),
     )

@@ -20,13 +20,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from crosspost.adapters.base import ChannelAdapter, ResultStatus
+from crosspost.content.article_link import LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import validate
 from crosspost.db.models import PublicationStatus
 from crosspost.db.publication_repo import PublicationRepository
+from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
 
 logger = logging.getLogger(__name__)
+
+# Статусы, которые считаем успехом канала (для single-shot step связки статьи).
+_SUCCESS_STATUSES = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
 
 # async (channel) -> адаптер, либо None если нет активного подключения/учётки.
 AdapterFactory = Callable[[str], Awaitable[ChannelAdapter | None]]
@@ -66,13 +71,38 @@ class PublishService:
         channels: list[str],
         *,
         publication_id: str,
+        article_text: str | None = None,
+        article_title: str | None = None,
     ) -> list[ChannelOutcome]:
-        """Опубликовать во все каналы. Возвращает поканальные итоги (частичный успех — норма)."""
+        """Опубликовать во все каналы. Возвращает поканальные итоги (частичный успех — норма).
+
+        article_text задан → сначала статья в Telegraph, ссылка подставляется в текст
+        поста, затем каналы. Секвенсирование — в общем run_binding; здесь step —
+        single-shot (потолка ретраев у немедленной публикации нет). Пусто → обычный пост.
+        """
         validate(content)  # общая валидация контента (не поканальная)
-        outcomes: list[ChannelOutcome] = []
-        for channel in channels:
-            outcomes.append(await self._publish_one(content, channel, publication_id))
-        return outcomes
+
+        async def _step(channel: str, c: CanonicalContent) -> StepResult:
+            outcome = await self._publish_one(c, channel, publication_id)
+            state = StepState.DONE if outcome.status in _SUCCESS_STATUSES else StepState.FAILED
+            return StepResult(state, outcome, outcome.external_id)
+
+        async def _fail_closed(channel: str) -> ChannelOutcome:
+            await self._repo.set_status(
+                publication_id, channel, PublicationStatus.FAILED, error=NO_ARTICLE_REASON
+            )
+            return ChannelOutcome(channel, PublicationStatus.FAILED.value, error=NO_ARTICLE_REASON)
+
+        flow = await run_binding(
+            content=content,
+            channels=channels,
+            article_text=article_text or "",
+            article_title=article_title,
+            template=LINK_TEMPLATE,
+            step=_step,
+            fail_closed=_fail_closed,
+        )
+        return flow.outcomes
 
     async def retry_channel(
         self,

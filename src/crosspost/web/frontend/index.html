@@ -683,6 +683,7 @@ body {
 .sched-when { font-size: 12px; color: var(--accent); }
 .sched-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sched-chans { font-size: 11px; color: var(--text-3); }
+.sched-badge { font-size: 11px; color: var(--accent, #6b8afd); font-family: var(--font-mono); margin-left: 6px; }
 .sched-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .sched-edit { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .sched-result { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -1765,6 +1766,9 @@ function TargetToggle({ t, checked, onToggle }) {
 function OutcomeCard({ o, onRetry, retrying }) {
   const meta = OUTCOME_META[o.status] || { cls: "info", label: o.status };
   const canRetry = o.status === "failed" || o.status === "needs_relogin";
+  // Telegraph: external_id — это URL статьи (квитанция). Показываем ссылкой, а не id.
+  const articleUrl = o.channel === "telegraph" && o.external_id && /^https?:\/\//.test(o.external_id)
+    ? o.external_id : null;
   // Временная ссылка на канал приходит только в ответе публикации (в БД её нет),
   // поэтому доступна сразу после отправки, но не после перезагрузки страницы.
   return h("div", { className: `outcome ${meta.cls}` },
@@ -1776,7 +1780,11 @@ function OutcomeCard({ o, onRetry, retrying }) {
         : h("span", { className: "outcome-ch mono" }, o.channel),
       h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
     ),
-    o.external_id && h("div", { className: "outcome-id mono" }, `id: ${o.external_id}`),
+    articleUrl && h("a", {
+      className: "btn btn-ghost btn-sm mt-2", href: articleUrl,
+      target: "_blank", rel: "noopener noreferrer",
+    }, "↗ Статья создана"),
+    !articleUrl && o.external_id && h("div", { className: "outcome-id mono" }, `id: ${o.external_id}`),
     o.error && h("div", { className: "outcome-err" }, o.error),
     o.url && h("a", {
       className: "btn btn-ghost btn-sm mt-2", href: o.url,
@@ -1809,6 +1817,7 @@ function ScheduleModal({ onClose, onConfirm }) {
 
 function PublishView({ profile }) {
   const [text, setText] = useState("");
+  const [articleText, setArticleText] = useState("");
   const [files, setFiles] = useState([]);
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
@@ -1903,6 +1912,7 @@ function PublishView({ profile }) {
     const fd = new FormData();
     fd.append("content_type", "post");
     fd.append("text", text);
+    fd.append("article_text", articleText);
     fd.append("channels", JSON.stringify([...selected]));
     files.forEach((f) => fd.append("media", f));
     Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
@@ -1939,7 +1949,7 @@ function PublishView({ profile }) {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
       await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setFiles([]); setOutcomes(null);
+      setText(""); setArticleText(""); setFiles([]); setOutcomes(null);
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); }
@@ -1960,6 +1970,21 @@ function PublishView({ profile }) {
         style: { resize: "vertical", fontFamily: "var(--font-ui)" },
       }),
       h("div", { className: "mt-2" }, h(PhotoPicker, { files, onChange: setFiles })),
+      // Опциональный лонгрид: заполнено → статья уйдёт в Telegraph ПЕРВОЙ,
+      // а в пост добавится ссылка на неё (Instant View). Пусто → обычный пост.
+      h("div", { className: "mt-2" },
+        h("label", { className: "form-label" }, "Текст статьи (Telegraph) — необязательно"),
+        h("textarea", {
+          className: "form-input", rows: 4,
+          placeholder: "Заполните — выйдет статья в Telegraph, а в пост добавится ссылка на неё…",
+          value: articleText, onChange: (e) => setArticleText(e.target.value),
+          style: { resize: "vertical", fontFamily: "var(--font-ui)" },
+        }),
+        articleText.trim()
+          ? h("p", { className: "hint-inline", style: { marginTop: "6px" } },
+              "Статья опубликуется первой; пост получит ссылку на неё.")
+          : null,
+      ),
     ),
 
     // Каналы
@@ -2164,7 +2189,12 @@ function SchedItem({ base, s, onChanged }) {
             h("button", { className: "btn btn-ghost btn-sm", onClick: () => setEditing(false) }, "Отмена"),
           )
         : h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
-      h("div", { className: "sched-text" }, s.text || "(без текста)"),
+      h("div", { className: "sched-text" },
+        s.text || "(без текста)",
+        s.has_article && h("span", { className: "sched-badge",
+          title: "К посту привязана статья Telegraph — выйдет первой, пост получит ссылку" },
+          " + статья"),
+      ),
       h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
       err && h("div", { className: "outcome-err" }, err),
       sendResult && h("div", { className: "sched-result" },
@@ -2248,7 +2278,11 @@ function ImportReportView({ report }) {
         report.resolved.map((r, i) => h("div", { key: i, className: "plan-row" },
           h("span", { className: "plan-when mono" }, new Date(r.scheduled_at).toLocaleString("ru-RU")),
           h("span", { className: "plan-file mono" }, r.file || "текст"),
-          h("span", { className: "plan-text" }, r.text || "(без текста)"),
+          h("span", { className: "plan-text" },
+            r.text || "(без текста)",
+            r.has_article && h("span", { className: "sched-badge",
+              title: "Строка несёт статью Telegraph — выйдет первой, пост получит ссылку" }, " + статья"),
+          ),
           h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата"),
         ))),
     ),

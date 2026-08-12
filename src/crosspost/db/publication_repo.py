@@ -139,6 +139,7 @@ class PublicationRepository:
         media_paths: list[str],
         channels: list[str],
         scheduled_at: datetime,
+        article_text: str | None = None,
     ) -> ScheduledPost:
         post = ScheduledPost(
             profile_id=self._pid,
@@ -148,6 +149,7 @@ class PublicationRepository:
             media_paths=media_paths,
             channels=channels,
             scheduled_at=scheduled_at,
+            article_text=article_text,
         )
         self._s.add(post)
         await self._s.commit()

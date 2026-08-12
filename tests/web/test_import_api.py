@@ -279,6 +279,32 @@ async def test_commit_creates_scheduled_posts(client, factory):
     assert posts[0].scheduled_at < posts[1].scheduled_at
 
 
+async def test_commit_persists_article_text(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"], name="com-article")
+    csv = _csv("файл,текст,статья\n01.jpg,Короткий,Полное тело лонгрида\n02.jpg,Только пост,\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[
+            ("table", ("plan.csv", csv, "text/csv")),
+            ("media", ("01.jpg", b"\xff\xd8\xff", "image/jpeg")),
+            ("media", ("02.jpg", b"\xff\xd8\xff", "image/jpeg")),
+        ],
+        data={
+            "channels": json.dumps(["telegram"]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    by_text = {p.text: p for p in posts}
+    assert by_text["Короткий"].article_text == "Полное тело лонгрида"
+    # Пустая колонка → None (обычный пост), не пустая строка.
+    assert by_text["Только пост"].article_text is None
+
+
 async def test_commit_rejects_non_live_channel(client, factory):
     pid = await _make_profile_with_live(factory, [], name="com-noconn")
     csv = _csv("файл,текст\n01.jpg,Пост\n")

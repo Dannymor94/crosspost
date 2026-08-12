@@ -81,7 +81,9 @@ async def _make_profile(factory, channels_live, *, name="p") -> int:
         return p.id
 
 
-async def _seed_post(factory, profile_id, when, channels, *, media_key="sched-x", text="hi"):
+async def _seed_post(
+    factory, profile_id, when, channels, *, media_key="sched-x", text="hi", article_text=None
+):
     """Создать scheduled-пост + физический медиа-файл под MEDIA_DIR/<key>/."""
     import os
 
@@ -99,6 +101,7 @@ async def _seed_post(factory, profile_id, when, channels, *, media_key="sched-x"
             media_paths=[str(media_file)],
             channels=channels,
             scheduled_at=when,
+            article_text=article_text,
         )
         return post.id, media_dir
 
@@ -293,3 +296,91 @@ async def test_attempts_are_logged(factory):
     assert logs[0].level == "ERROR"
     assert "boom" in logs[0].message
     assert logs[0].publication_id == scheduled_publication_id(post_id)
+
+
+# ── Связка статья→канал (article_text) в планировщике ─────────────────────────
+
+
+class _CapturingMock:
+    """Мок адаптера, запоминающий text/type каждой публикации."""
+
+    def __init__(self, channel, *, result=None, raises=None):
+        self.channel = channel
+        self._result = result
+        self._raises = raises
+        self.texts: list[str] = []
+        self.types: list[str] = []
+        self.calls = 0
+
+    async def publish(self, content, *, publication_id):
+        self.calls += 1
+        self.texts.append(content.text)
+        self.types.append(str(content.type))
+        if self._raises:
+            raise self._raises
+        return self._result or ChannelResult(self.channel, ResultStatus.DONE, external_id="ok")
+
+
+async def test_article_binding_telegraph_first_then_tg_with_link(factory):
+    pid = await _make_profile(factory, ["telegram", "telegraph"], name="art")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(
+        factory, pid, past, ["telegram"], article_text="Тело лонгрида"
+    )
+    url = "https://telegra.ph/Long-08-12"
+    tgraph = _CapturingMock(
+        "telegraph", result=ChannelResult("telegraph", ResultStatus.DONE, external_id=url)
+    )
+    tg = _CapturingMock("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    ex = ScheduledExecutor(factory, max_attempts=3, pacing_seconds=0)
+    with _patch_adapters({"telegraph": tgraph, "telegram": tg}):
+        await ex.run_once()
+        # Идемпотентность: второй тик не создаёт вторую страницу.
+        await ex.run_once()
+
+    assert tgraph.calls == 1
+    assert tgraph.types == ["article"]
+    assert tgraph.texts == ["Тело лонгрида"]
+    assert tg.calls == 1
+    assert url in tg.texts[0]
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert not media_dir.exists()
+
+
+async def test_article_ceiling_fail_closed_channel_not_sent(factory):
+    from crosspost.content.article_link import NO_ARTICLE_REASON
+
+    pid = await _make_profile(factory, ["telegram", "telegraph"], name="artfail")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"], article_text="Тело")
+
+    tgraph = _CapturingMock("telegraph", raises=RuntimeError("telegraph down"))
+    tg = _CapturingMock("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    ex = ScheduledExecutor(factory, max_attempts=1, pacing_seconds=0)
+    with _patch_adapters({"telegraph": tgraph, "telegram": tg}):
+        await ex.run_once()  # telegraph падает до потолка (max=1) → fail-closed
+
+    assert tg.calls == 0  # TG не публиковался
+    assert (
+        await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    )  # не крутится вечно
+    rows = await _channel_rows(factory, pid, post_id)
+    assert str(rows["telegram"].status) == "failed"
+    assert rows["telegram"].error == NO_ARTICLE_REASON
+
+
+async def test_article_pending_keeps_scheduled_and_tg_untouched(factory):
+    pid = await _make_profile(factory, ["telegram", "telegraph"], name="artpend")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"], article_text="Тело")
+
+    tgraph = _CapturingMock("telegraph", raises=RuntimeError("temporary"))
+    tg = _CapturingMock("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    ex = ScheduledExecutor(factory, max_attempts=3, pacing_seconds=0)  # 1 попытка < потолка
+    with _patch_adapters({"telegraph": tgraph, "telegram": tg}):
+        await ex.run_once()
+
+    assert tg.calls == 0  # статья ещё не готова → канал не трогаем
+    assert (
+        await _post_status(factory, post_id) == ScheduledPostStatus.SCHEDULED
+    )  # добьёт следующий тик

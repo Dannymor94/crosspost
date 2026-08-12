@@ -45,6 +45,22 @@ async def test_vk_wall_adapter_uses_profile_target(repo):
     assert adapter._storage_state == _STATE
 
 
+async def test_telegraph_adapter_built_from_token(repo):
+    from crosspost.adapters.api.telegraph import TelegraphAdapter
+
+    p = await repo.create_profile("A")
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "raw-access-token")
+
+    adapter = await build_profile_adapter(repo, p.id, "telegraph")
+    assert isinstance(adapter, TelegraphAdapter)
+    assert adapter._token == "raw-access-token"  # raw access_token, без цели
+
+
+async def test_telegraph_no_token_no_adapter(repo):
+    p = await repo.create_profile("A")
+    assert await build_profile_adapter(repo, p.id, "telegraph") is None
+
+
 async def test_dirty_stored_target_normalized_at_use(repo):
     """Старое значение — полный URL. Адаптер получает ЧИСТОЕ имя (без задвоения)."""
     p = await repo.create_profile("A")

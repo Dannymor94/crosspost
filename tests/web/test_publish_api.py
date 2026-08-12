@@ -659,6 +659,118 @@ async def test_publish_now_no_executor_503(client, factory):
     assert resp.status_code == 503
 
 
+# ── Связка «статья Telegraph → пост со ссылкой» ───────────────────────────────
+
+
+class _CapturingAdapter:
+    """Мок площадки, запоминающий, какой контент ему отдали (проверяем подстановку url)."""
+
+    def __init__(self, channel, *, result=None, raises=None):
+        self.channel = channel
+        self._result = result
+        self._raises = raises
+        self.seen = []  # список текстов, с которыми вызвали publish
+
+    async def publish(self, content, *, publication_id):
+        self.seen.append(content.text)
+        if self._raises:
+            raise self._raises
+        return self._result or ChannelResult(self.channel, ResultStatus.DONE, external_id="ok")
+
+
+async def test_publish_with_article_creates_telegraph_first_and_links(client, factory):
+    """article_text задан → статья в Telegraph, ссылка подставлена в текст TG-поста."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    tg = _CapturingAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    tgraph = _CapturingAdapter(
+        "telegraph",
+        result=ChannelResult("telegraph", ResultStatus.DONE, "https://telegra.ph/Test-08-10"),
+    )
+    with _patch_adapters({"telegram": tg, "telegraph": tgraph}):
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "короткий тизер",
+                "article_text": "полное тело лонгрида",
+                "channels": json.dumps(["telegram"]),
+            },
+            files=_post_files(),
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    by = {o["channel"]: o for o in body["outcomes"]}
+    # Оба итога присутствуют, telegraph — с URL статьи.
+    assert by["telegraph"]["status"] == "done"
+    assert by["telegraph"]["external_id"] == "https://telegra.ph/Test-08-10"
+    assert by["telegram"]["status"] == "done"
+    # Статья получила тело лонгрида; TG-пост — тизер + ссылку на статью.
+    assert tgraph.seen == ["полное тело лонгрида"]
+    assert tg.seen and "https://telegra.ph/Test-08-10" in tg.seen[0]
+    assert "короткий тизер" in tg.seen[0]
+
+
+async def test_publish_article_failed_fail_closed(client, factory):
+    """Telegraph упал → TG-пост НЕ уходит, помечается failed с причиной (fail-closed)."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    tg = _CapturingAdapter("telegram")
+    tgraph = _CapturingAdapter("telegraph", raises=RuntimeError("Telegraph 500"))
+    with _patch_adapters({"telegram": tg, "telegraph": tgraph}):
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "тизер",
+                "article_text": "тело",
+                "channels": json.dumps(["telegram"]),
+            },
+            files=_post_files(),
+        )
+    assert resp.status_code == 200, resp.text
+    by = {o["channel"]: o for o in resp.json()["outcomes"]}
+    assert by["telegram"]["status"] == "failed"
+    assert by["telegraph"]["status"] == "failed"
+    # В канал ничего не ушло — адаптер telegram не вызывали.
+    assert tg.seen == []
+
+
+async def test_schedule_persists_article_text_flag(client, factory):
+    """schedule_post сохраняет article_text; список отдаёт has_article=True."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "later",
+            "article_text": "тело лонгрида",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["has_article"] is True
+
+    listed = await client.get(f"/api/profiles/{pid}/scheduled")
+    assert listed.json()[0]["has_article"] is True
+
+
+async def test_schedule_without_article_flag_false(client, factory):
+    """Пустой article_text → has_article=False (обычный пост)."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "later",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.json()["has_article"] is False
+
+
 # ── Изоляция ──────────────────────────────────────────────────────────────────
 
 

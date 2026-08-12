@@ -206,6 +206,9 @@ class ScheduledPost(Base):
     )
     content_type: Mapped[str] = mapped_column(String(32), nullable=False)
     text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Тело лонгрида для связки Telegraph→канал. Пусто/NULL → обычный пост (см.
+    # orchestrator/article_flow.run_binding). Отдельно от text (короткая подпись TG).
+    article_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     media_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

@@ -34,6 +34,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from crosspost.content.article_link import LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import Publication, PublicationStatus, ScheduledPost
@@ -42,6 +43,7 @@ from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
+from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
 from crosspost.orchestrator.publish_service import ChannelOutcome, PublishService
 from crosspost.web import media as media_store
 
@@ -154,36 +156,92 @@ class ScheduledExecutor:
 
             pub_repo = PublicationRepository(session, profile_id=post.profile_id)
             pubid = scheduled_publication_id(post_id)
-            existing = {r.channel: r for r in await pub_repo.list_statuses(pubid)}
-            pending = [ch for ch in channels if self._is_pending(existing.get(ch))]
+            profile_repo = ProfileRepository(session, vault=get_vault())
+            service = self._make_service(profile_repo, pub_repo, post.profile_id)
+            log_repo = LogRepository(session)
 
-            if pending:
-                await self._attempt_channels(session, post, pub_repo, pubid, pending)
+            # Единый секвенсор связки статья→каналы. Различие с publish-now —
+            # ТОЛЬКО политика ретраев, инъектируемая как step (здесь — с потолком).
+            step = self._ceiling_step(pub_repo, service, log_repo, post.profile_id, pubid)
+            fail_closed = self._fail_closed(pub_repo, log_repo, post.profile_id, pubid)
 
-            # Пере-оценка после попыток: все ли каналы терминальны?
-            rows = {r.channel: r for r in await pub_repo.list_statuses(pubid)}
-            if self._all_terminal(channels, rows):
-                await sched_repo.mark_published(post_id)
-                self._cleanup_media(post.media_paths)
+            flow = await run_binding(
+                content=self._content_from_post(post),
+                channels=channels,
+                article_text=post.article_text or "",
+                article_title=post.title,
+                template=LINK_TEMPLATE,
+                step=step,
+                fail_closed=fail_closed,
+            )
 
-    async def _attempt_channels(
+            # pending → не финализируем: следующий тик добьёт (потолок ещё не исчерпан).
+            if flow.pending:
+                return
+            await sched_repo.mark_published(post_id)
+            self._cleanup_media(post.media_paths)
+
+    def _ceiling_step(
         self,
-        session: AsyncSession,
-        post: ScheduledPost,
         pub_repo: PublicationRepository,
+        service: PublishService,
+        log_repo: LogRepository,
+        profile_id: int,
         pubid: str,
-        pending: list[str],
-    ) -> None:
-        content = self._content_from_post(post)
-        profile_repo = ProfileRepository(session, vault=get_vault())
-        service = self._make_service(profile_repo, pub_repo, post.profile_id)
-        log_repo = LogRepository(session)
+    ):
+        """step с ретрай-потолком: инкапсулирует bump_attempt/потолок/логирование.
 
-        for channel in pending:
+        Уже-DONE/SUBMITTED канал короткозамыкается в DONE без повторной отправки
+        (идемпотентность). Исчерпанный потолок → FAILED. Иначе одна попытка и, если
+        всё ещё неуспех и лимит не достигнут, → PENDING (следующий тик добьёт).
+        """
+
+        async def step(channel: str, content: CanonicalContent) -> StepResult:
+            row = await pub_repo.get_status(pubid, channel)
+            if row is not None and str(row.status) in _SUCCESS:
+                return StepResult(StepState.DONE, self._outcome_from_row(row), row.external_id)
+            if row is not None and row.attempt_count >= self._max_attempts:
+                return StepResult(StepState.FAILED, self._outcome_from_row(row), None)
+
             # Счётчик +1 ДО попытки — переживает падение процесса (потолок соблюдён).
             await pub_repo.bump_attempt(pubid, channel)
             outcome = await service.retry_channel(content, channel, publication_id=pubid)
-            await self._log_outcome(log_repo, post.profile_id, channel, pubid, outcome)
+            await self._log_outcome(log_repo, profile_id, channel, pubid, outcome)
+
+            if outcome.status in _SUCCESS:
+                return StepResult(StepState.DONE, outcome, outcome.external_id)
+            row = await pub_repo.get_status(pubid, channel)
+            if row is not None and row.attempt_count >= self._max_attempts:
+                return StepResult(StepState.FAILED, outcome, None)
+            return StepResult(StepState.PENDING, outcome, None)
+
+        return step
+
+    def _fail_closed(
+        self,
+        pub_repo: PublicationRepository,
+        log_repo: LogRepository,
+        profile_id: int,
+        pubid: str,
+    ):
+        """fail-closed: статья не создана → каналу FAILED с причиной + запись в logs."""
+
+        async def fail_closed(channel: str) -> ChannelOutcome:
+            await pub_repo.set_status(
+                pubid, channel, PublicationStatus.FAILED, error=NO_ARTICLE_REASON
+            )
+            outcome = ChannelOutcome(
+                channel, PublicationStatus.FAILED.value, error=NO_ARTICLE_REASON
+            )
+            await self._log_outcome(log_repo, profile_id, channel, pubid, outcome)
+            return outcome
+
+        return fail_closed
+
+    def _outcome_from_row(self, row: Publication) -> ChannelOutcome:
+        return ChannelOutcome(
+            row.channel, str(row.status), external_id=row.external_id, error=row.error
+        )
 
     # ── Диагностика (Блок 4) ──────────────────────────────────────────────────
 
@@ -231,27 +289,6 @@ class ScheduledExecutor:
             title=post.title,
             media_paths=[Path(p) for p in (post.media_paths or [])],
         )
-
-    def _is_pending(self, row: Publication | None) -> bool:
-        """Нужна ли каналу ещё одна попытка."""
-        if row is None:
-            return True  # ни разу не пробовали
-        if str(row.status) in _SUCCESS:
-            return False  # доставлено
-        return row.attempt_count < self._max_attempts  # упал, но лимит не исчерпан
-
-    def _all_terminal(self, channels: list[str], rows: dict[str, Publication]) -> bool:
-        """Все каналы финализированы: успех ИЛИ исчерпан ретрай."""
-        for ch in channels:
-            row = rows.get(ch)
-            if row is None:
-                return False
-            if str(row.status) in _SUCCESS:
-                continue
-            if row.attempt_count >= self._max_attempts:
-                continue  # терминальный провал
-            return False
-        return True
 
     def _cleanup_media(self, media_paths: list) -> None:
         """Удалить каталоги медиа поста (sched-<uuid>) — все каналы финализированы."""

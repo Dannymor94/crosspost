@@ -50,6 +50,7 @@ class ResolvedOut(BaseModel):
     text: str
     scheduled_at: str  # ISO-8601
     source: str  # "rule" | "explicit"
+    has_article: bool = False  # строка несёт article_text → превью покажет бейдж «+ статья»
 
 
 class ProblemOut(BaseModel):
@@ -103,6 +104,7 @@ def _to_preview(report: ImportReport) -> PreviewOut:
                 text=r.text,
                 scheduled_at=r.scheduled_at.isoformat(),
                 source=r.source,
+                has_article=bool(r.article_text),
             )
             for r in report.resolved
         ],
@@ -225,7 +227,7 @@ async def import_commit(
 
     # Индекс загруженных файлов: lower(basename) → UploadFile
     real_media = [f for f in (media or []) if getattr(f, "filename", None)]
-    available_names = [f.filename for f in real_media]  # оригинальные имена для build_plan
+    available_names = [f.filename for f in real_media if f.filename]  # имена для build_plan
     media_by_basename: dict[str, UploadFile] = {}
     for f in real_media:
         media_by_basename.setdefault(_basename_lower(f.filename or ""), f)
@@ -260,6 +262,7 @@ async def import_commit(
             media_paths=saved_paths,
             channels=channel_list,
             scheduled_at=rrow.scheduled_at,
+            article_text=rrow.article_text or None,
         )
         created += 1
 
