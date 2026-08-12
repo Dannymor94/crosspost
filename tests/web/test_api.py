@@ -244,6 +244,7 @@ async def test_every_wizard_step_has_title_and_known_kind() -> None:
         "browser_open",
         "browser_confirm",
         "target",
+        "telegraph_create",
     }
     for ch, v in VALIDATORS.items():
         if not (v.enabled and v.guide):
@@ -265,10 +266,24 @@ async def test_telegram_wizard_is_interactive_sequence(client: AsyncClient) -> N
     assert next(s for s in g["steps"] if s["key"] == "twofa")["optional"] is True
 
 
-async def test_simple_api_wizard_is_single_step(client: AsyncClient) -> None:
+async def test_telegraph_wizard_structure(client: AsyncClient) -> None:
     g = (await client.get("/api/channels/telegraph/guide")).json()
-    assert [s["kind"] for s in g["steps"]] == ["simple_connect"]
-    assert g["steps"][0]["fields"][0]["name"] == "token"
+    # Основной путь: telegraph_create + optional token fallback.
+    kinds = [s["kind"] for s in g["steps"]]
+    assert kinds == ["telegraph_create", "simple_connect"]
+    # Главный шаг — create_account с тремя полями (short_name, author_name, author_url).
+    create_step = next(s for s in g["steps"] if s["kind"] == "telegraph_create")
+    field_names = [f["name"] for f in create_step["fields"]]
+    assert field_names == ["short_name", "author_name", "author_url"]
+    # author_url — необязательное поле.
+    author_url_field = next(f for f in create_step["fields"] if f["name"] == "author_url")
+    assert author_url_field["required"] is False
+    # Альтернативный путь на шаг ввода готового токена.
+    assert create_step["alt_step"] == "token"
+    # Шаг токена — необязательный и содержит поле token.
+    token_step = next(s for s in g["steps"] if s["kind"] == "simple_connect")
+    assert token_step["optional"] is True
+    assert token_step["fields"][0]["name"] == "token"
 
 
 async def test_browser_wizard_has_open_confirm_target(client: AsyncClient) -> None:

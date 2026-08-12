@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -108,6 +109,7 @@ class WizardFieldOut(BaseModel):
     invalid_message: str = ""
     normalize: str = "trim"
     paste: bool = True
+    required: bool = True
 
 
 class WizardStepOut(BaseModel):
@@ -177,6 +179,7 @@ def _guide_out(guide) -> ChannelGuideOut | None:
                         invalid_message=f.invalid_message,
                         normalize=f.normalize,
                         paste=f.paste,
+                        required=f.required,
                     )
                     for f in s.fields
                 ],
@@ -222,6 +225,17 @@ class ChannelFieldDef(BaseModel):
 
 class ConnectBody(BaseModel):
     fields: dict[str, str]
+
+
+class TelegraphCreateBody(BaseModel):
+    short_name: str
+    author_name: str
+    author_url: str = ""
+
+
+class TelegraphCreateOut(BaseModel):
+    author_name: str
+    author_url: str
 
 
 class ValidationResult(BaseModel):
@@ -402,6 +416,60 @@ async def connect_channel(
         else "Saved but validation failed"
     )
     return ValidationResult(state=str(state), message=msg)
+
+
+@router.post(
+    "/api/profiles/{profile_id}/channels/telegraph/create-account",
+    response_model=TelegraphCreateOut,
+    dependencies=_PROFILE_GUARD,
+)
+async def telegraph_create_account(
+    profile_id: int,
+    body: TelegraphCreateBody,
+    repo: RepoDep,
+) -> TelegraphCreateOut:
+    """Создать аккаунт Telegraph и сохранить токен в vault.
+
+    Клиент токен не видит и не копирует — он сохраняется зашифрованным.
+    Токен НИКОГДА не логируется и не возвращается в ответе.
+    """
+    if await repo.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    short_name = body.short_name.strip()
+    author_name = body.author_name.strip()
+    author_url = body.author_url.strip()
+
+    if not short_name:
+        raise HTTPException(status_code=422, detail="short_name обязателен")
+    if not author_name:
+        raise HTTPException(status_code=422, detail="author_name обязателен")
+
+    params: dict[str, str] = {"short_name": short_name, "author_name": author_name}
+    if author_url:
+        params["author_url"] = author_url
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post("https://api.telegra.ph/createAccount", data=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Telegraph API недоступен: {exc}") from exc
+
+    if not data.get("ok"):
+        err = data.get("error", "неизвестная ошибка")
+        raise HTTPException(status_code=422, detail=f"Telegraph: {err}")
+
+    result = data["result"]
+    token: str = result["access_token"]  # остаётся только в памяти, не логируется
+    await repo.set_credential(profile_id, "telegraph", CredentialKind.API_TOKEN, token)
+    await validate_connection(repo, profile_id, "telegraph")
+
+    return TelegraphCreateOut(
+        author_name=result.get("author_name", author_name),
+        author_url=result.get("author_url", author_url),
+    )
 
 
 @router.post(

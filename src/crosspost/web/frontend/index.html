@@ -1169,7 +1169,7 @@ function normalizeField(kind, raw) {
 // Валидность поля по правилу из декларации (проверяем НОРМАЛИЗОВАННОЕ значение).
 function validateField(f, raw) {
   const norm = normalizeField(f.normalize || "trim", raw);
-  if (!norm) return { norm, valid: false, message: "" };  // пусто — не ошибка, просто нельзя дальше
+  if (!norm) return { norm, valid: f.required === false, message: "" };  // необязательное пустое поле — ок
   if (f.pattern) {
     try {
       if (!new RegExp(f.pattern).test(norm)) {
@@ -1265,6 +1265,7 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [done, setDone] = useState(false);
+  const [doneInfo, setDoneInfo] = useState(null);  // доп. инфо после telegraph_create
   const [browserOpened, setBrowserOpened] = useState(false);
   const [resent, setResent] = useState(false);   // код Telegram переслан заново
 
@@ -1328,6 +1329,14 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
       } else if (k === "tg_twofa") {
         const r = await api.post(`${pbase}/channels/telegram/login/sign-in`, { password: values.password || "" });
         if (r.step === "done") setDone(true);
+      } else if (k === "telegraph_create") {
+        const r = await api.post(`${pbase}/channels/telegraph/create-account`, {
+          short_name: (values.short_name || "").trim(),
+          author_name: (values.author_name || "").trim(),
+          author_url: (values.author_url || "").trim(),
+        });
+        setDoneInfo({ author_name: r.author_name, author_url: r.author_url });
+        setDone(true);
       } else if (k === "simple_connect") {
         const fd = {};
         (current.fields || []).forEach((f) => { fd[f.name] = (values[f.name] || "").trim(); });
@@ -1377,6 +1386,7 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
     simple_connect: "Проверить и сохранить", browser_open: "Войти",
     browser_confirm: "Я вошёл", target: "Сохранить и завершить",
     tg_session: "Проверить сессию и подключить",
+    telegraph_create: "Создать аккаунт",
   };
 
   if (done) {
@@ -1384,7 +1394,16 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
       h("div", { className: "wiz-success" },
         h("div", { className: "wiz-success-ic" }, "✓"),
         h("div", { className: "wiz-success-title" }, "Готово, канал подключён"),
-        h("p", { className: "wiz-success-body" }, "Теперь можно публиковать — этот канал появится на экране «Публикация»."),
+        doneInfo
+          ? h("div", null,
+              h("p", { className: "wiz-success-body" }, `Автор статей: ${doneInfo.author_name}`),
+              doneInfo.author_url && h("p", { className: "wiz-success-body" },
+                h("a", { href: doneInfo.author_url, target: "_blank", rel: "noopener noreferrer" }, doneInfo.author_url),
+              ),
+              h("p", { className: "wiz-success-body", style: { fontSize: "12px", opacity: 0.7, marginTop: "8px" } },
+                "Токен сохранён зашифрованным. Восстановить его нельзя — при необходимости переподключите канал через мастер."),
+            )
+          : h("p", { className: "wiz-success-body" }, "Теперь можно публиковать — этот канал появится на экране «Публикация»."),
         h("button", { className: "btn btn-primary mt-2", onClick: () => { onDone("live"); onClose(); } }, "Отлично"),
       ),
     );
