@@ -899,6 +899,20 @@ body {
 }
 .role-badge.admin  { background: var(--accent-dim); color: var(--accent); }
 .role-badge.client { background: var(--bg-card); color: var(--text-2); border: 1px solid var(--border); }
+.topbar-profile-select {
+  margin-right: auto;
+  max-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-1);
+  font-size: 13px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.topbar-profile-select:hover { border-color: var(--border-f); }
+.topbar-profile-select:focus { outline: none; border-color: var(--accent); }
 .client-brand { display: flex; align-items: center; gap: 8px; margin-right: auto;
   font-family: var(--font-mono); color: var(--accent); font-size: 14px; letter-spacing: 1px; }
 
@@ -2784,9 +2798,20 @@ function BrowserVisibilityToggle() {
   );
 }
 
-function TopBar({ me, onLogout }) {
+function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAdmin }) {
   return h("div", { className: "topbar" },
     me.role === "client" && h("div", { className: "client-brand" }, "⊹ CROSSPOST"),
+    isAdmin && profiles.length > 0 && h("select", {
+      className: "topbar-profile-select",
+      value: activeProfileId ?? "",
+      title: "Переключить профиль",
+      onChange: e => {
+        const p = profiles.find(x => x.id === Number(e.target.value));
+        if (p) onSelectProfile(p);
+      },
+    },
+      profiles.map(p => h("option", { key: p.id, value: p.id }, p.name)),
+    ),
     me.role === "admin" && h(BrowserVisibilityToggle),
     h("div", { className: "user-chip" },
       h("span", { className: `role-badge ${me.role}` }, me.role === "admin" ? "Админ" : "Клиент"),
@@ -2894,7 +2919,11 @@ function App() {
     api.get("/api/profiles")
       .then(data => {
         setProfiles(data);
-        setActive(prev => (prev && data.find(p => p.id === prev.id)) || data[0] || null);
+        setActive(prev => {
+          if (prev && data.find(p => p.id === prev.id)) return prev;
+          const savedId = Number(localStorage.getItem("crosspost_active_profile"));
+          return data.find(p => p.id === savedId) || data[0] || null;
+        });
       })
       .catch(() => {})
       .finally(() => setLoadingProfiles(false));
@@ -2917,7 +2946,12 @@ function App() {
     setActive(p);
   }
 
-  function selectProfile(p) { setConsoleOpen(false); setFocusChannel(null); setActive(p); }
+  function selectProfile(p) {
+    setConsoleOpen(false);
+    setFocusChannel(null);
+    setActive(p);
+    localStorage.setItem("crosspost_active_profile", String(p.id));
+  }
 
   // Переход из строки консоли: открыть профиль клиента на вкладке «Каналы», подсветить канал.
   function goToProfile(pid, channel) {
@@ -2956,7 +2990,10 @@ function App() {
       consoleActive: consoleOpen,
     }),
     h("main", { className: "main" },
-      h(TopBar, { me, onLogout: logout }),
+      h(TopBar, {
+        me, onLogout: logout,
+        profiles, activeProfileId: active?.id, onSelectProfile: selectProfile, isAdmin,
+      }),
       mainBody,
     ),
     showNewProfile && h(NewProfileModal, {
