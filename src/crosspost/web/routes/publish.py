@@ -31,7 +31,7 @@ from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
-from crosspost.db.models import ConnectionState, CredentialKind, PublicationStatus
+from crosspost.db.models import ConnectionState, PublicationStatus
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -220,6 +220,7 @@ async def publish_targets(
         raise HTTPException(status_code=422, detail=f"Неизвестный тип: {content_type}") from exc
 
     conns = {c.channel: c.state for c in await profile_repo.get_connections(profile_id)}
+    trepo = ChannelTargetRepository(session, vault=get_vault(), profile_id=profile_id)
     out: list[TargetOut] = []
     for ch, v in VALIDATORS.items():
         if not v.enabled:
@@ -230,9 +231,9 @@ async def publish_targets(
         live = state == ConnectionState.LIVE
         has_target = True
         if v.needs_target:
-            has_target = bool(
-                await profile_repo.get_credential(profile_id, ch, CredentialKind.TARGET)
-            )
+            # «Есть цель?» = есть хотя бы одна ChannelTarget (список лениво сидится
+            # из legacy: CredentialKind.TARGET у браузерных, target_channel-блоб у TG).
+            has_target = bool(await trepo.list_targets(ch))
         eligible = live and supported and has_target
         if not supported:
             reason = f"не поддерживает {ctype.value}"
@@ -650,7 +651,9 @@ async def _reject_ineligible(
                 target = None
             if target is None or target.channel != ch:
                 raise HTTPException(status_code=422, detail=f"'{ch}': выбранная цель не найдена")
-        elif not await profile_repo.get_credential(profile_id, ch, CredentialKind.TARGET):
+        elif not await trepo.list_targets(ch):
+            # legacy-выбор без target_id: хотя бы одна цель должна существовать (список
+            # лениво сидится из старой одиночной цели / telegram-блоба).
             raise HTTPException(
                 status_code=422,
                 detail=f"'{ch}': укажите «{v.target_label.lower()}» в настройках",

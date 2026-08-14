@@ -52,7 +52,10 @@ async def build_profile_adapter(
         return None  # нет сессии/учётки → сервис отдаст needs_relogin
 
     if channel == "telegram":
-        return await _build_telegram(cred, store)
+        # Цель расцеплена с сессией: явная цель из выбранной ChannelTarget, блоб —
+        # только сид первой цели и фолбэк для legacy-вызова без target_id (Блок 6).
+        target = await _resolve_target(repo, profile_id, channel, target_id)
+        return await _build_telegram(cred, store, explicit_target=target)
 
     if channel == "telegraph":
         from crosspost.adapters.api.telegraph import TelegraphAdapter  # noqa: PLC0415
@@ -92,7 +95,7 @@ async def _resolve_target(
     return await repo.get_credential(profile_id, channel, CredentialKind.TARGET) or ""
 
 
-async def _build_telegram(cred: str, store) -> ChannelAdapter | None:
+async def _build_telegram(cred: str, store, *, explicit_target: str = "") -> ChannelAdapter | None:
     from telethon import TelegramClient  # noqa: PLC0415
     from telethon.sessions import StringSession  # noqa: PLC0415
 
@@ -102,7 +105,8 @@ async def _build_telegram(cred: str, store) -> ChannelAdapter | None:
     api_id = int(cfg.get("api_id") or 0)
     api_hash = str(cfg.get("api_hash") or "")
     session = str(cfg.get("session") or "")
-    target = str(cfg.get("target_channel") or "")
+    # Явная цель (выбранная ChannelTarget) приоритетна; блоб — фолбэк (legacy/сид).
+    target = explicit_target or str(cfg.get("target_channel") or "")
     if not (api_id and api_hash and session and target):
         logger.warning("telegram: неполная учётка профиля")
         return None

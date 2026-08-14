@@ -79,6 +79,26 @@ def normalize_yandex_org(raw: str) -> str:
     return m.group(1)
 
 
+def normalize_telegram_target(raw: str) -> str:
+    """Канал назначения Telegram → @username или числовой id.
+
+    '@my_channel' | 'my_channel' | 'https://t.me/my_channel' | 't.me/my_channel'
+    → '@my_channel'. Числовой id (-100…) остаётся как есть (телетон принимает оба).
+    """
+    s = (raw or "").strip()
+    s = re.sub(r"^https?://", "", s, flags=re.I)
+    s = re.sub(r"^t\.me/", "", s, flags=re.I)
+    s = s.strip("/").split("/")[0].split("?")[0].strip()
+    if not s:
+        raise TargetError("Укажите канал: @username или ссылку t.me/…")
+    if re.fullmatch(r"-?\d+", s):  # числовой id канала — как есть
+        return s
+    handle = s.lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]+", handle):
+        raise TargetError("Не похоже на канал Telegram. Укажите @username или t.me/…")
+    return "@" + handle
+
+
 @dataclass(frozen=True)
 class ChannelValidatorDef:
     """Декларация валидатора для одного канала."""
@@ -265,6 +285,12 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         title="Telegram",
         enabled=True,
         interactive=True,  # вход по телефону+коду прямо в UI, см. telegram_login
+        # Мультицели: одна сессия обслуживает несколько @каналов. Цель расцеплена с
+        # сессией — хранится в channel_targets (первая сидится из блоба target_channel).
+        needs_target=True,
+        target_label="Канал назначения",
+        target_hint="@username канала или ссылка t.me/… (вы должны быть админом)",
+        target_normalizer=normalize_telegram_target,
         guide=TELEGRAM_GUIDE,
     ),
     "vk": ChannelValidatorDef(

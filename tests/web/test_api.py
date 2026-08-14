@@ -770,8 +770,8 @@ async def test_target_isolated_between_profiles(client: AsyncClient) -> None:
 async def test_target_rejected_for_channel_without_target(client: AsyncClient) -> None:
     r = await client.post("/api/profiles", json={"name": "tg-owner"})
     pid = r.json()["id"]
-    # telegram цель постинга задаёт в своём флоу, не через /target.
-    resp = await client.put(f"/api/profiles/{pid}/channels/telegram/target", json={"target": "x"})
+    # telegraph — внутренний авто-канал без цели постинга; /target ему не применим.
+    resp = await client.put(f"/api/profiles/{pid}/channels/telegraph/target", json={"target": "x"})
     assert resp.status_code == 400
 
 
