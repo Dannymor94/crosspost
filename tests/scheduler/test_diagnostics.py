@@ -94,7 +94,7 @@ async def test_publish_service_surfaces_screenshot_from_exception(factory):
         pid = p.id
         pub_repo = PublicationRepository(s, profile_id=pid)
 
-        async def build(channel):
+        async def build(channel, target_id=""):
             return _FailingAdapter()
 
         svc = PublishService(pub_repo, build)
@@ -149,7 +149,7 @@ async def test_executor_logs_screenshot_path(factory):
     past = datetime.now() - timedelta(minutes=1)
     await _seed_post(factory, pid, past, ["vk_wall"])
 
-    async def fake_build(repo, profile_id, channel, *, store=None):
+    async def fake_build(repo, profile_id, channel, target_id="", *, store=None):
         return _FailingAdapter()
 
     ex = ScheduledExecutor(factory, max_attempts=1, pacing_seconds=0)

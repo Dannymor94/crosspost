@@ -20,10 +20,10 @@ Fail-closed: статья не создана (FAILED) → каналы НЕ п�
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from crosspost.content.article_link import article_content, render_with_link
 
@@ -54,48 +54,60 @@ class FlowResult:
     pending: bool  # True → не финализировать пост, следующий тик продолжит
 
 
-# Публикует ОДИН канал (или коротко замыкает уже-DONE). Вся политика ретраев здесь.
-Step = Callable[[str, "CanonicalContent"], Awaitable[StepResult]]
-# Записать каналу FAILED с причиной fail-closed и вернуть итог (доступ к repo — у вызывающего).
-FailClosed = Callable[[str], Awaitable["ChannelOutcome"]]
+# Публикует ОДНУ единицу — item (канал ИЛИ пара (канал, цель), см. ниже) — или
+# коротко замыкает уже-DONE. Вся политика ретраев здесь. Тип item непрозрачен для
+# секвенсора: он лишь пробрасывает его в step/fail_closed. В проде item = Selection
+# (канал+цель, мультицели), в юнит-тестах связки — просто строка-канал.
+Step = Callable[[Any, "CanonicalContent"], Awaitable[StepResult]]
+# Записать единице FAILED с причиной fail-closed и вернуть итог (доступ к repo — у вызывающего).
+FailClosed = Callable[[Any], Awaitable["ChannelOutcome"]]
 
 
 async def run_binding(
     *,
     content: CanonicalContent,
-    channels: list[str],
+    channels: Sequence[Any],
     article_text: str,
     article_title: str | None,
     template: str,
     link_phrase: str,
     step: Step,
     fail_closed: FailClosed,
+    article_item: Any = _ARTICLE_CHANNEL,
 ) -> FlowResult:
-    """Прогнать связку: (опц.) статья → подстановка url → каналы. См. модульный docstring."""
-    # ── нет статьи: обычный пост во все каналы ────────────────────────────────
+    """Прогнать связку: (опц.) статья → подстановка url → единицы публикации.
+
+    `channels` — последовательность непрозрачных единиц (item). Секвенсор их не
+    инспектирует, только пробрасывает в step/fail_closed. Для мультицелей одна и та
+    же площадка появляется в списке несколько раз (по разу на цель) как разные item —
+    step различает их по цели. `article_item` — единица фазы статьи (Telegraph
+    таргетлесс); по умолчанию строка-канал (юнит-тесты связки), в проде — Selection.
+    См. модульный docstring.
+    """
+    # ── нет статьи: обычный пост во все единицы ───────────────────────────────
     if not (article_text and article_text.strip()):
-        outcomes = [await step(ch, content) for ch in channels]
+        outcomes = [await step(item, content) for item in channels]
         pending = any(o.state is StepState.PENDING for o in outcomes)
         return FlowResult([o.outcome for o in outcomes], pending)
 
-    # ── фаза статьи: сначала Telegraph, потом каналы со ссылкой ────────────────
-    art = await step(_ARTICLE_CHANNEL, article_content(article_text, article_title))
+    # ── фаза статьи: сначала Telegraph, потом единицы со ссылкой ───────────────
+    art = await step(article_item, article_content(article_text, article_title))
 
     if art.state is StepState.PENDING:
-        # Статья ещё не готова — каналов не касаемся, следующий тик добьёт.
+        # Статья ещё не готова — единиц не касаемся, следующий тик добьёт.
         return FlowResult([], pending=True)
 
     if art.state is StepState.FAILED:
-        # Fail-closed: пост не публикуем, каждому каналу — FAILED с причиной.
-        closed = [await fail_closed(ch) for ch in channels]
+        # Fail-closed: пост не публикуем, каждой единице — FAILED с причиной.
+        closed = [await fail_closed(item) for item in channels]
         return FlowResult([*closed, art.outcome], pending=False)
 
-    # DONE: подставляем url статьи в текст поста, публикуем каналы.
+    # DONE: подставляем url статьи в текст поста, публикуем единицы.
     # external_id у DONE-статьи — URL страницы (квитанция Telegraph); "" быть не должно.
     art_url = art.external_id or ""
     post_content = replace(
         content, text=render_with_link(content.text, art_url, template, link_phrase)
     )
-    results = [await step(ch, post_content) for ch in channels]
+    results = [await step(item, post_content) for item in channels]
     pending = any(r.state is StepState.PENDING for r in results)
     return FlowResult([*[r.outcome for r in results], art.outcome], pending)

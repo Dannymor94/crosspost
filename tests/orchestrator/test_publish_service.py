@@ -50,7 +50,7 @@ class _MockAdapter:
 def _factory(mapping: dict):
     """adapter_factory из словаря channel→adapter (или None)."""
 
-    async def factory(channel):
+    async def factory(channel, target_id=""):
         return mapping.get(channel)
 
     return factory
@@ -183,7 +183,7 @@ async def test_capability_blocks_unsupported_type(session):
     # yandex поддерживает только post; для reel — сразу failed, адаптер не строим.
     called = {"built": False}
 
-    async def factory(channel):
+    async def factory(channel, target_id=""):
         called["built"] = True
         return _MockAdapter(channel)
 
@@ -311,3 +311,108 @@ async def test_publish_article_idempotent_no_second_page(session):
     await svc.publish(content, **args)  # повтор — вторая страница не создаётся
     assert tgraph.calls == 1
     assert tg.calls == 1
+
+
+# ── Мультицели (несколько целей одного канала) ────────────────────────────────
+
+
+def _target_factory(mapping: dict):
+    """Фабрика по ключу (channel, target_id) → adapter. Пишет вызовы в calls_log."""
+    calls_log: list[tuple[str, str]] = []
+
+    async def factory(channel, target_id=""):
+        calls_log.append((channel, target_id))
+        return mapping.get((channel, target_id))
+
+    return factory, calls_log
+
+
+async def test_fanout_to_two_targets_of_same_channel(session):
+    """Один канал, две цели → две независимые единицы с общим publication_id."""
+    from crosspost.orchestrator.publish_service import Selection
+
+    a = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkA"))
+    b = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkB"))
+    factory, log = _target_factory({("vk_wall", "10"): a, ("vk_wall", "20"): b})
+    svc = PublishService(_repo(session), factory)
+
+    outcomes = await svc.publish(
+        _post(),
+        [Selection("vk_wall", "10"), Selection("vk_wall", "20")],
+        publication_id="p1",
+    )
+
+    # Обе цели опубликованы, у каждой своя квитанция и своё измерение target.
+    assert log == [("vk_wall", "10"), ("vk_wall", "20")]
+    by_target = {o.target: (o.status, o.external_id) for o in outcomes}
+    assert by_target == {"10": ("done", "vkA"), "20": ("done", "vkB")}
+    # В БД — две строки под одним publication_id, не коллизят.
+    rows = await _repo(session).list_statuses("p1")
+    assert {(r.channel, r.target): str(r.status) for r in rows} == {
+        ("vk_wall", "10"): "done",
+        ("vk_wall", "20"): "done",
+    }
+
+
+async def test_partial_success_across_targets(session):
+    """Одна цель канала упала, другая прошла — частичный успех по целям."""
+    from crosspost.orchestrator.publish_service import Selection
+
+    ok = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkA"))
+    bad = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.FAILED, error="no"))
+    factory, _ = _target_factory({("vk_wall", "10"): ok, ("vk_wall", "20"): bad})
+    svc = PublishService(_repo(session), factory)
+
+    outcomes = await svc.publish(
+        _post(), [Selection("vk_wall", "10"), Selection("vk_wall", "20")], publication_id="p1"
+    )
+    assert {o.target: o.status for o in outcomes} == {"10": "done", "20": "failed"}
+
+
+async def test_retry_one_target_leaves_other_untouched(session):
+    """Ретрай упавшей цели не трогает успешную (без повторной отправки в неё)."""
+    from crosspost.orchestrator.publish_service import Selection
+
+    ok = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkA"))
+    bad = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.FAILED, error="no"))
+    factory, _ = _target_factory({("vk_wall", "10"): ok, ("vk_wall", "20"): bad})
+    svc = PublishService(_repo(session), factory)
+    await svc.publish(
+        _post(), [Selection("vk_wall", "10"), Selection("vk_wall", "20")], publication_id="p1"
+    )
+    assert ok.calls == 1 and bad.calls == 1
+
+    # Чиним цель 20 и ретраим ТОЛЬКО её.
+    fixed = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkB"))
+    factory2, _ = _target_factory({("vk_wall", "10"): ok, ("vk_wall", "20"): fixed})
+    svc2 = PublishService(_repo(session), factory2)
+    out = await svc2.retry_channel(_post(), Selection("vk_wall", "20"), publication_id="p1")
+
+    assert out.status == "done" and out.target == "20"
+    assert fixed.calls == 1
+    assert ok.calls == 1  # успешная цель не пересылалась
+
+
+async def test_idempotent_per_target_second_publish_skips(session):
+    """Повторная публикация в уже-done цель — SKIP (адаптер не вызывается снова)."""
+    from crosspost.orchestrator.publish_service import Selection
+
+    a = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "vkA"))
+    factory, _ = _target_factory({("vk_wall", "10"): a})
+    svc = PublishService(_repo(session), factory)
+
+    await svc.publish(_post(), [Selection("vk_wall", "10")], publication_id="p1")
+    await svc.publish(_post(), [Selection("vk_wall", "10")], publication_id="p1")  # повтор
+    assert a.calls == 1  # вторая публикация в ту же цель не пошла в адаптер
+
+
+async def test_string_channel_still_works_as_targetless_selection(session):
+    """Старый вызов publish со строками-каналами эквивалентен Selection(ch, '')."""
+    a = _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    factory, log = _target_factory({("telegram", ""): a})
+    svc = PublishService(_repo(session), factory)
+
+    outcomes = await svc.publish(_post(), ["telegram"], publication_id="p1")
+    assert log == [("telegram", "")]
+    assert outcomes[0].target == ""
+    assert outcomes[0].status == "done"

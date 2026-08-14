@@ -278,8 +278,8 @@ class ScheduledExecutor:
         pub_repo: PublicationRepository,
         profile_id: int,
     ) -> PublishService:
-        async def factory(channel: str):
-            return await build_profile_adapter(profile_repo, profile_id, channel)
+        async def factory(channel: str, target_id: str = ""):
+            return await build_profile_adapter(profile_repo, profile_id, channel, target_id)
 
         return PublishService(pub_repo, factory)
 

@@ -37,6 +37,16 @@ class ProfileRepository:
         self._s = session
         self._vault = vault
 
+    @property
+    def session(self) -> AsyncSession:
+        """Сессия репозитория (для построения смежных репо — напр. целей канала)."""
+        return self._s
+
+    @property
+    def vault(self) -> Fernet:
+        """Vault репозитория (тот же ключ шифрования для смежных репо)."""
+        return self._vault
+
     # ── Profiles ─────────────────────────────────────────────────────────────
 
     async def create_profile(self, name: str) -> Profile:

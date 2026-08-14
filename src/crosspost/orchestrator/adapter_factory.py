@@ -20,6 +20,7 @@ from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.config import browser_headless
 from crosspost.db.models import CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
+from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.orchestrator.task import InMemoryIdempotencyStore
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,17 @@ async def build_profile_adapter(
     repo: ProfileRepository,
     profile_id: int,
     channel: str,
+    target_id: str = "",
     *,
     store=None,
 ) -> ChannelAdapter | None:
-    """Собрать адаптер канала под профиль. None — нет активной учётки/цели."""
+    """Собрать адаптер канала под профиль+ЦЕЛЬ. None — нет учётки/цели.
+
+    target_id — id ChannelTarget (мультицели). Пусто "" → legacy-путь: цель берётся
+    из единственной старой CredentialKind.TARGET (браузер) / telegram-блоба. Задан →
+    цель резолвится через ChannelTargetRepository (изоляция по profile_id внутри).
+    Сессия/учётка — ОДНА на канал (один аккаунт → много целей).
+    """
     validator = VALIDATORS.get(channel)
     if validator is None or not validator.enabled:
         return None
@@ -54,15 +62,34 @@ async def build_profile_adapter(
     # per-profile ЦЕЛЬ постинга: своя у каждого профиля (изоляция клиентов).
     target = ""
     if validator.needs_target:
-        target = await repo.get_credential(profile_id, channel, CredentialKind.TARGET) or ""
+        target = await _resolve_target(repo, profile_id, channel, target_id)
         if not target:
-            logger.warning("channel %s: не задана per-profile цель постинга", channel)
+            logger.warning("channel %s: не задана цель постинга (target_id=%r)", channel, target_id)
             return None  # без цели не публикуем (иначе постили бы в чужую группу)
         # Нормализуем ПРИ ИСПОЛЬЗОВАНИИ: даже старое «грязное» значение (полный URL)
         # обрежется до screen_name/id — не постим в vk.com/https://vk.com/...
         target = normalize_target(channel, target)
 
     return _build_browser(channel, cred, store, target)
+
+
+async def _resolve_target(
+    repo: ProfileRepository, profile_id: int, channel: str, target_id: str
+) -> str:
+    """Значение цели (screen_name/org_id/…) по id, либо legacy-одиночная цель.
+
+    target_id задан → берём именно эту ChannelTarget (профиль-scoped). Пусто →
+    старое поведение: единственная CredentialKind.TARGET профиля. Так роуты, ещё
+    не переведённые на выбор целей (Блок 5), продолжают публиковать без поломок.
+    """
+    if target_id:
+        trepo = ChannelTargetRepository(repo.session, vault=repo.vault, profile_id=profile_id)
+        try:
+            tgt = await trepo.get_target(int(target_id))
+        except (ValueError, TypeError):
+            return ""
+        return trepo.decrypt_value(tgt) if tgt is not None else ""
+    return await repo.get_credential(profile_id, channel, CredentialKind.TARGET) or ""
 
 
 async def _build_telegram(cred: str, store) -> ChannelAdapter | None:

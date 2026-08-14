@@ -37,13 +37,17 @@ def new_publication_id() -> str:
 
 
 class IdempotencyStore(Protocol):
-    def is_done(self, publication_id: str, channel: str) -> bool: ...
-    def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None: ...
-    def get_external_id(self, publication_id: str, channel: str) -> str | None:
-        """Квитанция по ключу (publication_id, channel), либо None.
+    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool: ...
+    def mark_done(
+        self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
+    ) -> None: ...
+    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+        """Квитанция по ключу (publication_id, channel, target), либо None.
 
-        Нужна адаптерам с многошаговой отправкой: при ретрае после падения
-        второго вызова позволяет прочитать id уже отправленного первого
+        target — измерение цели (мультицели): одна площадка шлёт в несколько целей
+        под одним publication_id, каждая дедупится отдельно. Пусто "" — таргетлесс
+        (Telegraph/legacy). Нужна адаптерам с многошаговой отправкой: при ретрае
+        после падения второго вызова позволяет прочитать id уже отправленного первого
         сообщения, не пересылая его повторно (см. TelegramAdapter, двухсообщённый
         режим). external_id — квитанция, НЕ ключ дедупа (§6.1).
         """
@@ -54,22 +58,25 @@ class InMemoryIdempotencyStore:
     """Заглушка для тестов/фазы A. В проде — таблица в БД."""
 
     def __init__(self) -> None:
-        self._done: dict[tuple[str, str], str | None] = {}
+        self._done: dict[tuple[str, str, str], str | None] = {}
 
-    def is_done(self, publication_id: str, channel: str) -> bool:
-        return (publication_id, channel) in self._done
+    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
+        return (publication_id, channel, target) in self._done
 
-    def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None:
-        self._done[(publication_id, channel)] = external_id
+    def mark_done(
+        self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
+    ) -> None:
+        self._done[(publication_id, channel, target)] = external_id
 
-    def get_external_id(self, publication_id: str, channel: str) -> str | None:
-        return self._done.get((publication_id, channel))
+    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+        return self._done.get((publication_id, channel, target))
 
 
 class JSONIdempotencyStore:
-    """Файловый store для MVP-0 (вместо БД). Состояние (publication_id, channel) -> external_id.
+    """Файловый store для MVP-0 (вместо БД). Ключ (publication_id, channel, target).
 
     Достаточно для синхронного CLI. На MVP-1 заменяется БД-реализацией того же протокола.
+    Старые 2-частные файлы (без цели) читаются с target="" (обратная совместимость).
     """
 
     def __init__(self, path) -> None:
@@ -80,21 +87,30 @@ class JSONIdempotencyStore:
         self._json = json
         if self._path.exists():
             raw = self._json.loads(self._path.read_text("utf-8"))
-            self._done = {tuple(k.split("|", 1)): v for k, v in raw.items()}
+            self._done = {self._parse_key(k): v for k, v in raw.items()}
         else:
             self._done = {}
 
+    @staticmethod
+    def _parse_key(k: str) -> tuple[str, str, str]:
+        parts = k.split("|", 2)
+        while len(parts) < 3:  # старый формат "pub|channel" → цель ""
+            parts.append("")
+        return (parts[0], parts[1], parts[2])
+
     def _flush(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        raw = {f"{p}|{c}": v for (p, c), v in self._done.items()}
+        raw = {f"{p}|{c}|{t}": v for (p, c, t), v in self._done.items()}
         self._path.write_text(self._json.dumps(raw, ensure_ascii=False, indent=2), "utf-8")
 
-    def is_done(self, publication_id: str, channel: str) -> bool:
-        return (publication_id, channel) in self._done
+    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
+        return (publication_id, channel, target) in self._done
 
-    def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None:
-        self._done[(publication_id, channel)] = external_id
+    def mark_done(
+        self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
+    ) -> None:
+        self._done[(publication_id, channel, target)] = external_id
         self._flush()
 
-    def get_external_id(self, publication_id: str, channel: str) -> str | None:
-        return self._done.get((publication_id, channel))
+    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+        return self._done.get((publication_id, channel, target))

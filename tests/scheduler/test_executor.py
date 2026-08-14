@@ -62,7 +62,7 @@ class _MockAdapter:
 
 
 def _patch_adapters(mapping):
-    async def fake_build(repo, profile_id, channel, *, store=None):
+    async def fake_build(repo, profile_id, channel, target_id="", *, store=None):
         return mapping.get(channel)
 
     return patch(_PATCH, new=fake_build)
