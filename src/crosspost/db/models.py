@@ -153,6 +153,40 @@ class Credential(Base):
     profile: Mapped[Profile] = relationship("Profile", back_populates="credentials")
 
 
+class ChannelTarget(Base):
+    """Именованная цель публикации канала (мультицели).
+
+    Пара (profile_id, channel) может иметь НЕСКОЛЬКО целей: напр. Telegram →
+    «Канал А», «Канал Б»; ВК → несколько сообществ. Учётка/сессия при этом ОДНА
+    на канал (см. Credential) — один аккаунт, много целей публикации.
+
+    value_blob — шифртекст (Fernet, тот же vault, что и credentials): значение цели
+    (screen_name VK / org_id Яндекса / @канал TG) — публичный идентификатор, но
+    посадку на открытый текст не вводим, посыл «расшифровка только в памяти» держим.
+    id — стабильная идентичность цели (переживает переименование): им ключуется
+    идемпотентность (publications.target) и выбор при публикации.
+
+    Индекс ix_channel_target (profile_id, channel) — НЕунивный: несколько целей
+    на канал. Изоляция: привязка к profile_id, каскадное удаление с профилем.
+    """
+
+    __tablename__ = "channel_targets"
+    __table_args__ = (Index("ix_channel_target", "profile_id", "channel"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    value_blob: Mapped[str] = mapped_column(Text, nullable=False)  # шифртекст (Fernet)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+
+    profile: Mapped[Profile] = relationship("Profile")
+
+
 class Publication(Base):
     """Идемпотентный журнал публикаций.
 
