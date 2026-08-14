@@ -44,7 +44,12 @@ from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
 from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
-from crosspost.orchestrator.publish_service import ChannelOutcome, PublishService
+from crosspost.orchestrator.publish_service import (
+    ChannelOutcome,
+    PublishService,
+    Selection,
+    selections_from_stored,
+)
 from crosspost.web import media as media_store
 
 logger = logging.getLogger(__name__)
@@ -149,8 +154,8 @@ class ScheduledExecutor:
             if post is None or str(post.status) != "scheduled":
                 return  # отменён/уже исполнен между сканом и обработкой
 
-            channels = list(post.channels or [])
-            if not channels:
+            selections = selections_from_stored(post.channels)
+            if not selections:
                 await sched_repo.mark_published(post_id)  # нечего слать → закрыть
                 return
 
@@ -167,13 +172,14 @@ class ScheduledExecutor:
 
             flow = await run_binding(
                 content=self._content_from_post(post),
-                channels=channels,
+                channels=selections,
                 article_text=post.article_text or "",
                 article_title=post.title,
                 template=LINK_TEMPLATE,
                 link_phrase=post.link_phrase or DEFAULT_LINK_PHRASE,
                 step=step,
                 fail_closed=fail_closed,
+                article_item=Selection("telegraph", ""),
             )
 
             # pending → не финализируем: следующий тик добьёт (потолок ещё не исчерпан).
@@ -197,21 +203,31 @@ class ScheduledExecutor:
         всё ещё неуспех и лимит не достигнут, → PENDING (следующий тик добьёт).
         """
 
-        async def step(channel: str, content: CanonicalContent) -> StepResult:
-            row = await pub_repo.get_status(pubid, channel)
+        # Счётчик реальных отправок в адаптер за этот проход поста — для пейсинга
+        # между целями (одна отправка за раз → анти-бан). Short-circuit уже-готовых
+        # целей (идемпотентность) отправкой не считается и паузу не вызывает.
+        dispatched = [0]
+
+        async def step(sel: Selection, content: CanonicalContent) -> StepResult:
+            channel, target = sel.channel, sel.target_id
+            row = await pub_repo.get_status(pubid, channel, target=target)
             if row is not None and str(row.status) in _SUCCESS:
                 return StepResult(StepState.DONE, self._outcome_from_row(row), row.external_id)
             if row is not None and row.attempt_count >= self._max_attempts:
                 return StepResult(StepState.FAILED, self._outcome_from_row(row), None)
 
+            if dispatched[0] > 0 and self._pacing > 0:
+                await self._sleep(self._pacing)  # разнос отправок между целями
+            dispatched[0] += 1
+
             # Счётчик +1 ДО попытки — переживает падение процесса (потолок соблюдён).
-            await pub_repo.bump_attempt(pubid, channel)
-            outcome = await service.retry_channel(content, channel, publication_id=pubid)
-            await self._log_outcome(log_repo, profile_id, channel, pubid, outcome)
+            await pub_repo.bump_attempt(pubid, channel, target=target)
+            outcome = await service.retry_channel(content, sel, publication_id=pubid)
+            await self._log_outcome(log_repo, profile_id, sel, pubid, outcome)
 
             if outcome.status in _SUCCESS:
                 return StepResult(StepState.DONE, outcome, outcome.external_id)
-            row = await pub_repo.get_status(pubid, channel)
+            row = await pub_repo.get_status(pubid, channel, target=target)
             if row is not None and row.attempt_count >= self._max_attempts:
                 return StepResult(StepState.FAILED, outcome, None)
             return StepResult(StepState.PENDING, outcome, None)
@@ -227,21 +243,32 @@ class ScheduledExecutor:
     ):
         """fail-closed: статья не создана → каналу FAILED с причиной + запись в logs."""
 
-        async def fail_closed(channel: str) -> ChannelOutcome:
+        async def fail_closed(sel: Selection) -> ChannelOutcome:
             await pub_repo.set_status(
-                pubid, channel, PublicationStatus.FAILED, error=NO_ARTICLE_REASON
+                pubid,
+                sel.channel,
+                PublicationStatus.FAILED,
+                error=NO_ARTICLE_REASON,
+                target=sel.target_id,
             )
             outcome = ChannelOutcome(
-                channel, PublicationStatus.FAILED.value, error=NO_ARTICLE_REASON
+                sel.channel,
+                PublicationStatus.FAILED.value,
+                error=NO_ARTICLE_REASON,
+                target=sel.target_id,
             )
-            await self._log_outcome(log_repo, profile_id, channel, pubid, outcome)
+            await self._log_outcome(log_repo, profile_id, sel, pubid, outcome)
             return outcome
 
         return fail_closed
 
     def _outcome_from_row(self, row: Publication) -> ChannelOutcome:
         return ChannelOutcome(
-            row.channel, str(row.status), external_id=row.external_id, error=row.error
+            row.channel,
+            str(row.status),
+            external_id=row.external_id,
+            error=row.error,
+            target=row.target,
         )
 
     # ── Диагностика (Блок 4) ──────────────────────────────────────────────────
@@ -250,20 +277,21 @@ class ScheduledExecutor:
         self,
         log_repo: LogRepository,
         profile_id: int,
-        channel: str,
+        sel: Selection,
         pubid: str,
         outcome: ChannelOutcome,
     ) -> None:
         ok = outcome.status in _SUCCESS
         level = "INFO" if ok else "ERROR"
-        msg = f"scheduler: {channel} → {outcome.status}"
+        label = f"{sel.channel}·{sel.target_id}" if sel.target_id else sel.channel
+        msg = f"scheduler: {label} → {outcome.status}"
         if outcome.external_id:
             msg += f" ({outcome.external_id})"
         if outcome.error:
             msg += f" — {outcome.error}"
         await log_repo.add(
             profile_id,
-            channel=channel,
+            channel=sel.channel,
             publication_id=pubid,
             level=level,
             message=msg,

@@ -144,7 +144,7 @@ class PublicationRepository:
         text: str,
         title: str | None,
         media_paths: list[str],
-        channels: list[str],
+        channels: list,  # list[str] (legacy) | list[{"channel","target_id"}] (мультицели)
         scheduled_at: datetime,
         article_text: str | None = None,
         link_phrase: str | None = None,

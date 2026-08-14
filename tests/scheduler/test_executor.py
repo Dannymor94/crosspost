@@ -384,3 +384,146 @@ async def test_article_pending_keeps_scheduled_and_tg_untouched(factory):
     assert (
         await _post_status(factory, post_id) == ScheduledPostStatus.SCHEDULED
     )  # добьёт следующий тик
+
+
+# ── Мультицели: пост хранит и исполняет выбранные цели (Блок 4) ────────────────
+
+
+def _patch_targets(mapping):
+    """Фабрика по (channel, target_id) → adapter, плюс запись вызовов в calls."""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_build(repo, profile_id, channel, target_id="", *, store=None):
+        calls.append((channel, target_id))
+        return mapping.get((channel, target_id))
+
+    return patch(_PATCH, new=fake_build), calls
+
+
+async def _target_rows(factory, profile_id, post_id):
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=profile_id)
+        rows = await repo.list_statuses(scheduled_publication_id(post_id))
+        return {(r.channel, r.target): r for r in rows}
+
+
+async def test_multi_target_post_publishes_each_target(factory):
+    """Пост с двумя целями одного канала публикуется в каждую по отдельности."""
+    pid = await _make_profile(factory, ["vk_wall"], name="mt")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(
+        factory,
+        pid,
+        past,
+        [{"channel": "vk_wall", "target_id": "10"}, {"channel": "vk_wall", "target_id": "20"}],
+    )
+
+    a = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "A"))
+    b = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "B"))
+    patcher, calls = _patch_targets({("vk_wall", "10"): a, ("vk_wall", "20"): b})
+    ex = ScheduledExecutor(factory, pacing_seconds=0)
+    with patcher:
+        await ex.run_once()
+
+    assert calls == [("vk_wall", "10"), ("vk_wall", "20")]
+    assert a.calls == 1 and b.calls == 1
+    rows = await _target_rows(factory, pid, post_id)
+    assert str(rows[("vk_wall", "10")].status) == "done"
+    assert rows[("vk_wall", "10")].external_id == "A"
+    assert str(rows[("vk_wall", "20")].status) == "done"
+    assert rows[("vk_wall", "20")].external_id == "B"
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert not media_dir.exists()
+
+
+async def test_pacing_between_targets_within_post(factory):
+    """Между отправками в разные цели одного поста — пауза пейсинга."""
+    pid = await _make_profile(factory, ["vk_wall"], name="mtpace")
+    past = datetime.now() - timedelta(minutes=1)
+    await _seed_post(
+        factory,
+        pid,
+        past,
+        [{"channel": "vk_wall", "target_id": "10"}, {"channel": "vk_wall", "target_id": "20"}],
+    )
+
+    sleeps: list[float] = []
+
+    async def recording_sleep(seconds):
+        sleeps.append(seconds)
+
+    a = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "A"))
+    b = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "B"))
+    patcher, _ = _patch_targets({("vk_wall", "10"): a, ("vk_wall", "20"): b})
+    ex = ScheduledExecutor(factory, pacing_seconds=4, poll_seconds=0, sleep=recording_sleep)
+    with patcher:
+        await ex.run_once()
+
+    # Ровно одна пауза между двумя целями (перед первой — нет).
+    assert sleeps == [4]
+
+
+async def test_multi_target_idempotent_across_reruns(factory):
+    """Второй тик не публикует повторно в уже-done цель."""
+    pid = await _make_profile(factory, ["vk_wall"], name="mtidem")
+    past = datetime.now() - timedelta(minutes=1)
+    await _seed_post(
+        factory,
+        pid,
+        past,
+        [{"channel": "vk_wall", "target_id": "10"}, {"channel": "vk_wall", "target_id": "20"}],
+    )
+
+    a = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "A"))
+    b = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "B"))
+    patcher, _ = _patch_targets({("vk_wall", "10"): a, ("vk_wall", "20"): b})
+    ex = ScheduledExecutor(factory, pacing_seconds=0)
+    with patcher:
+        await ex.run_once()
+        await ex.run_once()  # рестарт-симуляция
+
+    assert a.calls == 1 and b.calls == 1
+
+
+async def test_multi_target_partial_success(factory):
+    """Одна цель падает до потолка, другая проходит — пост финализируется."""
+    pid = await _make_profile(factory, ["vk_wall"], name="mtpart")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(
+        factory,
+        pid,
+        past,
+        [{"channel": "vk_wall", "target_id": "10"}, {"channel": "vk_wall", "target_id": "20"}],
+    )
+
+    ok = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "A"))
+    bad = _MockAdapter("vk_wall", raises=RuntimeError("target 20 down"))
+    patcher, _ = _patch_targets({("vk_wall", "10"): ok, ("vk_wall", "20"): bad})
+    ex = ScheduledExecutor(factory, max_attempts=1, pacing_seconds=0)
+    with patcher:
+        await ex.run_once()
+
+    rows = await _target_rows(factory, pid, post_id)
+    assert str(rows[("vk_wall", "10")].status) == "done"
+    assert str(rows[("vk_wall", "20")].status) == "failed"
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert not media_dir.exists()
+    assert ok.calls == 1  # успешная цель не пересылалась
+
+
+async def test_legacy_list_str_shape_still_executes(factory):
+    """Старый JSON-shape channels=list[str] исполняется как таргетлесс единицы."""
+    pid = await _make_profile(factory, ["telegram"], name="legacy")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"])  # старый формат
+
+    a = _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "tg1"))
+    patcher, calls = _patch_targets({("telegram", ""): a})
+    ex = ScheduledExecutor(factory, pacing_seconds=0)
+    with patcher:
+        await ex.run_once()
+
+    assert calls == [("telegram", "")]
+    rows = await _target_rows(factory, pid, post_id)
+    assert str(rows[("telegram", "")].status) == "done"
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED

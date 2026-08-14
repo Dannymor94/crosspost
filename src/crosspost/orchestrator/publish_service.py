@@ -58,6 +58,27 @@ def _as_selection(item: str | Selection) -> Selection:
     return item if isinstance(item, Selection) else Selection(item, "")
 
 
+def selections_from_stored(raw) -> list[Selection]:
+    """Нормализовать сохранённый channels-JSON в список единиц публикации.
+
+    Толерантно к обоим форматам ScheduledPost.channels:
+      • старый  list[str]                       → Selection(ch, "")
+      • новый   list[{"channel","target_id"}]   → Selection(ch, str(target_id))
+    Так запланированные до милстоуна посты исполняются без миграции данных.
+    """
+    out: list[Selection] = []
+    for item in raw or []:
+        if isinstance(item, Selection):
+            out.append(item)
+        elif isinstance(item, str):
+            out.append(Selection(item, ""))
+        elif isinstance(item, dict):
+            out.append(Selection(item["channel"], str(item.get("target_id") or "")))
+        else:  # pragma: no cover — неожиданный тип в JSON
+            raise TypeError(f"unrecognized channels item: {item!r}")
+    return out
+
+
 # async (channel, target_id) -> адаптер, либо None если нет подключения/учётки/цели.
 AdapterFactory = Callable[[str, str], Awaitable[ChannelAdapter | None]]
 
