@@ -713,6 +713,13 @@ body {
 }
 .target-row { display: flex; gap: 8px; align-items: center; }
 .target-row .form-input { flex: 1; }
+/* Мультицели: список целей + строка добавления */
+.tgt-list { display: flex; flex-direction: column; gap: 8px; }
+.tgt-item { display: flex; flex-direction: column; gap: 4px; }
+.tgt-add {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+}
 
 /* ── Scheduled list ──────────────────────────────────────────────────────── */
 .sched-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1525,49 +1532,119 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   );
 }
 
-// ── Target editor (per-profile цель постинга) ──────────────────────────────
+// ── Target list (мультицели: несколько целей публикации на канал) ───────────
 
-function TargetEditor({ channel, profileId, label, hint, current, guide, onSaved }) {
-  const [value, setValue] = useState(current || "");
-  const [saving, setSaving] = useState(false);
-  const [ok, setOk] = useState(false);
-  useEffect(() => { setValue(current || ""); }, [current]);
-
+// Одна цель канала: имя + значение (адрес группы / id / @канал). Значение сервер
+// нормализует при сохранении (полный URL → только имя/id). Удаление с подтверждением.
+function TargetRow({ channel, profileId, item, field, onChanged }) {
+  const base = `/api/profiles/${profileId}/channels/${channel}/targets/${item.id}`;
+  const [name, setName] = useState(item.name);
+  const [value, setValue] = useState(item.value);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEffect(() => { setName(item.name); setValue(item.value); }, [item.name, item.value]);
+
+  const dirty = name.trim() !== item.name || value.trim() !== item.value;
+
   async function save() {
-    const t = value.trim();
-    if (!t) return;
-    setSaving(true); setOk(false); setErr(null);
+    if (!name.trim() || !value.trim()) return;
+    setBusy(true); setErr(null);
     try {
-      const res = await api.put(`/api/profiles/${profileId}/channels/${channel}/target`, { target: t });
-      // Сервер вернул НОРМАЛИЗОВАННОЕ значение (из полного URL → только имя/id).
-      if (res && typeof res.target === "string") setValue(res.target);
-      setOk(true);
-      onSaved?.();
-    } catch (ex) {
-      setErr(ex.message);
-    } finally { setSaving(false); }
+      const res = await api.patch(base, { name: name.trim(), value: value.trim() });
+      setName(res.name); setValue(res.value);  // сервер вернул нормализованное значение
+      onChanged?.();
+    } catch (ex) { setErr(ex.message); }
+    finally { setBusy(false); }
+  }
+  async function remove() {
+    setBusy(true); setErr(null);
+    try { await api.del(base); onChanged?.(); }
+    catch (ex) { setErr(ex.message); setBusy(false); setConfirmDel(false); }
   }
 
-  const dirty = value.trim() !== (current || "");
-  return h("div", { className: "target-editor" },
-    h("label", { className: "form-label", htmlFor: `tgt-${channel}` }, label || "Цель постинга"),
+  return h("div", { className: "tgt-item" },
     h("div", { className: "target-row" },
       h("input", {
-        id: `tgt-${channel}`, className: "form-input mono", value,
-        onChange: (e) => { setValue(e.target.value); setOk(false); },
-        placeholder: hint || "", spellCheck: false, autoComplete: "off",
+        className: "form-input", value: name, placeholder: "Название",
+        onChange: (e) => setName(e.target.value),
+      }),
+      h("input", {
+        className: "form-input mono", value, placeholder: field?.placeholder || "",
+        spellCheck: false, autoComplete: "off", onChange: (e) => setValue(e.target.value),
       }),
       h("button", {
         className: "btn btn-ghost btn-sm", onClick: save,
-        disabled: saving || !value.trim() || !dirty,
-      }, saving ? h(Spinner) : (ok && !dirty ? "✓" : "Сохранить")),
+        disabled: busy || !dirty || !name.trim() || !value.trim(),
+      }, busy ? h(Spinner) : "Сохранить"),
+      confirmDel
+        ? h("button", { className: "btn btn-danger btn-sm", onClick: remove, disabled: busy }, "Удалить")
+        : h("button", { className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(true),
+            disabled: busy, title: "Удалить цель" }, "✕"),
+      confirmDel && h("button", { className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(false) }, "Отмена"),
     ),
-    hint && h("p", { className: "form-hint" }, hint),
-    h(FieldHowTo, { guide, field: "target" }),
     err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
-    !current && h("p", { className: "form-hint", style: { color: "var(--amber)" } },
-      "Без цели канал недоступен для публикации — у каждого клиента своя группа."),
+  );
+}
+
+// Список целей канала: CRUD поверх /channels/{channel}/targets. Поля значения —
+// из декларации канала (target_field). onChanged дёргает обновление карточек/публикации.
+function TargetList({ channel, profileId, label, hint, field, guide, onChanged }) {
+  const base = `/api/profiles/${profileId}/channels/${channel}/targets`;
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [newValue, setNewValue] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setItems(await api.get(base)); setErr(null); }
+    catch (ex) { setErr(ex.message); }
+  }, [base]);
+  useEffect(() => { load(); }, [load]);
+
+  const refresh = useCallback(() => { load(); onChanged?.(); }, [load, onChanged]);
+
+  async function add() {
+    if (!newName.trim() || !newValue.trim()) return;
+    setAdding(true); setErr(null);
+    try {
+      await api.post(base, { name: newName.trim(), value: newValue.trim() });
+      setNewName(""); setNewValue("");
+      refresh();
+    } catch (ex) { setErr(ex.message); }
+    finally { setAdding(false); }
+  }
+
+  return h("div", { className: "target-editor" },
+    h("label", { className: "form-label" }, label || "Цели публикации"),
+    items === null
+      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю цели…"))
+      : items.length === 0
+        ? h("p", { className: "form-hint", style: { color: "var(--amber)" } },
+            "Пока нет ни одной цели — добавьте хотя бы одну, иначе канал недоступен для публикации.")
+        : h("div", { className: "tgt-list" }, items.map((it) =>
+            h(TargetRow, { key: it.id, channel, profileId, item: it, field, onChanged: refresh }))),
+    // Добавить новую цель.
+    h("div", { className: "tgt-add" },
+      h("div", { className: "target-row" },
+        h("input", {
+          className: "form-input", value: newName, placeholder: "Название (напр. «Основной канал»)",
+          onChange: (e) => setNewName(e.target.value),
+        }),
+        h("input", {
+          className: "form-input mono", value: newValue, placeholder: field?.placeholder || hint || "",
+          spellCheck: false, autoComplete: "off", onChange: (e) => setNewValue(e.target.value),
+        }),
+        h("button", {
+          className: "btn btn-ghost btn-sm", onClick: add,
+          disabled: adding || !newName.trim() || !newValue.trim(),
+        }, adding ? h(Spinner) : "Добавить"),
+      ),
+      hint && h("p", { className: "form-hint" }, hint),
+      h(FieldHowTo, { guide, field: field?.name || "target" }),
+    ),
+    err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
   );
 }
 
@@ -1645,12 +1722,13 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
-    // per-profile цель постинга (группа/организация) — своя у каждого клиента.
-    // Мастер задаёт её при подключении; здесь можно поправить в любой момент.
-    ch.needs_target && h(TargetEditor, {
+    // per-profile цели постинга (группы/каналы) — свои у каждого клиента.
+    // Мастер заводит первую при подключении; здесь список можно расширять/править.
+    ch.needs_target && h(TargetList, {
       channel: ch.channel, profileId,
-      label: ch.target_label, hint: ch.target_hint, current: ch.target,
-      guide: ch.guide, onSaved: onRefresh,
+      label: ch.target_label ? `Цели: ${ch.target_label.toLowerCase()}` : "Цели публикации",
+      hint: ch.target_hint, field: ch.target_field,
+      guide: ch.guide, onChanged: onRefresh,
     }),
     msg && h(Alert, { type: msg.type }, msg.text),
     h("div", { className: "card-actions" },
@@ -1978,6 +2056,24 @@ const OUTCOME_META = {
   needs_relogin: { cls: "warning", label: "Нужен ре-логин" },
 };
 
+// Единица публикации = (channel, target_id). Ключ для Set выбранных и для сверки
+// итогов; ␟ — разделитель (в channel/id не встречается). target_id="" — таргетлесс.
+const selKey = (channel, targetId) => `${channel}␟${targetId || ""}`;
+function parseSelKey(key) {
+  const i = key.indexOf("␟");
+  return { channel: key.slice(0, i), target_id: key.slice(i + 1) };
+}
+// Снимок каналов запланированного поста (старый list[str] ИЛИ новый list[{channel,
+// target_id}]): имени цели в снимке нет, поэтому агрегируем по каналу с «×N».
+function schedChannelsLabel(channels) {
+  const counts = {};
+  (channels || []).forEach((c) => {
+    const ch = typeof c === "string" ? c : c.channel;
+    counts[ch] = (counts[ch] || 0) + 1;
+  });
+  return Object.entries(counts).map(([ch, n]) => (n > 1 ? `${ch} ×${n}` : ch)).join(" · ");
+}
+
 function PhotoPicker({ files, onChange }) {
   const inputRef = useRef(null);
   const previews = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
@@ -2010,10 +2106,12 @@ function PhotoPicker({ files, onChange }) {
 function TargetToggle({ t, checked, onToggle }) {
   const icon = CHANNEL_ICONS[t.channel] ?? t.channel.slice(0, 2).toUpperCase();
   const disabled = !t.eligible;
+  // Подпись под именем: имя цели (мультицели) либо просто id канала (таргетлесс).
+  const sub = t.target_name || t.channel;
   return h("button", {
     type: "button",
     className: `target ${checked ? "on" : ""} ${disabled ? "disabled" : ""}`,
-    onClick: disabled ? undefined : () => onToggle(t.channel),
+    onClick: disabled ? undefined : () => onToggle(t),
     disabled,
     title: disabled ? t.reason : "",
     "aria-pressed": checked,
@@ -2023,7 +2121,7 @@ function TargetToggle({ t, checked, onToggle }) {
       h("span", { className: "target-title" }, t.title),
       disabled
         ? h("span", { className: "target-reason" }, t.reason)
-        : h("span", { className: "target-id mono" }, t.channel),
+        : h("span", { className: "target-id mono" }, sub),
     ),
     h("span", { className: `target-check ${checked ? "on" : ""}` }, checked ? "✓" : ""),
   );
@@ -2037,13 +2135,15 @@ function OutcomeCard({ o, onRetry, retrying }) {
     ? o.external_id : null;
   // Временная ссылка на канал приходит только в ответе публикации (в БД её нет),
   // поэтому доступна сразу после отправки, но не после перезагрузки страницы.
+  // Заголовок карточки: «канал · имя цели» (мультицели), без имени — просто канал.
+  const head = o.target_name ? `${o.channel} · ${o.target_name}` : o.channel;
   return h("div", { className: `outcome ${meta.cls}` },
     h("div", { className: "outcome-head" },
       o.url
         ? h("a", { className: "outcome-ch mono outcome-link", href: o.url,
             target: "_blank", rel: "noopener noreferrer",
-            title: "Открыть канал в новой вкладке" }, o.channel, " ↗")
-        : h("span", { className: "outcome-ch mono" }, o.channel),
+            title: "Открыть канал в новой вкладке" }, head, " ↗")
+        : h("span", { className: "outcome-ch mono" }, head),
       h("span", { className: `outcome-badge ${meta.cls}` }, meta.label),
     ),
     articleUrl && h("a", {
@@ -2057,7 +2157,7 @@ function OutcomeCard({ o, onRetry, retrying }) {
       target: "_blank", rel: "noopener noreferrer",
     }, "↗ Открыть канал"),
     canRetry && h("button", {
-      className: "btn btn-ghost btn-sm mt-2", onClick: () => onRetry(o.channel), disabled: retrying,
+      className: "btn btn-ghost btn-sm mt-2", onClick: () => onRetry(o), disabled: retrying,
     }, retrying ? h(Spinner) : null, retrying ? " Повторяю…" : "Повторить только его"),
   );
 }
@@ -2103,7 +2203,9 @@ function PublishView({ profile }) {
     try {
       const t = await api.get(`${base}/publish/targets?content_type=post`);
       setTargets(t);
-      setSelected((prev) => new Set([...prev].filter((c) => t.find((x) => x.channel === c && x.eligible))));
+      // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
+      setSelected((prev) => new Set([...prev].filter((k) =>
+        t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
   }, [base]);
 
@@ -2167,10 +2269,11 @@ function PublishView({ profile }) {
     return () => { document.removeEventListener("visibilitychange", onVis); stop(); };
   }, [loadScheduled, loadReportDelta]);
 
-  function toggle(ch) {
+  function toggle(t) {
+    const k = selKey(t.channel, t.target_id);
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(ch) ? next.delete(ch) : next.add(ch);
+      next.has(k) ? next.delete(k) : next.add(k);
       return next;
     });
   }
@@ -2181,7 +2284,7 @@ function PublishView({ profile }) {
     fd.append("text", text);
     fd.append("article_text", articleText);
     fd.append("link_phrase", linkPhrase);
-    fd.append("channels", JSON.stringify([...selected]));
+    fd.append("channels", JSON.stringify([...selected].map(parseSelKey)));
     files.forEach((f) => fd.append("media", f));
     Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
     return fd;
@@ -2202,11 +2305,14 @@ function PublishView({ profile }) {
     finally { setBusy(false); }
   }
 
-  async function retry(ch) {
-    setRetryCh(ch);
+  async function retry(o) {
+    const k = selKey(o.channel, o.target);
+    setRetryCh(k);
     try {
-      const o = await api.post(`${base}/publish/${pubId}/retry/${ch}`);
-      setOutcomes((prev) => prev.map((x) => (x.channel === ch ? o : x)));
+      // Ретрай КОНКРЕТНОЙ цели: target_id в query (пусто — таргетлесс канал).
+      const q = o.target ? `?target_id=${encodeURIComponent(o.target)}` : "";
+      const res = await api.post(`${base}/publish/${pubId}/retry/${o.channel}${q}`);
+      setOutcomes((prev) => prev.map((x) => (selKey(x.channel, x.target) === k ? res : x)));
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setRetryCh(null); }
   }
@@ -2277,7 +2383,8 @@ function PublishView({ profile }) {
             "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
         : h("div", { className: "target-grid" },
             targets.map((t) => h(TargetToggle, {
-              key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
+              key: selKey(t.channel, t.target_id), t,
+              checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
             }))),
 
     // Действия
@@ -2298,7 +2405,10 @@ function PublishView({ profile }) {
     outcomes && h("div", null,
       h("p", { className: "section-title", style: { marginTop: "24px" } }, "Результат по каналам"),
       h("div", { className: "outcome-grid" },
-        outcomes.map((o) => h(OutcomeCard, { key: o.channel, o, onRetry: retry, retrying: retryCh === o.channel }))),
+        outcomes.map((o) => h(OutcomeCard, {
+          key: selKey(o.channel, o.target), o, onRetry: retry,
+          retrying: retryCh === selKey(o.channel, o.target),
+        }))),
     ),
 
     // Запланированные (общий список: отмена + правка времени)
@@ -2408,7 +2518,8 @@ function ReportRow({ base, r }) {
       h("span", { className: "report-chips" },
         r.outcomes.map((o) => {
           const cm = OUTCOME_META[o.status] || { cls: "info" };
-          return h("span", { key: o.channel, className: `report-chip ${cm.cls}`, title: o.channel });
+          const tip = o.target_name ? `${o.channel} · ${o.target_name}` : o.channel;
+          return h("span", { key: selKey(o.channel, o.target), className: `report-chip ${cm.cls}`, title: tip });
         }),
       ),
       h("span", { className: "report-caret" }, open ? "▾" : "▸"),
@@ -2417,9 +2528,10 @@ function ReportRow({ base, r }) {
       r.outcomes.map((o) => {
         const cm = OUTCOME_META[o.status] || { cls: "info", label: o.status };
         const shot = shots && shots[o.channel];
-        return h("div", { className: "report-chan-row", key: o.channel },
+        const head = o.target_name ? `${o.channel} · ${o.target_name}` : o.channel;
+        return h("div", { className: "report-chan-row", key: selKey(o.channel, o.target) },
           h("span", { className: `outcome-badge ${cm.cls}` }, cm.label),
-          h("span", { className: "outcome-ch mono" }, o.channel),
+          h("span", { className: "outcome-ch mono" }, head),
           o.error && h("span", { className: "outcome-err" }, o.error),
           shot && h("span", { className: "text-3 mono" }, "📷 скриншот сбоя"),
         );
@@ -2476,14 +2588,14 @@ function SchedItem({ base, s, onChanged }) {
           title: "К посту привязана статья Telegraph — выйдет первой, пост получит ссылку" },
           " + статья"),
       ),
-      h("div", { className: "sched-chans mono" }, s.channels.join(" · ")),
+      h("div", { className: "sched-chans mono" }, schedChannelsLabel(s.channels)),
       err && h("div", { className: "outcome-err" }, err),
       sendResult && h("div", { className: "sched-result" },
         (sendResult.results || []).map((r, i) => h("div", {
           key: i,
           className: `sched-result-row ${r.status === "done" || r.status === "submitted" ? "ok" : "fail"}`,
         },
-          h("span", { className: "mono" }, r.channel),
+          h("span", { className: "mono" }, r.target_name ? `${r.channel} · ${r.target_name}` : r.channel),
           h("span", null, " → "),
           h("span", null, r.status === "done" || r.status === "submitted" ? "✓ опубликовано" : `✗ ${r.error || r.status}`),
         )),
@@ -2613,8 +2725,9 @@ function ImportView({ profile }) {
   }, [base]);
   useEffect(() => { loadTargets(); loadScheduled(); }, [loadTargets, loadScheduled]);
 
-  function toggle(ch) {
-    setSelected((prev) => { const n = new Set(prev); n.has(ch) ? n.delete(ch) : n.add(ch); return n; });
+  function toggle(t) {
+    const k = selKey(t.channel, t.target_id);
+    setSelected((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
   }
   function appendRule(fd) {
     if (startDate) fd.append("start_date", startDate);
@@ -2639,7 +2752,7 @@ function ImportView({ profile }) {
     try {
       const fd = new FormData();
       fd.append("table", table);
-      fd.append("channels", JSON.stringify([...selected]));
+      fd.append("channels", JSON.stringify([...selected].map(parseSelKey)));
       fd.append("content_type", "post");
       images.forEach((f) => fd.append("media", f));
       appendRule(fd);
@@ -2688,7 +2801,8 @@ function ImportView({ profile }) {
               "Откройте вкладку «Каналы» и заполните адрес группы / ID канала."),
             h("div", { className: "target-grid" },
               targets.map((t) => h(TargetToggle, {
-                key: t.channel, t, checked: selected.has(t.channel), onToggle: toggle,
+                key: selKey(t.channel, t.target_id), t,
+                checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
               })))),
 
     h("div", { className: "publish-actions" },

@@ -83,6 +83,10 @@ class TargetOut(BaseModel):
     state: str
     eligible: bool
     reason: str = ""
+    # Мультицели: одна запись на КАЖДУЮ цель канала. target_id="" — таргетлесс
+    # (telegraph) или канал без заведённых целей (плейсхолдер-ineligible).
+    target_id: str = ""
+    target_name: str = ""
 
 
 class OutcomeOut(BaseModel):
@@ -195,6 +199,17 @@ def _outcome_out(outcome, names: dict[str, str]) -> OutcomeOut:
     return OutcomeOut(**data, target_name=names.get(tid, ""))
 
 
+def _target_reason(v, ctype, supported: bool, live: bool, state, *, has_target: bool) -> str:
+    """Причина неготовности единицы публикации (порядок приоритета важен)."""
+    if not supported:
+        return f"не поддерживает {ctype.value}"
+    if not live:
+        return "переподключите в настройках" if state else "не подключён"
+    if not has_target:
+        return f"укажите «{v.target_label.lower()}» в настройках"
+    return ""
+
+
 def _build_content(content_type: str, text: str, title: str | None, media_paths: list[str]):
     try:
         ctype = ContentType(content_type)
@@ -229,30 +244,50 @@ async def publish_targets(
         state_str = str(state) if state is not None else "not_connected"
         supported = supports(ch, ctype)
         live = state == ConnectionState.LIVE
-        has_target = True
-        if v.needs_target:
-            # «Есть цель?» = есть хотя бы одна ChannelTarget (список лениво сидится
-            # из legacy: CredentialKind.TARGET у браузерных, target_channel-блоб у TG).
-            has_target = bool(await trepo.list_targets(ch))
-        eligible = live and supported and has_target
-        if not supported:
-            reason = f"не поддерживает {ctype.value}"
-        elif not live:
-            reason = "переподключите в настройках" if state else "не подключён"
-        elif not has_target:
-            reason = f"укажите «{v.target_label.lower()}» в настройках"
-        else:
-            reason = ""
-        out.append(
-            TargetOut(
-                channel=ch,
-                title=v.title or ch,
-                kind=v.kind,
-                state=state_str,
-                eligible=eligible,
-                reason=reason,
+
+        if not v.needs_target:
+            # Таргетлесс-канал (telegraph): ровно одна единица, target_id="".
+            out.append(
+                TargetOut(
+                    channel=ch,
+                    title=v.title or ch,
+                    kind=v.kind,
+                    state=state_str,
+                    eligible=live and supported,
+                    reason=_target_reason(v, ctype, supported, live, state, has_target=True),
+                )
             )
-        )
+            continue
+
+        # Мультицели: по записи на каждую цель (список лениво сидится из legacy).
+        targets = await trepo.list_targets(ch)
+        if not targets:
+            # Ни одной цели — плейсхолдер, чтобы канал был виден как недоступный.
+            out.append(
+                TargetOut(
+                    channel=ch,
+                    title=v.title or ch,
+                    kind=v.kind,
+                    state=state_str,
+                    eligible=False,
+                    reason=_target_reason(v, ctype, supported, live, state, has_target=False),
+                )
+            )
+            continue
+        reason = _target_reason(v, ctype, supported, live, state, has_target=True)
+        for t in targets:
+            out.append(
+                TargetOut(
+                    channel=ch,
+                    title=v.title or ch,
+                    kind=v.kind,
+                    state=state_str,
+                    eligible=live and supported,
+                    reason=reason,
+                    target_id=str(t.id),
+                    target_name=t.name,
+                )
+            )
     return out
 
 
@@ -600,8 +635,16 @@ async def publish_scheduled_now(
 
     pubid = scheduled_publication_id(scheduled_id)
     statuses = await pub_repo.list_statuses(pubid)
+    names = await _target_names(session, profile_id, [s.target for s in statuses])
     results = [
-        {"channel": s.channel, "status": str(s.status), "error": s.error or None} for s in statuses
+        {
+            "channel": s.channel,
+            "status": str(s.status),
+            "error": s.error or None,
+            "target": s.target,
+            "target_name": names.get(s.target, ""),
+        }
+        for s in statuses
     ]
     all_done = all(str(s.status) in _SUCCESS for s in statuses) if statuses else False
     return {"triggered": True, "results": results, "all_done": all_done}

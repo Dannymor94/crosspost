@@ -376,6 +376,24 @@ async def test_publish_partial_then_retry_one_target(client, factory):
     assert st == {t1: "done", t2: "done"}
 
 
+async def test_targets_enumerate_one_entry_per_target(client, factory):
+    """publish/targets отдаёт по записи на КАЖДУЮ цель канала (для галочек в UI)."""
+    async with factory() as s:
+        repo = ProfileRepository(s, vault=get_vault())
+        p = await repo.create_profile("multi")
+        await repo.upsert_connection(p.id, "vk_wall", ConnectionState.LIVE)
+        pid = p.id
+    t1 = await _add_target(factory, pid, "vk_wall", "Группа А", "groupa")
+    t2 = await _add_target(factory, pid, "vk_wall", "Группа Б", "groupb")
+
+    resp = await client.get(f"/api/profiles/{pid}/publish/targets?content_type=post")
+    assert resp.status_code == 200
+    vk = {t["target_id"]: t for t in resp.json() if t["channel"] == "vk_wall"}
+    assert {t1, t2} <= set(vk)
+    assert vk[t1]["target_name"] == "Группа А" and vk[t1]["eligible"] is True
+    assert vk[t2]["target_name"] == "Группа Б" and vk[t2]["eligible"] is True
+
+
 async def test_publish_rejects_unknown_target(client, factory):
     """target_id, которого нет у профиля → 422 (eligibility на уровне цели)."""
     pid = await _make_profile_with_live(factory, ["vk_wall"])
@@ -784,7 +802,9 @@ async def test_publish_now_reports_success(factory):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["all_done"] is True
-    assert body["results"] == [{"channel": "telegram", "status": "done", "error": None}]
+    assert body["results"] == [
+        {"channel": "telegram", "status": "done", "error": None, "target": "", "target_name": ""}
+    ]
 
 
 async def test_publish_now_reports_failure(factory):

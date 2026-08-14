@@ -279,6 +279,55 @@ async def test_commit_creates_scheduled_posts(client, factory):
     assert posts[0].scheduled_at < posts[1].scheduled_at
 
 
+async def test_commit_with_targets_roundtrips(client, factory):
+    """Импорт в конкретные цели: channels хранится вербатим как list[{channel,target_id}]."""
+    from crosspost.db.target_repo import ChannelTargetRepository
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"], name="com-targets")
+    async with factory() as s:
+        trepo = ChannelTargetRepository(s, vault=get_vault(), profile_id=pid)
+        t1 = str((await trepo.add_target("vk_wall", "Группа А", "groupa")).id)
+        t2 = str((await trepo.add_target("vk_wall", "Группа Б", "groupb")).id)
+
+    sel = [{"channel": "vk_wall", "target_id": t1}, {"channel": "vk_wall", "target_id": t2}]
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[
+            ("table", ("plan.csv", _csv("файл,текст\n01.jpg,Пост 1\n"), "text/csv")),
+            ("media", ("01.jpg", b"\xff\xd8\xff", "image/jpeg")),
+        ],
+        data={
+            "channels": json.dumps(sel),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["created"] == 1
+
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    assert len(posts) == 1
+    assert posts[0].channels == sel  # снимок целей сохранён вербатим
+
+
+async def test_commit_rejects_unknown_target(client, factory):
+    """target_id, которого нет у профиля → 422 (валидация на уровне цели)."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"], name="com-badtgt")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[("table", ("plan.csv", _csv("файл,текст\n01.jpg,Пост 1\n"), "text/csv"))],
+        data={
+            "channels": json.dumps([{"channel": "vk_wall", "target_id": "999999"}]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 422
+
+
 async def test_commit_persists_article_text(client, factory):
     pid = await _make_profile_with_live(factory, ["telegram"], name="com-article")
     csv = _csv("файл,текст,статья\n01.jpg,Короткий,Полное тело лонгрида\n02.jpg,Только пост,\n")

@@ -21,10 +21,12 @@ from pydantic import BaseModel
 from crosspost.channels.validators import VALIDATORS
 from crosspost.content.canonical import ContentType
 from crosspost.content.capabilities import supports
-from crosspost.db.models import ConnectionState, CredentialKind
+from crosspost.db.models import ConnectionState
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
+from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.db.vault import get_vault
+from crosspost.orchestrator.publish_service import selections_from_stored
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.import_plan import (
     ImportReport,
@@ -129,15 +131,27 @@ def _basename_lower(name: str) -> str:
 async def _validate_channels(
     profile_repo: ProfileRepository,
     profile_id: int,
-    channels: list[str],
+    channel_list: list,
     content_type: str,
+    *,
+    session,
 ) -> None:
+    """Проверка выбора на уровне ЦЕЛИ (мультицели): канал enabled/live/поддерживает,
+    а для needs_target — выбранная цель существует (или, для legacy-выбора без
+    target_id, заведена хотя бы одна цель; список лениво сидится из старой одиночной).
+    """
     try:
         ctype = ContentType(content_type)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Неизвестный тип: {content_type}") from exc
+    try:
+        selections = selections_from_stored(channel_list)
+    except (TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
     conns = {c.channel: c.state for c in await profile_repo.get_connections(profile_id)}
-    for ch in channels:
+    trepo = ChannelTargetRepository(session, vault=get_vault(), profile_id=profile_id)
+    for sel in selections:
+        ch = sel.channel
         v = VALIDATORS.get(ch)
         if v is None or not v.enabled:
             raise HTTPException(status_code=422, detail=f"Канал '{ch}' недоступен")
@@ -147,9 +161,16 @@ async def _validate_channels(
             raise HTTPException(
                 status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"
             )
-        if v.needs_target and not await profile_repo.get_credential(
-            profile_id, ch, CredentialKind.TARGET
-        ):
+        if not v.needs_target:
+            continue
+        if sel.target_id:
+            try:
+                target = await trepo.get_target(int(sel.target_id))
+            except (ValueError, TypeError):
+                target = None
+            if target is None or target.channel != ch:
+                raise HTTPException(status_code=422, detail=f"'{ch}': выбранная цель не найдена")
+        elif not await trepo.list_targets(ch):
             raise HTTPException(
                 status_code=422,
                 detail=f"'{ch}': укажите «{v.target_label.lower()}» в настройках",
@@ -208,10 +229,11 @@ async def import_commit(
     Каналы валидируются один раз до начала импорта (live + поддержка content_type).
     """
     try:
-        channel_list: list[str] = json.loads(channels)
+        # Вербатим-снимок выбора: старый list[str] ИЛИ новый list[{channel,target_id}].
+        channel_list: list = json.loads(channels)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
-    if not channel_list:
+    if not isinstance(channel_list, list) or not channel_list:
         raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
 
     profile_repo = ProfileRepository(session, vault=get_vault())
@@ -220,7 +242,7 @@ async def import_commit(
     if await profile_repo.get_profile(profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    await _validate_channels(profile_repo, profile_id, channel_list, content_type)
+    await _validate_channels(profile_repo, profile_id, channel_list, content_type, session=session)
 
     data = await table.read()
     rows = _parse_table_or_422(data, table.filename or "plan.csv")
