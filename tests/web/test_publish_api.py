@@ -108,6 +108,31 @@ def _patch_adapters(mapping):
     return patch("crosspost.web.routes.publish.build_profile_adapter", new=fake_build)
 
 
+def _patch_adapters_by_target(mapping):
+    """Мок фабрики по ключу (channel, target_id) + журнал вызовов.
+
+    mapping: {(channel, target_id): adapter}. Возвращает (patch_ctx, calls),
+    где calls — список (channel, target_id) в порядке диспатча (для пейсинга/фан-аута).
+    """
+    calls: list[tuple[str, str]] = []
+
+    async def fake_build(repo, profile_id, channel, target_id="", *, store=None):
+        calls.append((channel, target_id))
+        return mapping.get((channel, target_id))
+
+    return patch("crosspost.web.routes.publish.build_profile_adapter", new=fake_build), calls
+
+
+async def _add_target(factory, pid: int, channel: str, name: str, value: str) -> str:
+    """Завести именованную цель канала, вернуть её id строкой (для selections)."""
+    from crosspost.db.target_repo import ChannelTargetRepository
+
+    async with factory() as s:
+        trepo = ChannelTargetRepository(s, vault=get_vault(), profile_id=pid)
+        target = await trepo.add_target(channel, name, value)
+        return str(target.id)
+
+
 # ── Targets ───────────────────────────────────────────────────────────────────
 
 
@@ -254,6 +279,140 @@ async def test_publish_empty_post_rejected(client, factory):
             data={"content_type": "post", "text": "  ", "channels": json.dumps(["telegram"])},
         )  # ни текста, ни медиа
     assert resp.status_code == 422
+
+
+# ── Мультицели: фан-аут по (channel, target) ──────────────────────────────────
+
+
+async def test_publish_fans_out_to_two_targets_of_one_channel(client, factory):
+    """Один канал, две цели → две отдельные единицы; в ответе target + target_name."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    t1 = await _add_target(factory, pid, "vk_wall", "Группа А", "groupa")
+    t2 = await _add_target(factory, pid, "vk_wall", "Группа Б", "groupb")
+
+    adapters = {
+        ("vk_wall", t1): _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE)
+        ),
+        ("vk_wall", t2): _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE)
+        ),
+    }
+    ctx, calls = _patch_adapters_by_target(adapters)
+    with ctx:
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps(
+                    [
+                        {"channel": "vk_wall", "target_id": t1},
+                        {"channel": "vk_wall", "target_id": t2},
+                    ]
+                ),
+            },
+            files=_post_files(),
+        )
+    assert resp.status_code == 200, resp.text
+    outcomes = resp.json()["outcomes"]
+    by_target = {o["target"]: o for o in outcomes}
+    assert set(by_target) == {t1, t2}
+    assert by_target[t1]["status"] == "done"
+    assert by_target[t1]["target_name"] == "Группа А"
+    assert by_target[t2]["target_name"] == "Группа Б"
+    # Обе цели действительно диспатчились (фабрика вызвана на каждую).
+    assert set(calls) == {("vk_wall", t1), ("vk_wall", t2)}
+
+
+async def test_publish_partial_then_retry_one_target(client, factory):
+    """Одна цель упала — ретраим ИМЕННО её (target_id), вторая не трогается."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    t1 = await _add_target(factory, pid, "vk_wall", "Группа А", "groupa")
+    t2 = await _add_target(factory, pid, "vk_wall", "Группа Б", "groupb")
+
+    adapters = {
+        ("vk_wall", t1): _MockAdapter(
+            "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE)
+        ),
+        ("vk_wall", t2): _MockAdapter("vk_wall", raises=RuntimeError("VK упал")),
+    }
+    ctx, _ = _patch_adapters_by_target(adapters)
+    with ctx:
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps(
+                    [
+                        {"channel": "vk_wall", "target_id": t1},
+                        {"channel": "vk_wall", "target_id": t2},
+                    ]
+                ),
+            },
+            files=_post_files(),
+        )
+    pub_id = resp.json()["publication_id"]
+    by = {o["target"]: o["status"] for o in resp.json()["outcomes"]}
+    assert by == {t1: "done", t2: "failed"}
+
+    # Ретрай только t2 — теперь успешно.
+    fixed = {
+        ("vk_wall", t2): _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE))
+    }
+    ctx2, calls2 = _patch_adapters_by_target(fixed)
+    with ctx2:
+        r = await client.post(f"/api/profiles/{pid}/publish/{pub_id}/retry/vk_wall?target_id={t2}")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "done"
+    assert r.json()["target"] == t2
+    assert calls2 == [("vk_wall", t2)]  # ретрай тронул только t2
+
+    st = {
+        o["target"]: o["status"]
+        for o in (await client.get(f"/api/profiles/{pid}/publish/{pub_id}")).json()
+    }
+    assert st == {t1: "done", t2: "done"}
+
+
+async def test_publish_rejects_unknown_target(client, factory):
+    """target_id, которого нет у профиля → 422 (eligibility на уровне цели)."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    ctx, _ = _patch_adapters_by_target({})
+    with ctx:
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps([{"channel": "vk_wall", "target_id": "424242"}]),
+            },
+            files=_post_files(),
+        )
+    assert resp.status_code == 422
+
+
+async def test_schedule_with_targets_roundtrips(client, factory):
+    """Планирование в конкретные цели: channels хранится вербатим как list[{...}]."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    t1 = await _add_target(factory, pid, "vk_wall", "Группа А", "groupa")
+    sel = [{"channel": "vk_wall", "target_id": t1}]
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "later",
+            "channels": json.dumps(sel),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["channels"] == sel  # вербатим-снимок выбора
+
+    listed = await client.get(f"/api/profiles/{pid}/scheduled")
+    assert listed.json()[0]["channels"] == sel
 
 
 # ── Scheduled ─────────────────────────────────────────────────────────────────

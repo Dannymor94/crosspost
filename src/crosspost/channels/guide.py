@@ -626,3 +626,23 @@ VK_CHANNEL_GUIDE = ChannelGuide(
         ),
     ),
 )
+
+
+# ── Декларация поля цели (мультицели) ──────────────────────────────────────────
+
+
+def target_value_field(guide: ChannelGuide | None) -> WizardField | None:
+    """Поле-ЗНАЧЕНИЕ цели из декларации канала (для формы цели в UI).
+
+    Ищет поле «куда публикуем» среди шагов мастера: браузерные каналы держат его
+    в шаге kind="target" (name="target"), Telegram — в шаге входа (name="target_channel").
+    None → у канала нет цели (Telegraph). Имя самой цели (name) задаёт пользователь и
+    в декларацию не входит — оно общее для всех каналов.
+    """
+    if guide is None:
+        return None
+    for step in guide.steps:
+        for f in step.fields:
+            if f.name in ("target", "target_channel"):
+                return f
+    return None

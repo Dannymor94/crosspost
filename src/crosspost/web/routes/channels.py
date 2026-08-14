@@ -10,9 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from crosspost.channels.connection_validator import validate_connection
+from crosspost.channels.guide import target_value_field
 from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.db.models import ConnectionState, CredentialKind
-from crosspost.web.deps import RepoDep, require_profile_access
+from crosspost.db.target_repo import ChannelTargetRepository
+from crosspost.db.vault import get_vault
+from crosspost.web.deps import RepoDep, SessionDep, require_profile_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["channels"])
@@ -136,6 +139,27 @@ class ChannelGuideOut(BaseModel):
     steps: list[WizardStepOut] = []
 
 
+def _wizard_field_out(f) -> WizardFieldOut:
+    return WizardFieldOut(
+        name=f.name,
+        label=f.label,
+        placeholder=f.placeholder,
+        secret=f.secret,
+        hint=f.hint,
+        pattern=f.pattern,
+        invalid_message=f.invalid_message,
+        normalize=f.normalize,
+        paste=f.paste,
+        required=f.required,
+    )
+
+
+def _target_field_out(guide) -> WizardFieldOut | None:
+    """Декларация поля-значения цели (из мастера) → сериализуемый вид или None."""
+    f = target_value_field(guide)
+    return _wizard_field_out(f) if f is not None else None
+
+
 def _guide_out(guide) -> ChannelGuideOut | None:
     """Декларация инструкции (dataclass) → сериализуемый вид для UI."""
     if guide is None:
@@ -200,11 +224,30 @@ class ChannelStatusOut(BaseModel):
     target_label: str = ""
     target_hint: str = ""
     target: str = ""  # текущая per-profile цель (не секрет — адрес группы/орг)
+    target_field: WizardFieldOut | None = None  # декларация поля цели (для формы мультицелей)
     guide: ChannelGuideOut | None = None  # инструкция подключения (из декларации)
 
 
 class TargetBody(BaseModel):
     target: str
+
+
+class ChannelTargetOut(BaseModel):
+    """Одна цель канала (мультицели). value — нормализованное значение (не секрет)."""
+
+    id: int
+    name: str
+    value: str
+
+
+class TargetCreateBody(BaseModel):
+    name: str
+    value: str
+
+
+class TargetPatchBody(BaseModel):
+    name: str | None = None
+    value: str | None = None
 
 
 class ChannelRegistryItem(BaseModel):
@@ -324,6 +367,7 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
                 target_label=v.target_label,
                 target_hint=v.target_hint,
                 target=target,
+                target_field=_target_field_out(v.guide),
                 guide=_guide_out(v.guide),
             )
         )
@@ -364,6 +408,119 @@ async def set_target(profile_id: int, channel: str, body: TargetBody, repo: Repo
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await repo.set_credential(profile_id, channel, CredentialKind.TARGET, target)
     return TargetBody(target=target)
+
+
+# ── Мультицели канала (список именованных целей) ──────────────────────────────
+
+
+def _require_target_channel(channel: str):
+    """Валидатор канала, поддерживающего цели. 404 — нет канала, 400 — канал без целей."""
+    v = VALIDATORS.get(channel)
+    if v is None:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel}' not in registry")
+    if not v.needs_target:
+        raise HTTPException(status_code=400, detail="Канал не имеет целей публикации")
+    return v
+
+
+def _normalize_target_value(v, raw: str) -> str:
+    """Сырой ввод → чистое значение цели через нормализатор канала. 422 при ошибке."""
+    raw = raw.strip()
+    if not raw:
+        raise HTTPException(status_code=422, detail="Укажите значение цели")
+    try:
+        return v.target_normalizer(raw) if v.target_normalizer else raw
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _target_repo(session, profile_id: int) -> ChannelTargetRepository:
+    return ChannelTargetRepository(session, vault=get_vault(), profile_id=profile_id)
+
+
+def _target_out(trepo: ChannelTargetRepository, channel: str, target) -> ChannelTargetOut:
+    """Сериализовать цель, показывая значение нормализованным (как get_target)."""
+    return ChannelTargetOut(
+        id=target.id,
+        name=target.name,
+        value=normalize_target(channel, trepo.decrypt_value(target)),
+    )
+
+
+@router.get(
+    "/api/profiles/{profile_id}/channels/{channel}/targets",
+    response_model=list[ChannelTargetOut],
+    dependencies=_PROFILE_GUARD,
+)
+async def list_targets(
+    profile_id: int, channel: str, session: SessionDep
+) -> list[ChannelTargetOut]:
+    """Список целей канала. Пустой список лениво засевается из legacy-одиночной цели."""
+    _require_target_channel(channel)
+    trepo = _target_repo(session, profile_id)
+    return [_target_out(trepo, channel, t) for t in await trepo.list_targets(channel)]
+
+
+@router.post(
+    "/api/profiles/{profile_id}/channels/{channel}/targets",
+    response_model=ChannelTargetOut,
+    dependencies=_PROFILE_GUARD,
+)
+async def create_target(
+    profile_id: int, channel: str, body: TargetCreateBody, repo: RepoDep, session: SessionDep
+) -> ChannelTargetOut:
+    if await repo.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    v = _require_target_channel(channel)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Укажите название цели")
+    value = _normalize_target_value(v, body.value)
+    trepo = _target_repo(session, profile_id)
+    target = await trepo.add_target(channel, name, value)
+    return _target_out(trepo, channel, target)
+
+
+@router.patch(
+    "/api/profiles/{profile_id}/channels/{channel}/targets/{target_id}",
+    response_model=ChannelTargetOut,
+    dependencies=_PROFILE_GUARD,
+)
+async def patch_target(
+    profile_id: int,
+    channel: str,
+    target_id: int,
+    body: TargetPatchBody,
+    session: SessionDep,
+) -> ChannelTargetOut:
+    """Переименовать и/или сменить значение цели. Изоляция по profile_id."""
+    v = _require_target_channel(channel)
+    trepo = _target_repo(session, profile_id)
+    if await trepo.get_target(target_id) is None:
+        raise HTTPException(status_code=404, detail="Цель не найдена")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Название цели не может быть пустым")
+        await trepo.rename_target(target_id, name)
+    if body.value is not None:
+        await trepo.set_value(target_id, _normalize_target_value(v, body.value))
+    target = await trepo.get_target(target_id)
+    assert target is not None
+    return _target_out(trepo, channel, target)
+
+
+@router.delete(
+    "/api/profiles/{profile_id}/channels/{channel}/targets/{target_id}",
+    dependencies=_PROFILE_GUARD,
+)
+async def delete_target(profile_id: int, channel: str, target_id: int, session: SessionDep) -> dict:
+    _require_target_channel(channel)
+    trepo = _target_repo(session, profile_id)
+    deleted = await trepo.delete_target(target_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Цель не найдена")
+    return {"deleted": True}
 
 
 @router.post(

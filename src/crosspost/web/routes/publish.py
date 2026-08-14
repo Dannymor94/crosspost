@@ -34,9 +34,14 @@ from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, CredentialKind, PublicationStatus
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
+from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
-from crosspost.orchestrator.publish_service import PublishService
+from crosspost.orchestrator.publish_service import (
+    PublishService,
+    Selection,
+    selections_from_stored,
+)
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.web import media as media_store
 from crosspost.web.deps import SessionDep, require_profile_access
@@ -58,7 +63,7 @@ class _Run:
     """
 
     content: CanonicalContent
-    channels: list[str]
+    selections: list[Selection]  # единицы (канал, цель) публикации — для ретрая
     media_key: str
     article_text: str | None = None  # задан → ретрай канала идёт через связку статьи
     article_title: str | None = None
@@ -89,6 +94,9 @@ class OutcomeOut(BaseModel):
     # Временная ссылка «открыть канал» — приходит из ChannelResult, в БД НЕ пишется.
     # Поэтому есть в ответе publish/retry (из адаптера), но не в поллинге из БД.
     url: str | None = None
+    # Мультицели: id цели ("" — таргетлесс) и её имя для показа («Канал · Имя»).
+    target: str = ""
+    target_name: str = ""
 
 
 class PublishResult(BaseModel):
@@ -101,7 +109,9 @@ class ScheduledOut(BaseModel):
     content_type: str
     text: str
     title: str | None
-    channels: list[str]
+    # Вербатим-снимок выбора: старый list[str] ИЛИ новый list[{channel,target_id}].
+    # Round-trip формы сохраняется; нормализацию в единицы делает executor.
+    channels: list[str | dict]
     scheduled_at: str
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
@@ -149,6 +159,40 @@ def _make_service(
         return await build_profile_adapter(profile_repo, profile_id, channel, target_id)
 
     return PublishService(pub_repo, factory)
+
+
+def _parse_selections(channels_form: str) -> list[Selection]:
+    """Разобрать поле channels: JSON-массив строк (legacy) или {channel,target_id}."""
+    try:
+        raw = json.loads(channels_form)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
+    try:
+        return selections_from_stored(raw)
+    except (TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
+
+
+async def _target_names(session, profile_id: int, target_ids) -> dict[str, str]:
+    """{target_id: name} для непустых id — подпись «Канал · Имя» в итогах."""
+    trepo = ChannelTargetRepository(session, vault=get_vault(), profile_id=profile_id)
+    names: dict[str, str] = {}
+    for tid in {t for t in target_ids if t}:
+        try:
+            tgt = await trepo.get_target(int(tid))
+        except (ValueError, TypeError):
+            tgt = None
+        names[tid] = tgt.name if tgt is not None else ""
+    return names
+
+
+def _outcome_out(outcome, names: dict[str, str]) -> OutcomeOut:
+    """ChannelOutcome → OutcomeOut, доклеивая имя цели по её id."""
+    data = dict(outcome.__dict__)
+    tid = data.get("target", "") or ""
+    return OutcomeOut(**data, target_name=names.get(tid, ""))
 
 
 def _build_content(content_type: str, text: str, title: str | None, media_paths: list[str]):
@@ -229,15 +273,9 @@ async def publish_now(
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
 
-    try:
-        channel_list = json.loads(channels)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
-    if not channel_list:
-        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
-
-    # Отсекаем нерабочие каналы ДО отправки (defense in depth к фронту).
-    await _reject_ineligible(profile_repo, profile_id, channel_list, content_type)
+    selections = _parse_selections(channels)
+    # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
+    await _reject_ineligible(profile_repo, profile_id, selections, content_type, session=session)
 
     publication_id = new_publication_id()
     media_paths = await _save_media(media, publication_id)
@@ -247,7 +285,7 @@ async def publish_now(
     svc = _make_service(profile_repo, pub_repo, profile_id)
     outcomes = await svc.publish(
         content,
-        channel_list,
+        selections,
         publication_id=publication_id,
         article_text=article_text or None,
         article_title=title or None,
@@ -256,16 +294,17 @@ async def publish_now(
 
     _RUNS[(profile_id, publication_id)] = _Run(
         content,
-        channel_list,
+        selections,
         publication_id,
         article_text=article_text or None,
         article_title=title or None,
         link_phrase=link_phrase or None,
     )
     _cleanup_if_final(profile_id, publication_id, outcomes)
+    names = await _target_names(session, profile_id, [o.target for o in outcomes])
     return PublishResult(
         publication_id=publication_id,
-        outcomes=[OutcomeOut(**o.__dict__) for o in outcomes],
+        outcomes=[_outcome_out(o, names) for o in outcomes],
     )
 
 
@@ -275,9 +314,15 @@ async def publish_status(
 ) -> list[OutcomeOut]:
     _, pub_repo = _repos(session, profile_id)
     rows = await pub_repo.list_statuses(publication_id)
+    names = await _target_names(session, profile_id, [r.target for r in rows])
     return [
         OutcomeOut(
-            channel=r.channel, status=str(r.status), external_id=r.external_id, error=r.error
+            channel=r.channel,
+            status=str(r.status),
+            external_id=r.external_id,
+            error=r.error,
+            target=r.target,
+            target_name=names.get(r.target, ""),
         )
         for r in rows
     ]
@@ -288,7 +333,7 @@ async def publish_status(
     response_model=OutcomeOut,
 )
 async def publish_retry(
-    profile_id: int, publication_id: str, channel: str, session: SessionDep
+    profile_id: int, publication_id: str, channel: str, session: SessionDep, target_id: str = ""
 ) -> OutcomeOut:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
@@ -296,8 +341,9 @@ async def publish_retry(
     run = _RUNS.get((profile_id, publication_id))
     if run is None:
         raise HTTPException(status_code=409, detail="Публикация не найдена для повтора")
-    if channel not in run.channels:
-        raise HTTPException(status_code=404, detail="Канал не входит в публикацию")
+    sel = Selection(channel, target_id)
+    if sel not in run.selections:
+        raise HTTPException(status_code=404, detail="Цель не входит в публикацию")
 
     svc = _make_service(profile_repo, pub_repo, profile_id)
     if run.article_text:
@@ -306,7 +352,7 @@ async def publish_retry(
         # Не ретраим сам telegraph поштучно — он часть фазы статьи.
         outcomes = await svc.publish(
             run.content,
-            [channel],
+            [sel],
             publication_id=publication_id,
             article_text=run.article_text,
             article_title=run.article_title,
@@ -314,13 +360,14 @@ async def publish_retry(
         )
         outcome = next((o for o in outcomes if o.channel == channel), outcomes[-1])
     else:
-        outcome = await svc.retry_channel(run.content, channel, publication_id=publication_id)
+        outcome = await svc.retry_channel(run.content, sel, publication_id=publication_id)
 
     all_now = await pub_repo.list_statuses(publication_id)
     if all(str(s.status) in _SUCCESS for s in all_now):
         media_store.cleanup_media(run.media_key)
         _RUNS.pop((profile_id, publication_id), None)
-    return OutcomeOut(**outcome.__dict__)
+    names = await _target_names(session, profile_id, [outcome.target])
+    return _outcome_out(outcome, names)
 
 
 # ── Scheduled ─────────────────────────────────────────────────────────────────
@@ -350,10 +397,17 @@ async def schedule_post(
         channel_list = json.loads(channels)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
-    if not channel_list:
+    if not isinstance(channel_list, list) or not channel_list:
         raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
 
-    await _reject_ineligible(profile_repo, profile_id, channel_list, content_type)
+    # Валидируем по единицам, но храним channel_list ВЕРБАТИМ (старый list[str]
+    # или новый list[{channel,target_id}]) — executor нормализует при исполнении,
+    # round-trip формы сохраняется (см. selections_from_stored).
+    try:
+        selections = selections_from_stored(channel_list)
+    except (TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
+    await _reject_ineligible(profile_repo, profile_id, selections, content_type, session=session)
 
     key = f"sched-{new_publication_id()}"
     media_paths = await _save_media(media, key)
@@ -415,14 +469,18 @@ async def scheduled_report(
     reports: list[ScheduledReportOut] = []
     for post in await pub_repo.list_executed(limit=limit, before=before_dt, since=since_dt):
         pubid = scheduled_publication_id(post.id)
+        rows = await pub_repo.list_statuses(pubid)
+        names = await _target_names(session, profile_id, [r.target for r in rows])
         outcomes = [
             OutcomeOut(
                 channel=r.channel,
                 status=str(r.status),
                 external_id=r.external_id,
                 error=r.error,
+                target=r.target,
+                target_name=names.get(r.target, ""),
             )
-            for r in await pub_repo.list_statuses(pubid)
+            for r in rows
         ]
         assert post.published_at is not None  # list_executed фильтрует published_at IS NOT NULL
         reports.append(
@@ -552,15 +610,28 @@ async def publish_scheduled_now(
 
 
 async def _reject_ineligible(
-    profile_repo: ProfileRepository, profile_id: int, channels: list[str], content_type: str
+    profile_repo: ProfileRepository,
+    profile_id: int,
+    selections: list[Selection],
+    content_type: str,
+    *,
+    session,
 ) -> None:
-    """Отклонить, если среди выбранных есть неlive или неподдерживающий тип канал."""
+    """Отклонить, если среди выбранных единиц есть неlive/неподдерживающий/без цели.
+
+    Проверка на уровне ЦЕЛИ (мультицели): канал должен быть enabled, live и
+    поддерживать тип; а для needs_target-канала выбранная цель должна существовать
+    (по target_id в channel_targets) — либо, для legacy-выбора без target_id,
+    должна быть заведена одиночная цель (back-compat через CredentialKind.TARGET).
+    """
     try:
         ctype = ContentType(content_type)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Неизвестный тип: {content_type}") from exc
     conns = {c.channel: c.state for c in await profile_repo.get_connections(profile_id)}
-    for ch in channels:
+    trepo = ChannelTargetRepository(session, vault=get_vault(), profile_id=profile_id)
+    for sel in selections:
+        ch = sel.channel
         v = VALIDATORS.get(ch)
         if v is None or not v.enabled:
             raise HTTPException(status_code=422, detail=f"Канал '{ch}' недоступен")
@@ -570,9 +641,16 @@ async def _reject_ineligible(
             raise HTTPException(
                 status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"
             )
-        if v.needs_target and not await profile_repo.get_credential(
-            profile_id, ch, CredentialKind.TARGET
-        ):
+        if not v.needs_target:
+            continue
+        if sel.target_id:
+            try:
+                target = await trepo.get_target(int(sel.target_id))
+            except (ValueError, TypeError):
+                target = None
+            if target is None or target.channel != ch:
+                raise HTTPException(status_code=422, detail=f"'{ch}': выбранная цель не найдена")
+        elif not await profile_repo.get_credential(profile_id, ch, CredentialKind.TARGET):
             raise HTTPException(
                 status_code=422,
                 detail=f"'{ch}': укажите «{v.target_label.lower()}» в настройках",

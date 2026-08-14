@@ -163,6 +163,23 @@ async def test_client_cannot_touch_foreign_channels(app, seed):
         await c.aclose()
 
 
+async def test_client_cannot_touch_foreign_targets(app, seed):
+    """CRUD целей канала строго profile-scoped: чужой profile_id → 403."""
+    c = await _login(app, "alice", "alicepass")
+    try:
+        base_own = f"/api/profiles/{seed['a']}/channels/vk_wall/targets"
+        base_foreign = f"/api/profiles/{seed['b']}/channels/vk_wall/targets"
+        # свой профиль — доступ есть (список, пусть и пустой)
+        assert (await c.get(base_own)).status_code == 200
+        # чужой — 403 на всех методах
+        assert (await c.get(base_foreign)).status_code == 403
+        assert (await c.post(base_foreign, json={"name": "x", "value": "grp"})).status_code == 403
+        assert (await c.patch(f"{base_foreign}/1", json={"name": "y"})).status_code == 403
+        assert (await c.delete(f"{base_foreign}/1")).status_code == 403
+    finally:
+        await c.aclose()
+
+
 async def test_client_list_shows_only_own(app, seed):
     c = await _login(app, "alice", "alicepass")
     try:
