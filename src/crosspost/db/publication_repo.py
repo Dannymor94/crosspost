@@ -42,29 +42,33 @@ class PublicationRepository:
         channel: str,
         status: PublicationStatus,
         *,
+        target: str = "",
         external_id: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Upsert поканального статуса (profile_id, publication_id, channel)."""
+        """Upsert поканального статуса (profile_id, publication_id, channel, target)."""
         stmt = (
             sqlite_insert(Publication)
             .values(
                 profile_id=self._pid,
                 publication_id=publication_id,
                 channel=channel,
+                target=target,
                 status=status,
                 external_id=external_id,
                 error=error,
             )
             .on_conflict_do_update(
-                index_elements=["profile_id", "publication_id", "channel"],
+                index_elements=["profile_id", "publication_id", "channel", "target"],
                 set_={"status": status, "external_id": external_id, "error": error},
             )
         )
         await self._s.execute(stmt)
         await self._s.commit()
 
-    async def get_status(self, publication_id: str, channel: str) -> Publication | None:
+    async def get_status(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> Publication | None:
         # populate_existing: upsert идёт сырым SQL мимо identity-map — читаем свежее из БД.
         result = await self._s.execute(
             select(Publication)
@@ -72,6 +76,7 @@ class PublicationRepository:
                 Publication.profile_id == self._pid,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
             )
             .execution_options(populate_existing=True)
         )
@@ -84,12 +89,12 @@ class PublicationRepository:
                 Publication.profile_id == self._pid,
                 Publication.publication_id == publication_id,
             )
-            .order_by(Publication.channel)
+            .order_by(Publication.channel, Publication.target)
             .execution_options(populate_existing=True)
         )
         return list(result.scalars().all())
 
-    async def bump_attempt(self, publication_id: str, channel: str) -> None:
+    async def bump_attempt(self, publication_id: str, channel: str, *, target: str = "") -> None:
         """Инкремент счётчика попыток (профиль-scoped), помечая attempting.
 
         Вызывается ДО попытки — счётчик переживает падение процесса посреди
@@ -103,11 +108,12 @@ class PublicationRepository:
                 profile_id=self._pid,
                 publication_id=publication_id,
                 channel=channel,
+                target=target,
                 status=PublicationStatus.ATTEMPTING,
                 attempt_count=1,
             )
             .on_conflict_do_update(
-                index_elements=["profile_id", "publication_id", "channel"],
+                index_elements=["profile_id", "publication_id", "channel", "target"],
                 set_={
                     "attempt_count": Publication.attempt_count + 1,
                     "status": PublicationStatus.ATTEMPTING,
@@ -117,12 +123,13 @@ class PublicationRepository:
         await self._s.execute(stmt)
         await self._s.commit()
 
-    async def is_done(self, publication_id: str, channel: str) -> bool:
+    async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
         row = await self._s.execute(
             select(Publication.id).where(
                 Publication.profile_id == self._pid,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
                 Publication.status.in_((PublicationStatus.DONE, PublicationStatus.SUBMITTED)),
             )
         )

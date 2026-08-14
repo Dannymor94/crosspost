@@ -29,19 +29,22 @@ class SQLiteIdempotencyStore:
         self._session = session
         self._profile_id = profile_id
 
-    async def is_done(self, publication_id: str, channel: str) -> bool:
-        """True если (profile_id, publication_id, channel) в статусе DONE."""
+    async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
+        """True если (profile_id, publication_id, channel, target) в статусе DONE."""
         row = await self._session.execute(
             select(Publication.id).where(
                 Publication.profile_id == self._profile_id,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
                 Publication.status == PublicationStatus.DONE,
             )
         )
         return row.first() is not None
 
-    async def mark_done(self, publication_id: str, channel: str, external_id: str | None) -> None:
+    async def mark_done(
+        self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
+    ) -> None:
         """Upsert: создать или обновить запись до статуса DONE с external_id."""
         stmt = (
             sqlite_insert(Publication)
@@ -49,11 +52,12 @@ class SQLiteIdempotencyStore:
                 profile_id=self._profile_id,
                 publication_id=publication_id,
                 channel=channel,
+                target=target,
                 status=PublicationStatus.DONE,
                 external_id=external_id,
             )
             .on_conflict_do_update(
-                index_elements=["profile_id", "publication_id", "channel"],
+                index_elements=["profile_id", "publication_id", "channel", "target"],
                 set_={
                     "status": PublicationStatus.DONE,
                     "external_id": external_id,
@@ -63,19 +67,24 @@ class SQLiteIdempotencyStore:
         await self._session.execute(stmt)
         await self._session.commit()
 
-    async def get_external_id(self, publication_id: str, channel: str) -> str | None:
-        """Вернуть квитанцию по ключу (publication_id, channel, profile_id)."""
+    async def get_external_id(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> str | None:
+        """Вернуть квитанцию по ключу (profile_id, publication_id, channel, target)."""
         row = await self._session.execute(
             select(Publication.external_id).where(
                 Publication.profile_id == self._profile_id,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
             )
         )
         result = row.first()
         return result[0] if result else None
 
-    async def increment_attempt(self, publication_id: str, channel: str) -> int:
+    async def increment_attempt(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> int:
         """Увеличить attempt_count на 1, вернуть новое значение."""
         await self._session.execute(
             update(Publication)
@@ -83,6 +92,7 @@ class SQLiteIdempotencyStore:
                 Publication.profile_id == self._profile_id,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
             )
             .values(attempt_count=Publication.attempt_count + 1)
         )
@@ -92,6 +102,7 @@ class SQLiteIdempotencyStore:
                 Publication.profile_id == self._profile_id,
                 Publication.publication_id == publication_id,
                 Publication.channel == channel,
+                Publication.target == target,
             )
         )
         result = row.first()

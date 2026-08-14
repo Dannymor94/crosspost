@@ -33,6 +33,8 @@ def _migrate_sqlite(conn) -> None:
       • scheduled_posts.article_text — тело лонгрида для связки Telegraph→канал;
       • scheduled_posts.link_phrase — текст ссылки на статью (NULL → «Подробнее»);
       • ix_scheduled_report — составной индекс джойна журнала.
+      • publications.target — измерение цели в идемпотентности (мультицели):
+        SQLite не ALTER-ит UNIQUE, поэтому таблица ПЕРЕСТРАивается (см. ниже).
     Все операции idempotent (guard по table_info / IF NOT EXISTS)."""
     cols = {c["name"] for c in sa.inspect(conn).get_columns("scheduled_posts")}
     if "published_at" not in cols:
@@ -44,6 +46,53 @@ def _migrate_sqlite(conn) -> None:
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_scheduled_report "
         "ON scheduled_posts (profile_id, status, published_at)"
+    )
+    _migrate_publications_target(conn)
+
+
+def _migrate_publications_target(conn) -> None:
+    """Добавить publications.target + перестроить UNIQUE на (…, channel, target).
+
+    SQLite не умеет ALTER UNIQUE-констрейнта → пересобираем таблицу: создаём
+    publications_new с новым constraint, переливаем строки (target=''), удаляем
+    старую, переименовываем. Guard по наличию колонки target делает шаг
+    идемпотентным и не трогает свежую БД (там create_all уже построил target).
+    """
+    pcols = {c["name"] for c in sa.inspect(conn).get_columns("publications")}
+    if "target" in pcols:
+        return
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE publications_new (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER NOT NULL REFERENCES profiles (id) ON DELETE CASCADE,
+            publication_id VARCHAR(64) NOT NULL,
+            channel VARCHAR(64) NOT NULL,
+            target VARCHAR(64) NOT NULL DEFAULT '',
+            status VARCHAR(32) NOT NULL,
+            external_id VARCHAR(255),
+            error TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME,
+            updated_at DATETIME,
+            CONSTRAINT uq_publication UNIQUE (profile_id, publication_id, channel, target)
+        )
+        """
+    )
+    conn.exec_driver_sql(
+        "INSERT INTO publications_new "
+        "(id, profile_id, publication_id, channel, target, status, external_id, "
+        " error, attempt_count, created_at, updated_at) "
+        "SELECT id, profile_id, publication_id, channel, '', status, external_id, "
+        "       error, attempt_count, created_at, updated_at FROM publications"
+    )
+    conn.exec_driver_sql("DROP TABLE publications")
+    conn.exec_driver_sql("ALTER TABLE publications_new RENAME TO publications")
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_publications_publication_id ON publications (publication_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_publications_profile_id ON publications (profile_id)"
     )
 
 

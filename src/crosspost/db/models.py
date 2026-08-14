@@ -190,13 +190,19 @@ class ChannelTarget(Base):
 class Publication(Base):
     """Идемпотентный журнал публикаций.
 
-    Ключ уникальности: (profile_id, publication_id, channel).
+    Ключ уникальности: (profile_id, publication_id, channel, target).
     external_id — квитанция после успеха, НЕ ключ дедупликации.
+
+    target — id цели канала (мультицели): один канал шлёт в несколько целей под
+    одним publication_id, каждая цель дедупится отдельно. Пусто ("") — таргетлесс
+    единица (Telegraph) и legacy-строки до фичи мультицелей.
     """
 
     __tablename__ = "publications"
     __table_args__ = (
-        UniqueConstraint("profile_id", "publication_id", "channel", name="uq_publication"),
+        UniqueConstraint(
+            "profile_id", "publication_id", "channel", "target", name="uq_publication"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -205,6 +211,7 @@ class Publication(Base):
     )
     publication_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    target: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     status: Mapped[PublicationStatus] = mapped_column(
         String(32), default=PublicationStatus.NEW, nullable=False
     )
