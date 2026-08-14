@@ -711,15 +711,24 @@ body {
   padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-input); display: flex; flex-direction: column; gap: 4px;
 }
-.target-row { display: flex; gap: 8px; align-items: center; }
-.target-row .form-input { flex: 1; }
-/* Мультицели: список целей + строка добавления */
-.tgt-list { display: flex; flex-direction: column; gap: 8px; }
-.tgt-item { display: flex; flex-direction: column; gap: 4px; }
-.tgt-add {
-  display: flex; flex-direction: column; gap: 4px;
-  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+/* Мультицели: список целей + форма добавления */
+.tgt-list { display: flex; flex-direction: column; gap: 10px; }
+.tgt-item {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-input);
 }
+.tgt-item-header { display: flex; justify-content: space-between; align-items: center; min-height: 24px; }
+.tgt-item-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.tgt-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.tgt-field { display: flex; flex-direction: column; gap: 3px; }
+.tgt-field-label { font-size: 11px; color: var(--text-3); }
+.tgt-add {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+}
+.tgt-add-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.tgt-add-hint { font-size: 12px; color: var(--text-3); margin: 0; }
 
 /* ── Scheduled list ──────────────────────────────────────────────────────── */
 .sched-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1552,7 +1561,7 @@ function TargetRow({ channel, profileId, item, field, onChanged }) {
     setBusy(true); setErr(null);
     try {
       const res = await api.patch(base, { name: name.trim(), value: value.trim() });
-      setName(res.name); setValue(res.value);  // сервер вернул нормализованное значение
+      setName(res.name); setValue(res.value);
       onChanged?.();
     } catch (ex) { setErr(ex.message); }
     finally { setBusy(false); }
@@ -1564,24 +1573,37 @@ function TargetRow({ channel, profileId, item, field, onChanged }) {
   }
 
   return h("div", { className: "tgt-item" },
-    h("div", { className: "target-row" },
+    h("div", { className: "tgt-item-header" },
+      h("span", { className: "tgt-item-title" }, name || "Цель"),
+      h("div", { className: "tgt-item-actions" },
+        confirmDel
+          ? [
+              h("button", { key: "del", className: "btn btn-danger btn-sm", onClick: remove, disabled: busy }, "Удалить"),
+              h("button", { key: "cancel", className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(false) }, "Отмена"),
+            ]
+          : h("button", { className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(true),
+              disabled: busy, title: "Удалить цель" }, "✕"),
+      ),
+    ),
+    h("div", { className: "tgt-field" },
+      h("label", { className: "tgt-field-label" }, "Название цели"),
       h("input", {
-        className: "form-input", value: name, placeholder: "Название",
+        className: "form-input", value: name, placeholder: "напр. «Основной канал»",
         onChange: (e) => setName(e.target.value),
       }),
+    ),
+    h("div", { className: "tgt-field" },
+      h("label", { className: "tgt-field-label" }, field?.label || "Адрес"),
       h("input", {
         className: "form-input mono", value, placeholder: field?.placeholder || "",
         spellCheck: false, autoComplete: "off", onChange: (e) => setValue(e.target.value),
       }),
+    ),
+    h("div", { style: { display: "flex", justifyContent: "flex-end" } },
       h("button", {
         className: "btn btn-ghost btn-sm", onClick: save,
         disabled: busy || !dirty || !name.trim() || !value.trim(),
       }, busy ? h(Spinner) : "Сохранить"),
-      confirmDel
-        ? h("button", { className: "btn btn-danger btn-sm", onClick: remove, disabled: busy }, "Удалить")
-        : h("button", { className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(true),
-            disabled: busy, title: "Удалить цель" }, "✕"),
-      confirmDel && h("button", { className: "btn btn-ghost btn-sm", onClick: () => setConfirmDel(false) }, "Отмена"),
     ),
     err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
   );
@@ -1625,24 +1647,33 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
             "Пока нет ни одной цели — добавьте хотя бы одну, иначе канал недоступен для публикации.")
         : h("div", { className: "tgt-list" }, items.map((it) =>
             h(TargetRow, { key: it.id, channel, profileId, item: it, field, onChanged: refresh }))),
-    // Добавить новую цель.
+    // Форма добавления новой цели.
     h("div", { className: "tgt-add" },
-      h("div", { className: "target-row" },
+      h("p", { className: "tgt-add-title" }, "+ Добавить цель"),
+      h("p", { className: "tgt-add-hint" },
+        "Можно добавить несколько целей — публикация пойдёт в каждую под одной учётной записью.",
+      ),
+      h("div", { className: "tgt-field" },
+        h("label", { className: "tgt-field-label" }, "Название цели"),
         h("input", {
-          className: "form-input", value: newName, placeholder: "Название (напр. «Основной канал»)",
+          className: "form-input", value: newName, placeholder: "напр. «Основной канал»",
           onChange: (e) => setNewName(e.target.value),
         }),
+      ),
+      h("div", { className: "tgt-field" },
+        h("label", { className: "tgt-field-label" }, field?.label || "Адрес"),
         h("input", {
           className: "form-input mono", value: newValue, placeholder: field?.placeholder || hint || "",
           spellCheck: false, autoComplete: "off", onChange: (e) => setNewValue(e.target.value),
         }),
-        h("button", {
-          className: "btn btn-ghost btn-sm", onClick: add,
-          disabled: adding || !newName.trim() || !newValue.trim(),
-        }, adding ? h(Spinner) : "Добавить"),
       ),
       hint && h("p", { className: "form-hint" }, hint),
       h(FieldHowTo, { guide, field: field?.name || "target" }),
+      h("button", {
+        className: "btn btn-ghost btn-sm", onClick: add,
+        disabled: adding || !newName.trim() || !newValue.trim(),
+        style: { alignSelf: "flex-start", marginTop: "4px" },
+      }, adding ? h(Spinner) : "Добавить цель"),
     ),
     err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
   );
