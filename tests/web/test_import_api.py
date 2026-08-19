@@ -770,3 +770,36 @@ async def test_commit_download_failure_is_warning(client, factory, monkeypatch):
     async with factory() as s:
         posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
     assert posts[0].media_paths == []
+
+
+# ── Блок 4: настройки импорта (папка-источник + маппинг) ──────────────────────
+
+
+async def test_get_settings_defaults_empty(client, factory):
+    pid = await _make_profile_with_live(factory, [], name="set-empty")
+    resp = await client.get(f"/api/profiles/{pid}/import/settings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["media_folder"] == ""
+    assert body["column_mapping"] == {}
+
+
+async def test_put_and_get_settings_roundtrip(client, factory):
+    pid = await _make_profile_with_live(factory, [], name="set-rt")
+    resp = await client.put(
+        f"/api/profiles/{pid}/import/settings",
+        json={"media_folder": "/srv/pics", "column_mapping": {"file": "Фото", "text": "Пост"}},
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.get(f"/api/profiles/{pid}/import/settings")
+    body = resp.json()
+    assert body["media_folder"] == "/srv/pics"
+    assert body["column_mapping"] == {"file": "Фото", "text": "Пост"}
+
+
+async def test_settings_isolated_per_profile(client, factory):
+    pid_a = await _make_profile_with_live(factory, [], name="set-iso-a")
+    pid_b = await _make_profile_with_live(factory, [], name="set-iso-b")
+    await client.put(f"/api/profiles/{pid_a}/import/settings", json={"media_folder": "/a"})
+    resp = await client.get(f"/api/profiles/{pid_b}/import/settings")
+    assert resp.json()["media_folder"] == ""

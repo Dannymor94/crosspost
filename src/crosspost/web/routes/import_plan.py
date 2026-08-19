@@ -89,6 +89,16 @@ class CommitOut(BaseModel):
     skipped_count: int  # число строк, не попавших в БД
 
 
+class SettingsOut(BaseModel):
+    media_folder: str = ""  # папка-источник картинок (вариант «имя файла»)
+    column_mapping: dict[str, str] = {}  # сохранённый маппинг колонка→поле
+
+
+class SettingsIn(BaseModel):
+    media_folder: str | None = None
+    column_mapping: dict[str, str] | None = None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -410,4 +420,30 @@ async def import_commit(
             for w in commit_warnings
         ],
         skipped_count=len(problems),
+    )
+
+
+@router.get("/api/profiles/{profile_id}/import/settings", response_model=SettingsOut)
+async def get_import_settings(profile_id: int, session: SessionDep) -> SettingsOut:
+    """Настройки импорта профиля: папка-источник картинок + сохранённый маппинг колонок."""
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    return SettingsOut(
+        media_folder=await settings.get_media_folder(),
+        column_mapping=await settings.get_column_mapping(),
+    )
+
+
+@router.put("/api/profiles/{profile_id}/import/settings", response_model=SettingsOut)
+async def put_import_settings(
+    profile_id: int, session: SessionDep, body: SettingsIn
+) -> SettingsOut:
+    """Сохранить настройки импорта (папка и/или маппинг). Не заданные поля не трогаем."""
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    if body.media_folder is not None:
+        await settings.set_media_folder(body.media_folder.strip())
+    if body.column_mapping is not None:
+        await settings.set_column_mapping(body.column_mapping)
+    return SettingsOut(
+        media_folder=await settings.get_media_folder(),
+        column_mapping=await settings.get_column_mapping(),
     )
