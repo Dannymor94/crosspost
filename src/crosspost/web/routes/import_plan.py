@@ -36,6 +36,7 @@ from crosspost.scheduler.import_plan import (
     parse_rule,
     parse_table,
 )
+from crosspost.scheduler.remote_table import RemoteTableError, fetch_sheet_csv
 from crosspost.web import media as media_store
 from crosspost.web.deps import SessionDep, require_profile_access
 
@@ -95,6 +96,29 @@ def _parse_table_or_422(data: bytes, filename: str):
         return parse_table(data, filename)
     except PlanImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _load_table_bytes(table: UploadFile | None, sheet_url: str | None) -> tuple[bytes, str]:
+    """Источник таблицы: загруженный файл ИЛИ ссылка на Google Таблицу.
+
+    Возвращает (bytes, filename). Ровно один источник должен быть задан.
+    Ссылку не логируем (может содержать приватный id таблицы).
+    """
+    has_file = table is not None and (table.filename or "")
+    has_link = bool((sheet_url or "").strip())
+    if has_file and has_link:
+        raise HTTPException(
+            status_code=422, detail="Выберите один источник: файл ИЛИ ссылку на таблицу."
+        )
+    if has_link:
+        try:
+            data = await fetch_sheet_csv(sheet_url.strip())  # type: ignore[union-attr]
+        except RemoteTableError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return data, "plan.csv"
+    if has_file:
+        return await table.read(), (table.filename or "plan.csv")  # type: ignore[union-attr]
+    raise HTTPException(status_code=422, detail="Приложите таблицу или дайте ссылку на неё.")
 
 
 def _to_preview(report: ImportReport) -> PreviewOut:
@@ -184,13 +208,15 @@ async def _validate_channels(
 async def import_preview(
     profile_id: int,
     session: SessionDep,
-    table: UploadFile = File(...),  # noqa: B008
+    table: UploadFile | None = File(None),  # noqa: B008
+    sheet_url: str | None = Form(None),  # альтернатива файлу: ссылка на Google Таблицу
     filenames: str = Form(...),  # JSON list[str] — имена будущих картинок
     start_date: str | None = Form(None),
     times_csv: str | None = Form(None),
 ) -> PreviewOut:
     """Stateless превью: таблица + имена картинок → отчёт связывания без записи в БД.
 
+    Источник таблицы — загруженный файл ИЛИ ссылка на Google Таблицу (sheet_url).
     Возвращает: resolved (что связалось + время), problems (строки с ошибками),
     unmatched_files (файлы без строк в таблице).
     Проблемы показываются явно — не импортируем молча с дырами.
@@ -204,8 +230,8 @@ async def import_preview(
     if not isinstance(file_list, list):
         raise HTTPException(status_code=422, detail="filenames: ожидается JSON-массив строк")
 
-    data = await table.read()
-    rows = _parse_table_or_422(data, table.filename or "plan.csv")
+    data, filename = await _load_table_bytes(table, sheet_url)
+    rows = _parse_table_or_422(data, filename)
     rule = _parse_rule_or_422(start_date, times_csv)
     report = build_plan(rows, file_list, rule)
     return _to_preview(report)
@@ -215,7 +241,8 @@ async def import_preview(
 async def import_commit(
     profile_id: int,
     session: SessionDep,
-    table: UploadFile = File(...),  # noqa: B008
+    table: UploadFile | None = File(None),  # noqa: B008
+    sheet_url: str | None = Form(None),  # альтернатива файлу: ссылка на Google Таблицу
     media: list[UploadFile] = File(default=[]),  # noqa: B008
     channels: str = Form(...),
     content_type: str = Form("post"),
@@ -244,8 +271,8 @@ async def import_commit(
 
     await _validate_channels(profile_repo, profile_id, channel_list, content_type, session=session)
 
-    data = await table.read()
-    rows = _parse_table_or_422(data, table.filename or "plan.csv")
+    data, filename = await _load_table_bytes(table, sheet_url)
+    rows = _parse_table_or_422(data, filename)
 
     # Индекс загруженных файлов: lower(basename) → UploadFile
     real_media = [f for f in (media or []) if getattr(f, "filename", None)]

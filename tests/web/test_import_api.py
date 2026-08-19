@@ -113,6 +113,69 @@ async def test_preview_links_all_rows(client, factory):
     assert all(r["source"] == "rule" for r in body["resolved"])
 
 
+async def test_preview_from_sheet_url(client, factory, monkeypatch):
+    """Источник таблицы — ссылка на Google Таблицу (sheet_url), не файл."""
+    pid = await _make_profile_with_live(factory, [], name="prev-sheet")
+
+    async def fake_fetch(url, *, client=None):
+        assert "docs.google.com/spreadsheets" in url
+        return _csv("файл,текст\n01.jpg,Из таблицы\n")
+
+    monkeypatch.setattr(import_plan, "fetch_sheet_csv", fake_fetch)
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        data={
+            "sheet_url": "https://docs.google.com/spreadsheets/d/SHEET1/edit#gid=0",
+            "filenames": json.dumps(["01.jpg"]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["resolved_count"] == 1
+    assert body["resolved"][0]["text"] == "Из таблицы"
+
+
+async def test_preview_sheet_url_access_error(client, factory, monkeypatch):
+    """Нет доступа к таблице → 422 с человекочитаемым текстом."""
+    from crosspost.scheduler.remote_table import RemoteTableError
+
+    pid = await _make_profile_with_live(factory, [], name="prev-noaccess")
+
+    async def fake_fetch(url, *, client=None):
+        raise RemoteTableError("Нет доступа к таблице. Откройте доступ по ссылке…")
+
+    monkeypatch.setattr(import_plan, "fetch_sheet_csv", fake_fetch)
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        data={
+            "sheet_url": "https://docs.google.com/spreadsheets/d/SHEET1/edit",
+            "filenames": json.dumps([]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 422
+    assert "доступ" in resp.json()["detail"].lower()
+
+
+async def test_preview_rejects_both_file_and_sheet(client, factory):
+    """Файл И ссылка одновременно → 422 (нужен один источник)."""
+    pid = await _make_profile_with_live(factory, [], name="prev-both")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        files=[("table", ("plan.csv", _csv("файл,текст\n01.jpg,X\n"), "text/csv"))],
+        data={
+            "sheet_url": "https://docs.google.com/spreadsheets/d/SHEET1/edit",
+            "filenames": json.dumps(["01.jpg"]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 422
+
+
 async def test_preview_missing_file_becomes_warning(client, factory):
     """Файл указан, но не загружен → предупреждение, пост планируется без фото."""
     pid = await _make_profile_with_live(factory, [], name="prev-miss")
