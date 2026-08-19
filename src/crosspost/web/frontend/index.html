@@ -797,7 +797,19 @@ body {
 }
 .plan-src.rule { background: var(--accent-dim); color: var(--accent); }
 .plan-src.explicit { background: var(--amber-bg); color: var(--amber); }
+.plan-msrc {
+  font-size: 9px; font-weight: 600; margin-left: 6px; padding: 1px 6px; border-radius: 20px;
+  background: var(--bg-input); color: var(--text-3); border: 1px solid var(--border);
+}
+.plan-msrc.upload { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+.plan-msrc.folder { background: var(--live-bg); color: var(--live); border-color: transparent; }
+.plan-msrc.http, .plan-msrc.gdrive, .plan-msrc.yadisk {
+  background: var(--amber-bg); color: var(--amber); border-color: transparent;
+}
 .plan-unmatched { font-size: 11.5px; color: var(--text-3); margin-top: 10px; line-height: 1.5; }
+.map-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.req-star { color: var(--error); }
+.mt-0 { margin-top: 0; }
 
 /* ── Guide: интерактивная инструкция подключения ─────────────────────────── */
 .guide-intro {
@@ -2653,6 +2665,23 @@ function ScheduledList({ base, items, onChanged }) {
 
 // ── Импорт контент-плана ─────────────────────────────────────────────────────
 
+// Откуда взялась картинка строки (для отчёта связывания).
+const MEDIA_SRC_LABEL = {
+  upload: "загружено",
+  folder: "из папки",
+  http: "по ссылке",
+  gdrive: "Google Drive",
+  yadisk: "Яндекс.Диск",
+};
+// Логические поля таблицы для ручного сопоставления (первые два обязательны).
+const IMPORT_FIELDS = [
+  ["file", "Файл / картинка", true],
+  ["text", "Текст / подпись", true],
+  ["date", "Дата", false],
+  ["time", "Время", false],
+  ["article", "Статья (лонгрид)", false],
+];
+
 function TableDrop({ file, onPick }) {
   const ref = useRef(null);
   return h("div", null,
@@ -2686,6 +2715,44 @@ function RuleFields({ startDate, times, onStart, onTimes }) {
   );
 }
 
+// Колонки таблицы не распознались автоматически — оператор сопоставляет их руками.
+// Сохранённое сопоставление применится к профилю в следующий раз автоматически.
+function MappingEditor({ report, onApply, busy }) {
+  const headers = report.headers || [];
+  const detected = report.detected || {};
+  const [sel, setSel] = useState(() => {
+    const init = {};
+    IMPORT_FIELDS.forEach(([key]) => { init[key] = detected[key] || ""; });
+    return init;
+  });
+  const ready = !!sel.file && !!sel.text;  // file и text обязательны
+
+  function apply() {
+    const mapping = {};
+    IMPORT_FIELDS.forEach(([key]) => { if (sel[key]) mapping[key] = sel[key]; });
+    onApply(mapping);
+  }
+
+  return h("div", { className: "form-panel", style: { maxWidth: "100%", marginTop: "10px" } },
+    h("p", { className: "form-hint mt-0" },
+      "Колонки таблицы не распознались. Сопоставьте их с полями вручную — сопоставление ",
+      "запомнится для этого профиля."),
+    h("div", { className: "map-grid" },
+      IMPORT_FIELDS.map(([key, label, req]) => h("div", { key, className: "form-group", style: { margin: 0 } },
+        h("label", { className: "form-label" }, label, req && h("span", { className: "req-star" }, " *")),
+        h("select", { className: "form-input", value: sel[key],
+          onChange: (e) => setSel((p) => ({ ...p, [key]: e.target.value })) },
+          h("option", { value: "" }, "— не использовать —"),
+          headers.map((hd, i) => h("option", { key: i, value: hd }, hd))),
+      ))),
+    h("div", { className: "publish-actions", style: { marginTop: "12px" } },
+      h("button", { className: "btn btn-primary", onClick: apply, disabled: !ready || busy },
+        busy && h(Spinner), busy ? " Применяю…" : "Применить сопоставление"),
+      !ready && h("span", { className: "hint-inline" }, "выберите колонки для «Файл» и «Текст»"),
+    ),
+  );
+}
+
 function ImportReportView({ report }) {
   const warnings = report.warnings || [];
   return h("div", null,
@@ -2701,7 +2768,9 @@ function ImportReportView({ report }) {
       h("div", { className: "plan-rows" },
         report.resolved.map((r, i) => h("div", { key: i, className: "plan-row" },
           h("span", { className: "plan-when mono" }, new Date(r.scheduled_at).toLocaleString("ru-RU")),
-          h("span", { className: "plan-file mono" }, r.file || "текст"),
+          h("span", { className: "plan-file mono" }, r.file || "текст",
+            r.media_source && h("span", { className: `plan-msrc ${r.media_source}`,
+              title: "Источник картинки" }, MEDIA_SRC_LABEL[r.media_source] || r.media_source)),
           h("span", { className: "plan-text" },
             r.text || "(без текста)",
             r.has_article && h("span", { className: "sched-badge",
@@ -2736,12 +2805,18 @@ function ImportReportView({ report }) {
 function ImportView({ profile }) {
   const base = `/api/profiles/${profile.id}`;
   const [table, setTable] = useState(null);
+  const [sheetUrl, setSheetUrl] = useState("");
   const [images, setImages] = useState([]);
+  const [folder, setFolder] = useState("");
+  const [folderSaved, setFolderSaved] = useState("");
+  const [savingFolder, setSavingFolder] = useState(false);
+  const [mapping, setMapping] = useState({});  // применённое ручное сопоставление колонок
   const [startDate, setStartDate] = useState(() => todayStr());
   const [times, setTimes] = useState("10:00, 18:00");
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [report, setReport] = useState(null);
+  const [commitInfo, setCommitInfo] = useState(null);  // итоги последнего commit (для ошибок скачивания)
   const [scheduled, setScheduled] = useState([]);
   const [busy, setBusy] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -2754,7 +2829,24 @@ function ImportView({ profile }) {
   const loadScheduled = useCallback(async () => {
     try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
   }, [base]);
-  useEffect(() => { loadTargets(); loadScheduled(); }, [loadTargets, loadScheduled]);
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await api.get(`${base}/import/settings`);
+      setFolder(s.media_folder || ""); setFolderSaved(s.media_folder || "");
+    } catch (_) {}
+  }, [base]);
+  useEffect(() => { loadTargets(); loadScheduled(); loadSettings(); },
+    [loadTargets, loadScheduled, loadSettings]);
+
+  async function saveFolder() {
+    setSavingFolder(true); setAlert(null);
+    try {
+      const s = await api.put(`${base}/import/settings`, { media_folder: folder.trim() });
+      setFolder(s.media_folder || ""); setFolderSaved(s.media_folder || "");
+      setAlert({ type: "success", text: "Папка с картинками сохранена." });
+    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+    finally { setSavingFolder(false); }
+  }
 
   function toggle(t) {
     const k = selKey(t.channel, t.target_id);
@@ -2764,56 +2856,101 @@ function ImportView({ profile }) {
     if (startDate) fd.append("start_date", startDate);
     if (times.trim()) fd.append("times_csv", times);
   }
+  // Источник таблицы: ссылка на Google Таблицу имеет приоритет над файлом.
+  const hasTableSource = !!table || !!sheetUrl.trim();
+  function appendTable(fd) {
+    const link = sheetUrl.trim();
+    if (link) fd.append("sheet_url", link);
+    else if (table) fd.append("table", table);
+  }
 
-  async function preview() {
-    if (!table) { setAlert({ type: "error", text: "Выберите таблицу плана." }); return; }
-    setBusy(true); setAlert(null); setReport(null);
+  async function preview(overrideMapping) {
+    if (!hasTableSource) {
+      setAlert({ type: "error", text: "Выберите таблицу плана или дайте ссылку на Google Таблицу." });
+      return;
+    }
+    setBusy(true); setAlert(null); setReport(null); setCommitInfo(null);
     try {
       const fd = new FormData();
-      fd.append("table", table);
+      appendTable(fd);
       fd.append("filenames", JSON.stringify(images.map((f) => f.name)));
       appendRule(fd);
+      const m = overrideMapping || mapping;
+      if (m && Object.keys(m).length) fd.append("column_mapping", JSON.stringify(m));
       setReport(await api.postForm(`${base}/import/preview`, fd));
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); }
   }
 
+  function applyMapping(m) { setMapping(m); preview(m); }
+
   async function commit() {
-    setCommitting(true); setAlert(null);
+    setCommitting(true); setAlert(null); setCommitInfo(null);
     try {
       const fd = new FormData();
-      fd.append("table", table);
+      appendTable(fd);
       fd.append("channels", JSON.stringify([...selected].map(parseSelKey)));
       fd.append("content_type", "post");
       images.forEach((f) => fd.append("media", f));
       appendRule(fd);
+      if (Object.keys(mapping).length) fd.append("column_mapping", JSON.stringify(mapping));
       const res = await api.postForm(`${base}/import/commit`, fd);
       const parts = [`создано ${res.created}`];
       if ((res.warnings || []).length > 0) parts.push(`без фото: ${res.warnings.length}`);
       if (res.skipped_count > 0) parts.push(`пропущено ${res.skipped_count}`);
       setAlert({ type: res.created > 0 ? "success" : "error", text: `Запланировано: ${parts.join(", ")}.` });
-      setReport(null); setTable(null); setImages([]);
+      setCommitInfo(res);
+      setReport(null); setTable(null); setSheetUrl(""); setImages([]);
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setCommitting(false); }
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
-  const canPreview = !!table && !busy;
-  const canCommit = !!table && selected.size > 0 && report && report.resolved_count > 0 && !committing;
+  const needsMapping = !!(report && report.needs_mapping);
+  const folderDirty = folder.trim() !== folderSaved;
+  const canPreview = hasTableSource && !busy;
+  const canCommit = hasTableSource && selected.size > 0 && report
+    && !needsMapping && report.resolved_count > 0 && !committing;
 
   return h("div", null,
     h("h1", { className: "page-title" }, "Импорт контент-плана"),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
 
     h("p", { className: "section-title" }, "Таблица плана"),
-    h(TableDrop, { file: table, onPick: setTable }),
+    h(TableDrop, { file: table, onPick: (f) => { setTable(f); setSheetUrl(""); } }),
+    h("div", { className: "form-panel", style: { maxWidth: "100%", marginTop: "10px" } },
+      h("label", { className: "form-label" }, "…или ссылка на Google Таблицу"),
+      h("div", { className: "flex-gap" },
+        h("input", { className: "form-input mono", type: "url", value: sheetUrl,
+          placeholder: "https://docs.google.com/spreadsheets/d/…",
+          onChange: (e) => { setSheetUrl(e.target.value); if (e.target.value.trim()) setTable(null); } }),
+        h("button", { className: "btn btn-ghost btn-sm", onClick: () => preview(),
+          disabled: !sheetUrl.trim() || busy }, "Обновить из таблицы"),
+      ),
+      h("p", { className: "form-hint mt-2" },
+        "Откройте доступ к таблице «по ссылке» (просмотр). Первый лист скачается как CSV."),
+    ),
 
     h("p", { className: "section-title", style: { marginTop: "20px" } }, "Картинки"),
     h("div", { className: "form-panel", style: { maxWidth: "100%" } },
       h(PhotoPicker, { files: images, onChange: setImages }),
       h("p", { className: "form-hint mt-2" },
         "Свяжутся со строками таблицы по имени файла (2.jpg < 10.jpg — натуральный порядок)."),
+      h("div", { className: "form-group", style: { marginTop: "12px", marginBottom: 0 } },
+        h("label", { className: "form-label" }, "Папка с картинками (на этом компьютере)"),
+        h("div", { className: "flex-gap" },
+          h("input", { className: "form-input mono", type: "text", value: folder,
+            placeholder: "/Users/…/plan_images",
+            onChange: (e) => setFolder(e.target.value) }),
+          h("button", { className: "btn btn-ghost btn-sm", onClick: saveFolder,
+            disabled: !folderDirty || savingFolder },
+            savingFolder && h(Spinner), savingFolder ? " Сохраняю…" : folderDirty ? "Сохранить" : "Сохранено"),
+        ),
+        h("p", { className: "form-hint mt-2" },
+          "Если в колонке «файл» — имя файла (а не ссылка), картинка возьмётся из этой папки. ",
+          "Ссылки http/Google Drive/Яндекс.Диск в колонке скачиваются автоматически."),
+      ),
     ),
 
     h("p", { className: "section-title", style: { marginTop: "20px" } }, "Правило раскидки"),
@@ -2837,17 +2974,31 @@ function ImportView({ profile }) {
               })))),
 
     h("div", { className: "publish-actions" },
-      h("button", { className: "btn btn-ghost", onClick: preview, disabled: !canPreview },
+      h("button", { className: "btn btn-ghost", onClick: () => preview(), disabled: !canPreview },
         busy && h(Spinner), busy ? " Считаю…" : "Показать превью"),
       h("button", { className: "btn btn-primary", onClick: commit, disabled: !canCommit },
         committing && h(Spinner), committing ? " Планирую…" : "Запланировать всё"),
-      !table ? h("span", { className: "hint-inline" }, "выберите таблицу")
+      !hasTableSource ? h("span", { className: "hint-inline" }, "выберите таблицу")
         : !report ? h("span", { className: "hint-inline" }, "сначала превью")
-          : selected.size === 0 ? h("span", { className: "hint-inline" }, "выберите канал") : null,
+          : needsMapping ? h("span", { className: "hint-inline" }, "сопоставьте колонки")
+            : selected.size === 0 ? h("span", { className: "hint-inline" }, "выберите канал") : null,
     ),
     alert && h(Alert, { type: alert.type }, alert.text),
 
-    report && h("div", { style: { marginTop: "16px" } }, h(ImportReportView, { report })),
+    needsMapping && h(MappingEditor, { report, onApply: applyMapping, busy }),
+
+    report && !needsMapping && h("div", { style: { marginTop: "16px" } }, h(ImportReportView, { report })),
+
+    // Итоги последнего commit: ошибки скачивания / посты без фото.
+    commitInfo && (commitInfo.warnings || []).length > 0 && h("div", { style: { marginTop: "16px" } },
+      h("p", { className: "section-title" }, "Итоги импорта — не удалось получить картинку"),
+      h("div", { className: "plan-rows" },
+        commitInfo.warnings.map((w, i) => h("div", { key: i, className: "plan-row warn" },
+          h("span", { className: "plan-file mono" }, `стр. ${w.row_number}`),
+          h("span", { className: "plan-file mono" }, w.file || "—"),
+          h("span", { className: "plan-reason" }, w.reason),
+        ))),
+    ),
 
     h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
   );
