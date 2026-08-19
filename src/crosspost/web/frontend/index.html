@@ -2985,7 +2985,7 @@ function ImportView({ profile }) {
     ),
     alert && h(Alert, { type: alert.type }, alert.text),
 
-    needsMapping && h(MappingEditor, { report, onApply: applyMapping, busy }),
+    needsMapping && h(MappingEditor, { key: (report.headers || []).join("|"), report, onApply: applyMapping, busy }),
 
     report && !needsMapping && h("div", { style: { marginTop: "16px" } }, h(ImportReportView, { report })),
 
