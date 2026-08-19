@@ -39,6 +39,23 @@ async def save_uploads(files, key: str) -> list[str]:
     return paths
 
 
+def save_binaries(items: list[tuple[str, bytes]], key: str) -> list[str]:
+    """Сохранить уже готовые байты (name, data) в media_dir(key). Вернуть пути.
+
+    Для файлов, скачанных из внешних источников (папка/http/Drive/Диск) — им не
+    нужен UploadFile-обёртка, у нас уже есть байты и имя.
+    """
+    target = media_dir(key)
+    target.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for i, (name, data) in enumerate(items):
+        safe = Path(name or f"file{i}").name  # только имя, без каталогов
+        dest = target / f"{i:02d}_{safe}"
+        dest.write_bytes(data)
+        paths.append(str(dest))
+    return paths
+
+
 def cleanup_media(key: str) -> None:
     """Удалить каталог медиа publication'а/scheduled. Идемпотентно."""
     d = media_dir(key)

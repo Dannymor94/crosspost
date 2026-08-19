@@ -39,6 +39,7 @@ from crosspost.scheduler.import_plan import (
     parse_table,
     peek_headers,
 )
+from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.scheduler.remote_table import RemoteTableError, fetch_sheet_csv
 from crosspost.web import media as media_store
 from crosspost.web.deps import SessionDep, require_profile_access
@@ -57,6 +58,7 @@ class ResolvedOut(BaseModel):
     scheduled_at: str  # ISO-8601
     source: str  # "rule" | "explicit"
     has_article: bool = False  # строка несёт article_text → превью покажет бейдж «+ статья»
+    media_source: str = ""  # откуда картинка: upload|folder|http|gdrive|yadisk|""
 
 
 class ProblemOut(BaseModel):
@@ -174,6 +176,7 @@ def _to_preview(report: ImportReport) -> PreviewOut:
                 scheduled_at=r.scheduled_at.isoformat(),
                 source=r.source,
                 has_article=bool(r.article_text),
+                media_source=r.media_source,
             )
             for r in report.resolved
         ],
@@ -292,7 +295,8 @@ async def import_preview(
 
     rows = _parse_table_or_422(data, filename, mapping=mapping)
     rule = _parse_rule_or_422(start_date, times_csv)
-    report = build_plan(rows, file_list, rule)
+    folder = await settings.get_media_folder()
+    report = build_plan(rows, file_list, rule, folder_configured=bool(folder))
 
     # Явно присланный рабочий маппинг запоминаем для профиля.
     if explicit_mapping:
@@ -351,7 +355,8 @@ async def import_commit(
         media_by_basename.setdefault(_basename_lower(f.filename or ""), f)
 
     rule = _parse_rule_or_422(start_date, times_csv)
-    report = build_plan(rows, available_names, rule)
+    folder = await settings.get_media_folder()
+    report = build_plan(rows, available_names, rule, folder_configured=bool(folder))
 
     problems: list[RowProblem] = list(report.problems)
     commit_warnings: list[RowProblem] = list(report.warnings)
@@ -360,18 +365,29 @@ async def import_commit(
     for rrow in report.resolved:
         saved_paths: list[str] = []
         if rrow.file:
-            upload = media_by_basename.get(_basename_lower(rrow.file))
-            if upload is None:
-                # Файл был указан, но реально не загружен — публикуем без фото.
-                commit_warnings.append(
-                    RowProblem(
-                        rrow.row_number, rrow.file, "картинка не загружена — пост выйдет без фото"
+            key = f"sched-{new_publication_id()}"
+            if rrow.media_source == "upload":
+                upload = media_by_basename.get(_basename_lower(rrow.file))
+                if upload is None:
+                    commit_warnings.append(
+                        RowProblem(
+                            rrow.row_number,
+                            rrow.file,
+                            "картинка не загружена — пост выйдет без фото",
+                        )
                     )
-                )
-            else:
-                await upload.seek(0)
-                key = f"sched-{new_publication_id()}"
-                saved_paths = await media_store.save_uploads([upload], key)
+                else:
+                    await upload.seek(0)
+                    saved_paths = await media_store.save_uploads([upload], key)
+            elif rrow.media_source:
+                # Внешний источник (папка/http/Drive/Диск) — скачиваем/читаем сейчас.
+                try:
+                    fetched = await fetch_media(rrow.file, folder=folder)
+                    saved_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
+                except MediaSourceError as exc:
+                    commit_warnings.append(
+                        RowProblem(rrow.row_number, rrow.file, f"не удалось получить файл: {exc}")
+                    )
 
         await pub_repo.create_scheduled(
             content_type=content_type,

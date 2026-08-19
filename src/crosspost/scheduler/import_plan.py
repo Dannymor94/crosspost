@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Literal
 
+from crosspost.scheduler.media_sources import SourceKind, classify_source
+
 # ── Ошибки ────────────────────────────────────────────────────────────────────
 
 
@@ -335,6 +337,9 @@ class ResolvedRow:
     scheduled_at: datetime
     source: Literal["explicit", "rule"]
     article_text: str = ""  # тело лонгрида для Telegraph; пусто → обычный пост
+    # Откуда возьмётся картинка (для отчёта связывания, Блок 3):
+    # "upload" | "folder" | "http" | "gdrive" | "yadisk" | "" (нет файла).
+    media_source: str = ""
 
 
 @dataclass
@@ -370,6 +375,8 @@ def build_plan(
     rows: list[PlanRow],
     available_files: list[str] | set[str],
     rule: ScheduleRule | None,
+    *,
+    folder_configured: bool = False,
 ) -> ImportReport:
     """Связать строки с файлами и назначить время. Не пишет ничего — только считает.
 
@@ -379,6 +386,12 @@ def build_plan(
       2. Гибкое: первое число в имени файла CSV = первое число в имени загруженного файла
          (например, '1.jpg' совпадает с 'cover_1.png').
     rule может быть None, если ВСЕ строки с явной датой.
+
+    Блок 3: значение колонки «файл» может быть не только именем загруженной картинки,
+    но и ссылкой (http/Google Drive/Яндекс.Диск) — она валидный источник и не даёт
+    предупреждения «не загружено». Для имени файла источником может быть папка
+    (folder_configured=True). media_source в каждой строке говорит, откуда возьмётся
+    картинка; фактическое скачивание — на этапе commit.
     """
     # Индекс точного совпадения: lower(basename) → оригинальное имя.
     avail_index: dict[str, str] = {}
@@ -393,7 +406,8 @@ def build_plan(
 
     report = ImportReport()
     used_files: set[str] = set()
-    rule_candidates: list[tuple[PlanRow, str]] = []  # (row, matched_original_name)
+    # (row, matched_name, media_source)
+    rule_candidates: list[tuple[PlanRow, str, str]] = []
 
     for row in rows:
         if not row.text:
@@ -401,29 +415,37 @@ def build_plan(
             continue
 
         matched: str
+        msource: str
         if not row.file:
-            matched = ""  # нет колонки файла — текстовый пост без предупреждения
+            matched, msource = "", ""  # нет колонки файла — текстовый пост без предупреждения
+        elif classify_source(row.file) is not SourceKind.FILENAME:
+            # Ссылка (http/Google Drive/Яндекс.Диск) — удалённый источник, скачается в commit.
+            matched = row.file
+            msource = classify_source(row.file).value
         else:
             row_base = _basename(row.file)
             exact = avail_index.get(row_base.lower())
             if exact is not None:
-                matched = exact
+                matched, msource = exact, "upload"
                 used_files.add(matched)
             else:
                 # Гибкое сопоставление по первому числу в имени.
                 n = _first_number(row_base)
                 flex = number_index.get(n) if n is not None else None
                 if flex is not None:
-                    matched = flex
+                    matched, msource = flex, "upload"
                     used_files.add(matched)
+                elif folder_configured:
+                    # Не загружено вручную, но задана папка-источник — возьмём из неё.
+                    matched, msource = row.file, "folder"
                 else:
-                    # Файл не найден ни одним способом — текстовый пост + предупреждение.
+                    # Ни загрузки, ни папки — текстовый пост + предупреждение.
                     report.warnings.append(
                         RowProblem(
                             row.row_number, row.file, "картинка не загружена — пост выйдет без фото"
                         )
                     )
-                    matched = ""
+                    matched, msource = "", ""
 
         if row.explicit_date is not None:
             # Явная дата — приоритет над правилом. Время: из строки, иначе первое
@@ -437,15 +459,16 @@ def build_plan(
                     datetime.combine(row.explicit_date, t),
                     source="explicit",
                     article_text=row.article_text,
+                    media_source=msource,
                 )
             )
         else:
-            rule_candidates.append((row, matched))
+            rule_candidates.append((row, matched, msource))
 
     # Строки без даты — раскидываем правилом в натуральном порядке имён файлов.
     if rule_candidates:
         if rule is None:
-            for row, _ in rule_candidates:
+            for row, _, _ in rule_candidates:
                 report.problems.append(
                     RowProblem(
                         row.row_number, row.file, "нет даты в строке и не задано правило раскидки"
@@ -455,7 +478,7 @@ def build_plan(
             # Сортируем по оригинальному имени из CSV (rc[0].file), а не по matched —
             # иначе гибкое совпадение 'cover_1.png' ломает порядок '1.jpg < 2.jpg < 10.jpg'.
             rule_candidates.sort(key=lambda rc: natural_key(rc[0].file or rc[1]))
-            for ordinal, (row, matched) in enumerate(rule_candidates):
+            for ordinal, (row, matched, msource) in enumerate(rule_candidates):
                 report.resolved.append(
                     ResolvedRow(
                         row.row_number,
@@ -464,6 +487,7 @@ def build_plan(
                         rule.slot_datetime(ordinal),
                         source="rule",
                         article_text=row.article_text,
+                        media_source=msource,
                     )
                 )
 

@@ -363,6 +363,51 @@ def test_build_plan_all_explicit_needs_no_rule():
     assert report.resolved[0].scheduled_at == datetime(2026, 5, 1, 12, 0)
 
 
+# ── Блок 3: источник медиа в отчёте (media_source) ────────────────────────────
+
+
+def test_build_plan_uploaded_file_source_is_upload():
+    rows = [_row(1, "1.jpg", "Пост")]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan(rows, ["1.jpg"], rule)
+    assert report.resolved[0].media_source == "upload"
+
+
+def test_build_plan_http_url_is_remote_source_no_warning():
+    rows = [_row(1, "https://example.com/pic.png", "Пост")]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan(rows, [], rule)
+    assert report.warnings == []  # URL — валидный источник, не «не загружено»
+    assert report.resolved[0].media_source == "http"
+    assert report.resolved[0].file == "https://example.com/pic.png"
+
+
+def test_build_plan_gdrive_and_yadisk_sources():
+    rows = [
+        _row(1, "https://drive.google.com/file/d/ABC/view", "GD", d=date(2026, 5, 1)),
+        _row(2, "https://disk.yandex.ru/i/xyz", "YD", d=date(2026, 5, 1)),
+    ]
+    report = build_plan(rows, [], rule=None)
+    kinds = {r.text: r.media_source for r in report.resolved}
+    assert kinds == {"GD": "gdrive", "YD": "yadisk"}
+
+
+def test_build_plan_filename_from_folder_when_configured():
+    rows = [_row(1, "sub/01.jpg", "Из папки")]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan(rows, [], rule, folder_configured=True)
+    assert report.warnings == []  # папка задана → не предупреждаем
+    assert report.resolved[0].media_source == "folder"
+
+
+def test_build_plan_filename_no_upload_no_folder_still_warns():
+    rows = [_row(1, "01.jpg", "Без источника")]
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    report = build_plan(rows, [], rule, folder_configured=False)
+    assert len(report.warnings) == 1
+    assert report.resolved[0].media_source == ""
+
+
 # ── БЛОК 1: сквозное поле article_text (лонгрид для Telegraph) ─────────────────
 
 

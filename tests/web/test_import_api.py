@@ -652,3 +652,121 @@ async def test_update_scheduled_time_wrong_profile(factory):
         unchanged = await repo_a.get_scheduled(post_id)
         assert unchanged is not None
         assert unchanged.scheduled_at == datetime(2026, 9, 1, 10, 0)
+
+
+# ── Блок 3: гибкие источники медиа ────────────────────────────────────────────
+
+
+async def _set_media_folder(factory, pid: int, path: str) -> None:
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_media_folder(path)
+
+
+async def test_preview_url_source_shown(client, factory):
+    """Ссылка в колонке файла → media_source=http, без предупреждения «не загружено»."""
+    pid = await _make_profile_with_live(factory, [], name="prev-url")
+    csv = _csv("файл,текст\nhttps://example.com/pic.png,Из сети\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        files=[("table", ("plan.csv", csv, "text/csv"))],
+        data={
+            "filenames": json.dumps([]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["resolved"][0]["media_source"] == "http"
+    assert body["warnings"] == []
+
+
+async def test_commit_folder_source(client, factory, tmp_path):
+    """Имя файла + заданная папка-источник → картинка читается из папки в media_store."""
+    pid = await _make_profile_with_live(factory, ["telegram"], name="com-folder")
+    src = tmp_path / "srcpics"
+    src.mkdir()
+    (src / "01.jpg").write_bytes(b"\xff\xd8\xff folder-bytes")
+    await _set_media_folder(factory, pid, str(src))
+
+    csv = _csv("файл,текст\n01.jpg,Из папки\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[("table", ("plan.csv", csv, "text/csv"))],  # без загрузки media
+        data={
+            "channels": json.dumps(["telegram"]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["created"] == 1
+    assert body["warnings"] == []
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    assert len(posts[0].media_paths) == 1
+
+
+async def test_commit_http_source_downloads(client, factory, monkeypatch):
+    """Ссылка в колонке файла → скачивается и кладётся в media_store."""
+    from crosspost.scheduler.media_sources import FetchedMedia, SourceKind
+
+    pid = await _make_profile_with_live(factory, ["telegram"], name="com-http")
+
+    async def fake_fetch(value, *, folder=""):
+        return FetchedMedia(b"\xff\xd8\xff net", "photo.jpg", SourceKind.HTTP)
+
+    monkeypatch.setattr(import_plan, "fetch_media", fake_fetch)
+    csv = _csv("файл,текст\nhttps://example.com/pic.jpg,Из сети\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[("table", ("plan.csv", csv, "text/csv"))],
+        data={
+            "channels": json.dumps(["telegram"]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["created"] == 1
+    assert body["warnings"] == []
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    assert len(posts[0].media_paths) == 1
+
+
+async def test_commit_download_failure_is_warning(client, factory, monkeypatch):
+    """Недоступный источник → пост создаётся без фото + предупреждение с причиной."""
+    from crosspost.scheduler.media_sources import MediaSourceError
+
+    pid = await _make_profile_with_live(factory, ["telegram"], name="com-dlfail")
+
+    async def fake_fetch(value, *, folder=""):
+        raise MediaSourceError("Ссылка ведёт на приватный/локальный адрес.")
+
+    monkeypatch.setattr(import_plan, "fetch_media", fake_fetch)
+    csv = _csv("файл,текст\nhttps://internal/pic.jpg,Битая\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[("table", ("plan.csv", csv, "text/csv"))],
+        data={
+            "channels": json.dumps(["telegram"]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["created"] == 1  # пост всё равно создан (без фото)
+    assert len(body["warnings"]) == 1
+    assert "не удалось получить файл" in body["warnings"][0]["reason"]
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    assert posts[0].media_paths == []
