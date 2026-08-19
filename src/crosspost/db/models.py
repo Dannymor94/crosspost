@@ -322,3 +322,31 @@ class Log(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile", back_populates="logs")
+
+
+class ProfileSetting(Base):
+    """Несекретные настройки профиля вида ключ→JSON-значение.
+
+    Хранит НЕсекретные предпочтения импорта: сопоставление колонок таблицы
+    (маппинг колонка→поле, чтобы применялся автоматически в следующий раз) и
+    путь к папке-источнику картинок. Это НЕ credentials — открытый JSON, без
+    vault. Секреты (пароли/сессии) сюда не кладём.
+
+    Ключ уникален в пределах профиля: (profile_id, key). Изоляция и каскадное
+    удаление — по profile_id.
+    """
+
+    __tablename__ = "profile_settings"
+    __table_args__ = (UniqueConstraint("profile_id", "key", name="uq_profile_setting"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+
+    profile: Mapped[Profile] = relationship("Profile")

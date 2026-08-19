@@ -224,14 +224,75 @@ async def test_preview_bad_extension_422(client, factory):
     assert "csv" in resp.json()["detail"].lower()
 
 
-async def test_preview_missing_column_422(client, factory):
+async def test_preview_unrecognized_column_needs_mapping(client, factory):
+    """Нераспознанная колонка файла → НЕ 422: превью просит ручной маппинг."""
     pid = await _make_profile_with_live(factory, [], name="prev-col")
     resp = await client.post(
         f"/api/profiles/{pid}/import/preview",
         files=[("table", ("plan.csv", _csv("название,описание\ntest.jpg,текст\n"), "text/csv"))],
         data={"filenames": json.dumps([])},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["needs_mapping"] is True
+    assert body["headers"] == ["название", "описание"]
+    assert "file" in body["missing"]  # колонка файла не угадана
+    assert body["detected"].get("text") == "описание"  # «описание» распозналось как текст
+    assert body["resolved"] == []
+
+
+async def test_preview_manual_mapping_resolves_and_persists(client, factory):
+    """Ручной маппинг колонок связывает строки И сохраняется для профиля."""
+    pid = await _make_profile_with_live(factory, [], name="prev-map")
+    table = ("plan.csv", _csv("название,описание\n01.jpg,Пост\n"), "text/csv")
+
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        files=[("table", table)],
+        data={
+            "filenames": json.dumps(["01.jpg"]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+            "column_mapping": json.dumps({"file": "название", "text": "описание"}),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["needs_mapping"] is False
+    assert body["resolved_count"] == 1
+    assert body["resolved"][0]["file"] == "01.jpg"
+
+    # Маппинг сохранился в профиле.
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    async with factory() as s:
+        saved = await ProfileSettingsRepository(s, profile_id=pid).get_column_mapping()
+    assert saved == {"file": "название", "text": "описание"}
+
+
+async def test_preview_saved_mapping_auto_applied(client, factory):
+    """Сохранённый ранее маппинг применяется автоматически без повторного ввода."""
+    pid = await _make_profile_with_live(factory, [], name="prev-saved")
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_column_mapping(
+            {"file": "название", "text": "описание"}
+        )
+
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        files=[("table", ("plan.csv", _csv("название,описание\n01.jpg,Пост\n"), "text/csv"))],
+        data={
+            "filenames": json.dumps(["01.jpg"]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["needs_mapping"] is False
+    assert body["resolved_count"] == 1
 
 
 async def test_preview_all_explicit_dates_no_rule_needed(client, factory):

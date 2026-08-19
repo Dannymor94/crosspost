@@ -33,35 +33,81 @@ class PlanImportError(ValueError):
 # ── Распознавание колонок (гибко: регистр + синонимы) ─────────────────────────
 
 _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "file": ("файл", "file", "image", "изображение", "картинка", "img", "имя файла", "filename"),
+    "file": (
+        "файл",
+        "file",
+        "image",
+        "изображение",
+        "картинка",
+        "фото",
+        "img",
+        "имя файла",
+        "filename",
+    ),
     "text": ("текст", "text", "подпись", "caption", "описание", "content", "пост"),
     "date": ("дата", "date", "день"),
     "time": ("время", "time", "час"),
     "article": ("статья", "article", "лонгрид", "longread", "тело"),
 }
 
+# Обязательные логические колонки (без них план не собрать без ручного маппинга).
+REQUIRED_COLUMNS: tuple[str, ...] = ("file", "text")
 
-def detect_columns(header: list[str]) -> dict[str, int]:
-    """header → {logical_name: column_index}. Регистр и пробелы игнорируются.
 
-    file и text обязательны; date и time — опциональны.
+def _normalize_header(cell: str) -> str:
+    """Заголовок → канонический вид: нижний регистр, _→пробел, схлопнутые пробелы."""
+    s = (cell or "").strip().lower().replace("_", " ")
+    return re.sub(r"\s+", " ", s)
+
+
+def detect_columns(header: list[str], *, mapping: dict[str, str] | None = None) -> dict[str, int]:
+    """header → {logical_name: column_index}. Регистр/пробелы/подчёркивания игнорируются.
+
+    mapping — пользовательское сопоставление {logical: заголовок}, перекрывает
+    авто-распознавание (для нераспознанных колонок). file и text обязательны.
     """
-    normalized = [(h or "").strip().lower() for h in header]
-    mapping: dict[str, int] = {}
-    for logical, synonyms in _COLUMN_SYNONYMS.items():
-        for idx, cell in enumerate(normalized):
-            if cell in synonyms:
-                mapping[logical] = idx
-                break
-    if "file" not in mapping:
+    result = _resolve_columns(header, mapping)
+    if "file" not in result:
         raise PlanImportError(
             "Не найдена колонка с именем файла (ожидается «файл», «file» или «image»)."
         )
-    if "text" not in mapping:
+    if "text" not in result:
         raise PlanImportError(
             "Не найдена колонка с текстом (ожидается «текст», «text» или «подпись»)."
         )
-    return mapping
+    return result
+
+
+def _resolve_columns(header: list[str], mapping: dict[str, str] | None) -> dict[str, int]:
+    """Общее ядро распознавания без падения: авто-синонимы + пользовательский маппинг."""
+    normalized = [_normalize_header(h) for h in header]
+    result: dict[str, int] = {}
+    for logical, synonyms in _COLUMN_SYNONYMS.items():
+        norm_syns = {_normalize_header(s) for s in synonyms}
+        for idx, cell in enumerate(normalized):
+            if cell in norm_syns:
+                result[logical] = idx
+                break
+    # Пользовательский маппинг перекрывает авто-распознавание.
+    for logical, chosen in (mapping or {}).items():
+        want = _normalize_header(chosen)
+        for idx, cell in enumerate(normalized):
+            if cell == want:
+                result[logical] = idx
+                break
+    return result
+
+
+def analyze_headers(
+    header: list[str], *, mapping: dict[str, str] | None = None
+) -> tuple[dict[str, int], list[str]]:
+    """Распознать колонки БЕЗ падения. Вернуть (detected, missing_required).
+
+    Для UI ручного маппинга: показать, что нашли и каких обязательных не хватает.
+    """
+    detected = _resolve_columns(header, mapping)
+    missing = [c for c in REQUIRED_COLUMNS if c not in detected]
+    return detected, missing
 
 
 # ── Модель строки плана ───────────────────────────────────────────────────────
@@ -128,21 +174,38 @@ def _parse_time(value: object) -> time | None:
 # ── Парсинг таблицы (CSV / XLSX) ──────────────────────────────────────────────
 
 
-def parse_table(data: bytes, filename: str) -> list[PlanRow]:
-    """Байты таблицы → список PlanRow. Формат выбирается по расширению filename."""
+def _read_rows(data: bytes, filename: str) -> list[list]:
+    """Байты таблицы → сырые строки. Формат выбирается по расширению filename."""
     name = (filename or "").lower()
     if name.endswith(".csv"):
-        raw_rows = _read_csv(data)
-    elif name.endswith((".xlsx", ".xlsm")):
-        raw_rows = _read_xlsx(data)
-    else:
-        raise PlanImportError("Поддерживаются только файлы .csv и .xlsx")
+        return _read_csv(data)
+    if name.endswith((".xlsx", ".xlsm")):
+        return _read_xlsx(data)
+    raise PlanImportError("Поддерживаются только файлы .csv и .xlsx")
 
+
+def peek_headers(data: bytes, filename: str) -> list[str]:
+    """Заголовки таблицы (первая строка) как строки — для UI ручного маппинга."""
+    raw_rows = _read_rows(data, filename)
+    if not raw_rows:
+        raise PlanImportError("Таблица пустая.")
+    return [str(c) if c is not None else "" for c in raw_rows[0]]
+
+
+def parse_table(
+    data: bytes, filename: str, *, mapping: dict[str, str] | None = None
+) -> list[PlanRow]:
+    """Байты таблицы → список PlanRow. Формат выбирается по расширению filename.
+
+    mapping — пользовательское сопоставление {logical: заголовок}, применяется
+    поверх авто-распознавания (для колонок, не угаданных по синонимам).
+    """
+    raw_rows = _read_rows(data, filename)
     if not raw_rows:
         raise PlanImportError("Таблица пустая.")
 
     header, *body = raw_rows
-    cols = detect_columns([str(c) if c is not None else "" for c in header])
+    cols = detect_columns([str(c) if c is not None else "" for c in header], mapping=mapping)
 
     rows: list[PlanRow] = []
     for i, raw in enumerate(body, start=1):

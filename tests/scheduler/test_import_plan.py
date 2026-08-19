@@ -16,11 +16,13 @@ from crosspost.scheduler.import_plan import (
     PlanImportError,
     PlanRow,
     ScheduleRule,
+    analyze_headers,
     build_plan,
     detect_columns,
     natural_key,
     parse_rule,
     parse_table,
+    peek_headers,
 )
 
 # ── Хелперы ───────────────────────────────────────────────────────────────────
@@ -48,6 +50,60 @@ def _xlsx(rows: list[list]) -> bytes:
 def test_detect_columns_flexible_synonyms_and_case():
     cols = detect_columns(["Файл", "ТЕКСТ", "Дата", "Время"])
     assert cols == {"file": 0, "text": 1, "date": 2, "time": 3}
+
+
+def test_detect_columns_normalizes_underscores_and_synonyms():
+    # Подчёркивания → пробелы; расширенные синонимы (фото, имя_файла, описание, лонгрид).
+    cols = detect_columns(["имя_файла", "Описание", "Лонгрид"])
+    assert cols["file"] == 0
+    assert cols["text"] == 1
+    assert cols["article"] == 2
+
+
+def test_detect_columns_photo_synonym():
+    cols = detect_columns(["фото", "подпись"])
+    assert cols == {"file": 0, "text": 1}
+
+
+def test_detect_columns_mapping_override():
+    # Заголовки не из словаря — но пользовательский маппинг {logical: header} их связывает.
+    cols = detect_columns(["colA", "colB"], mapping={"file": "colA", "text": "colB"})
+    assert cols == {"file": 0, "text": 1}
+
+
+def test_peek_headers_csv_and_xlsx():
+    assert peek_headers(_csv("A,B,C\n1,2,3\n"), "plan.csv") == ["A", "B", "C"]
+    assert peek_headers(_xlsx([["X", "Y"], ["1", "2"]]), "plan.xlsx") == ["X", "Y"]
+
+
+def test_analyze_headers_reports_missing_without_raising():
+    # Нераспознанные колонки — НЕ падаем, а сообщаем, что не нашли.
+    detected, missing = analyze_headers(["colA", "colB"])
+    assert "file" in missing and "text" in missing
+    assert detected == {}
+
+
+def test_analyze_headers_partial_detection():
+    detected, missing = analyze_headers(["файл", "colB"])
+    assert detected.get("file") == 0
+    assert missing == ["text"]
+
+
+def test_analyze_headers_mapping_resolves_missing():
+    detected, missing = analyze_headers(["colA", "colB"], mapping={"file": "colA", "text": "colB"})
+    assert detected == {"file": 0, "text": 1}
+    assert missing == []
+
+
+def test_parse_table_with_mapping_override():
+    rows = parse_table(
+        _csv("colA,colB\npic.jpg,Привет\n"),
+        "plan.csv",
+        mapping={"file": "colA", "text": "colB"},
+    )
+    assert len(rows) == 1
+    assert rows[0].file == "pic.jpg"
+    assert rows[0].text == "Привет"
 
 
 def test_detect_columns_english_synonyms():

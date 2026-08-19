@@ -24,6 +24,7 @@ from crosspost.content.capabilities import supports
 from crosspost.db.models import ConnectionState
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
+from crosspost.db.settings_repo import ProfileSettingsRepository
 from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.publish_service import selections_from_stored
@@ -32,9 +33,11 @@ from crosspost.scheduler.import_plan import (
     ImportReport,
     PlanImportError,
     RowProblem,
+    analyze_headers,
     build_plan,
     parse_rule,
     parse_table,
+    peek_headers,
 )
 from crosspost.scheduler.remote_table import RemoteTableError, fetch_sheet_csv
 from crosspost.web import media as media_store
@@ -69,6 +72,12 @@ class PreviewOut(BaseModel):
     unmatched_files: list[str]
     resolved_count: int
     problem_count: int
+    # Фолбэк распознавания колонок: если обязательная колонка не угадана,
+    # превью НЕ падает — просит сопоставить руками (маппинг колонка→поле).
+    needs_mapping: bool = False
+    headers: list[str] = []  # заголовки таблицы для ручного маппинга
+    detected: dict[str, str] = {}  # logical → распознанный заголовок
+    missing: list[str] = []  # обязательные логические поля без колонки
 
 
 class CommitOut(BaseModel):
@@ -91,9 +100,9 @@ def _parse_rule_or_422(start_date: str | None, times_csv: str | None):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _parse_table_or_422(data: bytes, filename: str):
+def _parse_table_or_422(data: bytes, filename: str, *, mapping: dict[str, str] | None = None):
     try:
-        return parse_table(data, filename)
+        return parse_table(data, filename, mapping=mapping)
     except PlanImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -119,6 +128,40 @@ async def _load_table_bytes(table: UploadFile | None, sheet_url: str | None) -> 
     if has_file:
         return await table.read(), (table.filename or "plan.csv")  # type: ignore[union-attr]
     raise HTTPException(status_code=422, detail="Приложите таблицу или дайте ссылку на неё.")
+
+
+def _parse_mapping(column_mapping: str | None) -> dict[str, str]:
+    """JSON-поле column_mapping → {logical: заголовок}. Пусто/битое → {}."""
+    if not column_mapping:
+        return {}
+    try:
+        parsed = json.loads(column_mapping)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail="column_mapping: ожидается JSON-объект"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="column_mapping: ожидается JSON-объект")
+    return {str(k): str(v) for k, v in parsed.items() if v}
+
+
+def _needs_mapping_preview(headers: list[str], detected_idx: dict[str, int], missing: list[str]):
+    """Ответ превью, когда обязательная колонка не распознана — просим маппинг руками."""
+    detected_names = {
+        logical: headers[idx] for logical, idx in detected_idx.items() if idx < len(headers)
+    }
+    return PreviewOut(
+        resolved=[],
+        problems=[],
+        warnings=[],
+        unmatched_files=[],
+        resolved_count=0,
+        problem_count=0,
+        needs_mapping=True,
+        headers=headers,
+        detected=detected_names,
+        missing=missing,
+    )
 
 
 def _to_preview(report: ImportReport) -> PreviewOut:
@@ -213,13 +256,15 @@ async def import_preview(
     filenames: str = Form(...),  # JSON list[str] — имена будущих картинок
     start_date: str | None = Form(None),
     times_csv: str | None = Form(None),
+    column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
 ) -> PreviewOut:
     """Stateless превью: таблица + имена картинок → отчёт связывания без записи в БД.
 
     Источник таблицы — загруженный файл ИЛИ ссылка на Google Таблицу (sheet_url).
-    Возвращает: resolved (что связалось + время), problems (строки с ошибками),
-    unmatched_files (файлы без строк в таблице).
-    Проблемы показываются явно — не импортируем молча с дырами.
+    Если обязательная колонка не распознана — НЕ падаем: возвращаем needs_mapping
+    с заголовками для ручного сопоставления. Присланный column_mapping применяется
+    и сохраняется для профиля (в следующий раз применится автоматически).
+    Возвращает: resolved (что связалось + время), problems, unmatched_files.
     """
     try:
         file_list: list[str] = json.loads(filenames)
@@ -231,9 +276,27 @@ async def import_preview(
         raise HTTPException(status_code=422, detail="filenames: ожидается JSON-массив строк")
 
     data, filename = await _load_table_bytes(table, sheet_url)
-    rows = _parse_table_or_422(data, filename)
+
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    explicit_mapping = _parse_mapping(column_mapping)
+    mapping = explicit_mapping or await settings.get_column_mapping()
+
+    # Распознавание колонок с фолбэком — без падения.
+    try:
+        headers = peek_headers(data, filename)
+    except PlanImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    detected_idx, missing = analyze_headers(headers, mapping=mapping)
+    if missing:
+        return _needs_mapping_preview(headers, detected_idx, missing)
+
+    rows = _parse_table_or_422(data, filename, mapping=mapping)
     rule = _parse_rule_or_422(start_date, times_csv)
     report = build_plan(rows, file_list, rule)
+
+    # Явно присланный рабочий маппинг запоминаем для профиля.
+    if explicit_mapping:
+        await settings.set_column_mapping(explicit_mapping)
     return _to_preview(report)
 
 
@@ -248,6 +311,7 @@ async def import_commit(
     content_type: str = Form("post"),
     start_date: str | None = Form(None),
     times_csv: str | None = Form(None),
+    column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
 ) -> CommitOut:
     """Создать ScheduledPost на каждую строку плана (без исполнения).
 
@@ -272,7 +336,12 @@ async def import_commit(
     await _validate_channels(profile_repo, profile_id, channel_list, content_type, session=session)
 
     data, filename = await _load_table_bytes(table, sheet_url)
-    rows = _parse_table_or_422(data, filename)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    explicit_mapping = _parse_mapping(column_mapping)
+    mapping = explicit_mapping or await settings.get_column_mapping()
+    rows = _parse_table_or_422(data, filename, mapping=mapping)
+    if explicit_mapping:
+        await settings.set_column_mapping(explicit_mapping)
 
     # Индекс загруженных файлов: lower(basename) → UploadFile
     real_media = [f for f in (media or []) if getattr(f, "filename", None)]
