@@ -3,13 +3,14 @@
 Значение колонки «файл» может быть:
   а) имя файла         → ищется в ПАПКЕ-ИСТОЧНИКЕ (путь задаётся в настройках);
   б) прямая http(s)-ссылка на изображение → скачать;
-  в) ссылка Google Drive → преобразовать в прямую ссылку скачивания, скачать;
-  г) публичная ссылка Яндекс.Диска → получить href через их API, скачать.
+  в) публичная ссылка Яндекс.Диска → получить href через их API, скачать.
+
+Google Drive как источник изображения не поддерживается и отклоняется явно.
 
 Тип определяется автоматически по виду значения (classify_source), без ручного
 выбора. Скачанное кладётся в media_store как обычные загруженные файлы.
 
-РАЗДЕЛЕНИЕ: чистая логика (классификация, построение прямых ссылок, SSRF-гард по
+РАЗДЕЛЕНИЕ: чистая логика (классификация, SSRF-гард по
 IP, конфайнмент папки) — без сети и БД, тестируется на данных. Сеть (fetch_media)
 — отдельный слой, мокается через httpx MockTransport + подставной DNS-resolver.
 
@@ -25,24 +26,18 @@ IP, конфайнмент папки) — без сети и БД, тестир
 from __future__ import annotations
 
 import ipaddress
-import re
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 
 _TIMEOUT_SECONDS = 20.0
 _MAX_BYTES = 25 * 1024 * 1024  # 25 МБ — потолок картинки по умолчанию
 _YADISK_API = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
-_GDRIVE_TMPL = "https://drive.google.com/uc?export=download&id={fid}"
-
-_GDRIVE_ID_RE = re.compile(r"/file/d/([A-Za-z0-9_-]+)")
-
-
 class MediaSourceError(ValueError):
     """Источник медиа непригоден: не скачать, приватный адрес, нет файла, велик размер."""
 
@@ -78,21 +73,6 @@ def classify_source(value: str) -> SourceKind:
             return SourceKind.YADISK
         return SourceKind.HTTP
     return SourceKind.FILENAME
-
-
-# ── Прямая ссылка Google Drive (чистая) ───────────────────────────────────────
-
-
-def gdrive_direct_url(value: str) -> str:
-    """Ссылка Google Drive → прямая ссылка скачивания. id из /file/d/<id> или ?id=<id>."""
-    m = _GDRIVE_ID_RE.search(value)
-    fid: str | None = m.group(1) if m else None
-    if not fid:
-        ids = parse_qs(urlparse(value).query).get("id")
-        fid = ids[0] if ids else None
-    if not fid:
-        raise MediaSourceError("Не удалось разобрать ссылку Google Drive (нет id файла).")
-    return _GDRIVE_TMPL.format(fid=fid)
 
 
 # ── SSRF-гард (чистая логика + инъектируемый resolver) ─────────────────────────
@@ -206,8 +186,9 @@ async def fetch_media(
     """Значение колонки «файл» → FetchedMedia (байты + имя + тип источника).
 
     Тип определяется classify_source. FILENAME читается из папки (без сети). URL —
-    скачивается через client (создаётся свой, если не передан). GDRIVE/YADISK сперва
-    преобразуются в прямую ссылку. Ошибки — MediaSourceError с человеческим текстом.
+    скачивается через client (создаётся свой, если не передан). YADISK сперва
+    преобразуется в прямую ссылку. GDRIVE явно не поддерживается. Ошибки —
+    MediaSourceError с человеческим текстом.
     """
     kind = classify_source(value)
     if kind is SourceKind.FILENAME:
@@ -218,11 +199,10 @@ async def fetch_media(
     client = client or httpx.AsyncClient()
     try:
         if kind is SourceKind.GDRIVE:
-            direct = gdrive_direct_url(value)
-            data = await _download(
-                client, direct, max_bytes=max_bytes, timeout=timeout, resolve=resolve
+            raise MediaSourceError(
+                "Google Drive как источник изображения не поддерживается. "
+                "Используйте Яндекс.Диск или прямую http-ссылку на изображение."
             )
-            return FetchedMedia(data, _filename_from_url(value, "gdrive.jpg"), kind)
         if kind is SourceKind.YADISK:
             href = await _yadisk_href(client, value, timeout=timeout, resolve=resolve)
             data = await _download(

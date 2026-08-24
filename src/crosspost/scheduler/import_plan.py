@@ -16,11 +16,12 @@
 
 from __future__ import annotations
 
+import calendar
 import csv
 import io
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
 from crosspost.scheduler.media_sources import SourceKind, classify_source
@@ -273,30 +274,75 @@ def _read_xlsx(data: bytes) -> list[list]:
 # ── Правило раскидки по времени ───────────────────────────────────────────────
 
 
+Interval = Literal["daily", "every_n_days", "weekly", "monthly"]
+
+
+def _add_months(d: date, months: int) -> date:
+    """Прибавить months к дате, зажимая день под длину месяца (31 янв +1 → 28/29 фев)."""
+    total = d.month - 1 + months
+    year = d.year + total // 12
+    month = total % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
 @dataclass(frozen=True)
 class ScheduleRule:
     """Правило авто-раскидки строк без явной даты.
 
-    start_date — с какого дня; times — времена постинга в течение дня (по порядку).
-    Слотов в день = len(times). Пост i (в натуральном порядке имён) →
-    день i // len(times), время times[i % len(times)].
+    times — времена постинга в течение дня (по порядку); слотов в день = len(times).
+    interval — периодичность «дней постинга»:
+      daily         — каждый день;
+      every_n_days  — через interval_n дней;
+      weekly        — только в выбранные дни недели (weekdays, 0=пн..6=вс);
+      monthly       — раз в месяц (то же число).
+    Пост i (в натуральном порядке имён) → день постинга i // len(times),
+    слот времени i % len(times). Окончание — по количеству постов (все строки плана).
     """
 
     start_date: date
     times: tuple[time, ...]
+    interval: Interval = "daily"
+    interval_n: int = 1
+    weekdays: tuple[int, ...] = ()
+
+    def _nth_day(self, k: int) -> date:
+        """k-й (0-based) день постинга по интервалу."""
+        if self.interval == "every_n_days":
+            return self.start_date + timedelta(days=k * self.interval_n)
+        if self.interval == "monthly":
+            return _add_months(self.start_date, k)
+        if self.interval == "weekly":
+            wd = set(self.weekdays)
+            d = self.start_date
+            count = 0
+            # Плановые размеры малы (десятки-сотни постов) → простой перебор дат.
+            # ponytail: линейный перебор, дней плана немного
+            while True:
+                if d.weekday() in wd:
+                    if count == k:
+                        return d
+                    count += 1
+                d += timedelta(days=1)
+        # daily
+        return self.start_date + timedelta(days=k)
 
     def slot_datetime(self, ordinal: int) -> datetime:
         """ordinal (0-based) → дата/время слота."""
         per_day = len(self.times)
-        day_offset = ordinal // per_day
+        day_index = ordinal // per_day
         slot = ordinal % per_day
-        from datetime import timedelta
-
-        day = self.start_date + timedelta(days=day_offset)
-        return datetime.combine(day, self.times[slot])
+        return datetime.combine(self._nth_day(day_index), self.times[slot])
 
 
-def parse_rule(start_date: str, times_csv: str) -> ScheduleRule:
+def parse_rule(
+    start_date: str,
+    times_csv: str,
+    *,
+    interval: str = "daily",
+    interval_n: int = 1,
+    weekdays: tuple[int, ...] = (),
+) -> ScheduleRule:
     """UI-ввод правила → ScheduleRule. start_date=YYYY-MM-DD; times='10:00, 18:00'."""
     try:
         sd = date.fromisoformat(start_date.strip())
@@ -312,7 +358,24 @@ def parse_rule(start_date: str, times_csv: str) -> ScheduleRule:
             times.append(t)
     if not times:
         raise PlanImportError("Укажите хотя бы одно время постинга (напр. 10:00, 18:00).")
-    return ScheduleRule(start_date=sd, times=tuple(times))
+
+    if interval not in ("daily", "every_n_days", "weekly", "monthly"):
+        raise PlanImportError(f"Неизвестный интервал повтора: {interval!r}.")
+    if interval == "every_n_days" and interval_n < 1:
+        raise PlanImportError("Интервал в днях должен быть ≥ 1.")
+    if interval == "weekly":
+        if not weekdays:
+            raise PlanImportError("Выберите хотя бы один день недели.")
+        if any(w < 0 or w > 6 for w in weekdays):
+            raise PlanImportError("День недели: ожидается 0 (пн) … 6 (вс).")
+
+    return ScheduleRule(
+        start_date=sd,
+        times=tuple(times),
+        interval=interval,  # type: ignore[arg-type]
+        interval_n=interval_n,
+        weekdays=tuple(sorted(set(weekdays))),
+    )
 
 
 # ── Натуральная сортировка по имени файла ─────────────────────────────────────
@@ -338,7 +401,7 @@ class ResolvedRow:
     source: Literal["explicit", "rule"]
     article_text: str = ""  # тело лонгрида для Telegraph; пусто → обычный пост
     # Откуда возьмётся картинка (для отчёта связывания, Блок 3):
-    # "upload" | "folder" | "http" | "gdrive" | "yadisk" | "" (нет файла).
+    # "upload" | "folder" | "http" | "yadisk" | "" (нет файла).
     media_source: str = ""
 
 
@@ -388,8 +451,9 @@ def build_plan(
     rule может быть None, если ВСЕ строки с явной датой.
 
     Блок 3: значение колонки «файл» может быть не только именем загруженной картинки,
-    но и ссылкой (http/Google Drive/Яндекс.Диск) — она валидный источник и не даёт
-    предупреждения «не загружено». Для имени файла источником может быть папка
+    но и прямой HTTP-ссылкой или публичной ссылкой Яндекс.Диска — это валидные
+    источники без предупреждения «не загружено». Google Drive не поддерживается и
+    попадает в problems уже на preview. Для имени файла источником может быть папка
     (folder_configured=True). media_source в каждой строке говорит, откуда возьмётся
     картинка; фактическое скачивание — на этапе commit.
     """
@@ -418,8 +482,17 @@ def build_plan(
         msource: str
         if not row.file:
             matched, msource = "", ""  # нет колонки файла — текстовый пост без предупреждения
+        elif classify_source(row.file) is SourceKind.GDRIVE:
+            report.problems.append(
+                RowProblem(
+                    row.row_number,
+                    row.file,
+                    "Google Drive не поддерживается. Используйте прямую HTTP-ссылку или Яндекс.Диск.",
+                )
+            )
+            continue
         elif classify_source(row.file) is not SourceKind.FILENAME:
-            # Ссылка (http/Google Drive/Яндекс.Диск) — удалённый источник, скачается в commit.
+            # Прямая HTTP-ссылка или Яндекс.Диск — удалённый источник, скачается в commit.
             matched = row.file
             msource = classify_source(row.file).value
         else:

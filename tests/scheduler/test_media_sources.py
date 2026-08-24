@@ -1,7 +1,7 @@
 """Тесты Блока 3: гибкие источники медиа для импорта контент-плана.
 
-Чистая логика (классификация значения, построение прямых ссылок, SSRF-гард по IP,
-конфайнмент папки) тестируется на данных. Сетевой слой (fetch_media) — через httpx
+Чистая логика (классификация значения, SSRF-гард по IP, конфайнмент папки)
+тестируется на данных. Сетевой слой (fetch_media) — через httpx
 MockTransport + подставной DNS-resolver, без реальной сети и без реальных приватных
 адресов. Ссылки/секреты не логируем.
 """
@@ -18,7 +18,6 @@ from crosspost.scheduler.media_sources import (
     assert_public_http_url,
     classify_source,
     fetch_media,
-    gdrive_direct_url,
     resolve_in_folder,
 )
 
@@ -39,28 +38,6 @@ from crosspost.scheduler.media_sources import (
 )
 def test_classify_source(value, kind):
     assert classify_source(value) == kind
-
-
-# ── gdrive_direct_url (чистая) ────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://drive.google.com/file/d/FILEID123/view?usp=sharing",
-        "https://drive.google.com/open?id=FILEID123",
-        "https://drive.google.com/uc?id=FILEID123&export=download",
-    ],
-)
-def test_gdrive_direct_url_extracts_id(url):
-    direct = gdrive_direct_url(url)
-    assert "id=FILEID123" in direct
-    assert "export=download" in direct
-
-
-def test_gdrive_direct_url_rejects_without_id():
-    with pytest.raises(MediaSourceError):
-        gdrive_direct_url("https://drive.google.com/drive/folders/xxx")
 
 
 # ── SSRF-гард (чистая, с подставным resolver) ─────────────────────────────────
@@ -192,21 +169,19 @@ async def test_fetch_media_too_large():
             )
 
 
-async def test_fetch_media_gdrive():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert "export=download" in str(request.url)
-        assert "id=FILEID123" in str(request.url)
-        return httpx.Response(200, content=_IMG, headers={"content-type": "image/jpeg"})
+async def test_fetch_media_gdrive_rejected():
+    # Источник отклоняется с понятной ошибкой БЕЗ обращения к сети.
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("Google Drive не должен запрашиваться")
 
     async with _client(handler) as client:
-        result = await fetch_media(
-            "https://drive.google.com/file/d/FILEID123/view",
-            folder="",
-            client=client,
-            resolve=_resolve_to("142.250.1.1"),
-        )
-    assert result.data == _IMG
-    assert result.kind == SourceKind.GDRIVE
+        with pytest.raises(MediaSourceError, match="Google Drive"):
+            await fetch_media(
+                "https://drive.google.com/file/d/FILEID123/view",
+                folder="",
+                client=client,
+                resolve=_resolve_to("142.250.1.1"),
+            )
 
 
 async def test_fetch_media_yadisk():

@@ -13,6 +13,7 @@ import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -28,6 +29,21 @@ from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.vault import get_vault
 from crosspost.web import deps
 from crosspost.web.routes import import_plan, profiles
+
+
+def test_frontend_weekday_values_match_backend_contract():
+    """UI и backend используют один контракт: 0=пн … 6=вс."""
+    frontend = Path(import_plan.__file__).parent.parent / "frontend" / "index.html"
+    source = frontend.read_text()
+    assert (
+        'const WEEKDAY_LABELS = [["0", "Пн"], ["1", "Вт"], ["2", "Ср"], '
+        '["3", "Чт"], ["4", "Пт"], ["5", "Сб"], ["6", "Вс"]];'
+    ) in source
+
+    rule = import_plan._parse_rule_or_422(
+        "2026-09-01", "12:00", interval="weekly", weekdays_csv="0"
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 9, 7, 12, 0)
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +211,35 @@ async def test_preview_missing_file_becomes_warning(client, factory):
     assert len(body["warnings"]) == 1
     assert "без фото" in body["warnings"][0]["reason"]
     assert body["unmatched_files"] == ["other.jpg"]
+
+
+async def test_preview_reports_google_drive_as_unsupported(client, factory):
+    pid = await _make_profile_with_live(factory, [], name="prev-gdrive")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/preview",
+        files=[
+            (
+                "table",
+                (
+                    "plan.csv",
+                    _csv(
+                        "файл,текст\nhttps://drive.google.com/file/d/ABC/view,Пост\n"
+                    ),
+                    "text/csv",
+                ),
+            )
+        ],
+        data={
+            "filenames": json.dumps([]),
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["resolved_count"] == 0
+    assert body["problem_count"] == 1
+    assert "Google Drive не поддерживается" in body["problems"][0]["reason"]
 
 
 async def test_preview_unmatched_files_listed(client, factory):
@@ -401,6 +446,39 @@ async def test_commit_creates_scheduled_posts(client, factory):
     assert all(p.content_type == "post" for p in posts)
     # Первый пост раньше второго (натуральный порядок).
     assert posts[0].scheduled_at < posts[1].scheduled_at
+
+
+async def test_commit_weekly_interval_schedules_on_selected_days(client, factory):
+    """Правило «по дням недели» через роут: 2026-09-01 (вт), дни пн+пт."""
+    pid = await _make_profile_with_live(factory, ["telegram"], name="com-weekly")
+    csv = _csv("файл,текст\n01.jpg,A\n02.jpg,B\n03.jpg,C\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[
+            ("table", ("plan.csv", csv, "text/csv")),
+            ("media", ("01.jpg", b"\xff\xd8\xff", "image/jpeg")),
+            ("media", ("02.jpg", b"\xff\xd8\xff", "image/jpeg")),
+            ("media", ("03.jpg", b"\xff\xd8\xff", "image/jpeg")),
+        ],
+        data={
+            "channels": json.dumps(["telegram"]),
+            "start_date": "2026-09-01",
+            "times_csv": "12:00",
+            "interval": "weekly",
+            "weekdays_csv": "0,4",  # пн, пт
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["created"] == 3
+    async with factory() as s:
+        posts = sorted(
+            await PublicationRepository(s, profile_id=pid).list_scheduled(),
+            key=lambda p: p.scheduled_at,
+        )
+    # пт 4 сен, пн 7 сен, пт 11 сен.
+    assert [p.scheduled_at.isoformat() for p in posts] == [
+        "2026-09-04T12:00:00", "2026-09-07T12:00:00", "2026-09-11T12:00:00",
+    ]
 
 
 async def test_commit_with_targets_roundtrips(client, factory):

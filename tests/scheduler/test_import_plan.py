@@ -230,6 +230,123 @@ def test_rule_slot_datetime_distributes_across_days():
     assert rule.slot_datetime(3) == datetime(2026, 9, 2, 18, 0)
 
 
+# ── Интервалы повторения ──────────────────────────────────────────────────────
+
+
+def test_rule_daily_default():
+    # По умолчанию — каждый день (обратная совместимость).
+    rule = ScheduleRule(start_date=date(2026, 9, 1), times=(time(9, 0),))
+    assert rule.slot_datetime(0) == datetime(2026, 9, 1, 9, 0)
+    assert rule.slot_datetime(1) == datetime(2026, 9, 2, 9, 0)
+    assert rule.slot_datetime(2) == datetime(2026, 9, 3, 9, 0)
+
+
+def test_rule_every_n_days():
+    # Через 3 дня: 1 → 4 → 7 сентября.
+    rule = ScheduleRule(
+        start_date=date(2026, 9, 1), times=(time(9, 0),),
+        interval="every_n_days", interval_n=3,
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 9, 1, 9, 0)
+    assert rule.slot_datetime(1) == datetime(2026, 9, 4, 9, 0)
+    assert rule.slot_datetime(2) == datetime(2026, 9, 7, 9, 0)
+
+
+def test_rule_every_n_days_with_multiple_slots():
+    # 2 слота в день, интервал 2 дня. День 0 = 1 сен (два слота), день 1 = 3 сен.
+    rule = ScheduleRule(
+        start_date=date(2026, 9, 1), times=(time(9, 0), time(21, 0)),
+        interval="every_n_days", interval_n=2,
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 9, 1, 9, 0)
+    assert rule.slot_datetime(1) == datetime(2026, 9, 1, 21, 0)
+    assert rule.slot_datetime(2) == datetime(2026, 9, 3, 9, 0)
+    assert rule.slot_datetime(3) == datetime(2026, 9, 3, 21, 0)
+
+
+def test_rule_weekly_selected_weekdays():
+    # 2026-09-01 — вторник (weekday=1). Дни: пн(0), ср(2), пт(4).
+    # Первый подходящий день ≥ старта: ср 2 сен, затем пт 4 сен, пн 7 сен, ср 9 сен.
+    rule = ScheduleRule(
+        start_date=date(2026, 9, 1), times=(time(12, 0),),
+        interval="weekly", weekdays=(0, 2, 4),
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 9, 2, 12, 0)
+    assert rule.slot_datetime(1) == datetime(2026, 9, 4, 12, 0)
+    assert rule.slot_datetime(2) == datetime(2026, 9, 7, 12, 0)
+    assert rule.slot_datetime(3) == datetime(2026, 9, 9, 12, 0)
+
+
+def test_rule_weekly_start_on_selected_day():
+    # Старт в понедельник 2026-09-07 (weekday=0), дни пн+чт(3).
+    rule = ScheduleRule(
+        start_date=date(2026, 9, 7), times=(time(8, 0),),
+        interval="weekly", weekdays=(0, 3),
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 9, 7, 8, 0)   # пн
+    assert rule.slot_datetime(1) == datetime(2026, 9, 10, 8, 0)  # чт
+    assert rule.slot_datetime(2) == datetime(2026, 9, 14, 8, 0)  # следующий пн
+
+
+def test_rule_monthly():
+    # Раз в месяц: 15 янв → 15 фев → 15 мар.
+    rule = ScheduleRule(
+        start_date=date(2026, 1, 15), times=(time(10, 0),), interval="monthly",
+    )
+    assert rule.slot_datetime(0) == datetime(2026, 1, 15, 10, 0)
+    assert rule.slot_datetime(1) == datetime(2026, 2, 15, 10, 0)
+    assert rule.slot_datetime(2) == datetime(2026, 3, 15, 10, 0)
+
+
+def test_rule_monthly_clamps_short_month():
+    # 31 января + месяц → 28 февраля (2026 не високосный).
+    rule = ScheduleRule(
+        start_date=date(2026, 1, 31), times=(time(10, 0),), interval="monthly",
+    )
+    assert rule.slot_datetime(1) == datetime(2026, 2, 28, 10, 0)
+
+
+def test_parse_rule_interval_params():
+    rule = parse_rule("2026-09-01", "10:00", interval="every_n_days", interval_n=5)
+    assert rule.interval == "every_n_days"
+    assert rule.interval_n == 5
+
+
+def test_parse_rule_weekly_requires_weekdays():
+    with pytest.raises(PlanImportError, match="день недели"):
+        parse_rule("2026-09-01", "10:00", interval="weekly", weekdays=())
+
+
+def test_parse_rule_weekly_parses_weekdays():
+    rule = parse_rule("2026-09-01", "10:00", interval="weekly", weekdays=(1, 3, 5))
+    assert rule.interval == "weekly"
+    assert rule.weekdays == (1, 3, 5)
+
+
+def test_parse_rule_every_n_days_rejects_zero():
+    with pytest.raises(PlanImportError, match="[Ии]нтервал"):
+        parse_rule("2026-09-01", "10:00", interval="every_n_days", interval_n=0)
+
+
+def test_build_plan_explicit_date_beats_interval_rule():
+    # Явная дата в строке приоритетнее правила повтора.
+    rows = [
+        _row(1, "1.jpg", "Первый"),
+        _row(2, "2.jpg", "Второй", d=date(2026, 12, 25), t=time(15, 0)),
+        _row(3, "3.jpg", "Третий"),
+    ]
+    rule = ScheduleRule(
+        start_date=date(2026, 9, 1), times=(time(9, 0),),
+        interval="every_n_days", interval_n=7,
+    )
+    report = build_plan(rows, ["1.jpg", "2.jpg", "3.jpg"], rule)
+    by_row = {r.row_number: r for r in report.resolved}
+    assert by_row[2].scheduled_at == datetime(2026, 12, 25, 15, 0)  # явная
+    # Правило раскидывает ТОЛЬКО строки без явной даты: 1.jpg → старт, 3.jpg → +7 дней.
+    assert by_row[1].scheduled_at == datetime(2026, 9, 1, 9, 0)
+    assert by_row[3].scheduled_at == datetime(2026, 9, 8, 9, 0)
+
+
 # ── build_plan: связывание + резолвинг ────────────────────────────────────────
 
 
@@ -382,14 +499,16 @@ def test_build_plan_http_url_is_remote_source_no_warning():
     assert report.resolved[0].file == "https://example.com/pic.png"
 
 
-def test_build_plan_gdrive_and_yadisk_sources():
+def test_build_plan_gdrive_is_problem_and_yadisk_is_supported():
     rows = [
         _row(1, "https://drive.google.com/file/d/ABC/view", "GD", d=date(2026, 5, 1)),
         _row(2, "https://disk.yandex.ru/i/xyz", "YD", d=date(2026, 5, 1)),
     ]
     report = build_plan(rows, [], rule=None)
-    kinds = {r.text: r.media_source for r in report.resolved}
-    assert kinds == {"GD": "gdrive", "YD": "yadisk"}
+    assert [(p.row_number, p.reason) for p in report.problems] == [
+        (1, "Google Drive не поддерживается. Используйте прямую HTTP-ссылку или Яндекс.Диск.")
+    ]
+    assert [(r.text, r.media_source) for r in report.resolved] == [("YD", "yadisk")]
 
 
 def test_build_plan_filename_from_folder_when_configured():

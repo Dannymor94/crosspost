@@ -768,6 +768,31 @@ body {
 .import-drop-sub { font-size: 11px; color: var(--text-3); }
 .rule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 
+/* ── Segmented control (интервал повтора) ────────────────────────────────── */
+.seg-group { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seg-btn {
+  padding: 7px 13px; font-size: 13px; cursor: pointer;
+  background: var(--bg-input); color: var(--text-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.seg-btn:hover { color: var(--text-1); border-color: var(--border-f); }
+.seg-btn.on { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Weekday picker ──────────────────────────────────────────────────────── */
+.weekday-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.weekday-btn {
+  width: 42px; height: 38px; cursor: pointer;
+  background: var(--bg-input); color: var(--text-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 13px; font-weight: 600;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.weekday-btn:hover { color: var(--text-1); border-color: var(--border-f); }
+.weekday-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.weekday-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .report-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .chip {
   font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px;
@@ -810,6 +835,66 @@ body {
 .map-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .req-star { color: var(--error); }
 .mt-0 { margin-top: 0; }
+
+/* ── Import steps (Блок 2) ──────────────────────────────────────────────── */
+.import-step {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  margin-bottom: 8px; overflow: hidden;
+  transition: border-color .15s;
+}
+.import-step.active { border-color: var(--border-f); }
+.import-step-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; cursor: pointer;
+  background: var(--bg-card); border: none; width: 100%; text-align: left;
+  font: inherit; color: var(--text-1);
+  transition: background .1s;
+}
+.import-step-header:hover { background: var(--bg-card-h); }
+.import-step-num {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  background: var(--bg-input); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; font-family: var(--font-mono); color: var(--text-3);
+}
+.import-step.active .import-step-num { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.import-step.done .import-step-num { background: var(--live-bg); border-color: var(--live); color: var(--live); }
+.import-step-label { font-size: 14px; font-weight: 600; flex: 1; }
+.import-step-summary { font-size: 12px; color: var(--text-3); margin-left: auto; }
+.import-step.done .import-step-summary { color: var(--live); }
+.import-step-chevron { font-size: 12px; color: var(--text-3); flex-shrink: 0; transition: transform .15s; }
+.import-step.open .import-step-chevron { transform: rotate(90deg); }
+.import-step-body { padding: 16px; border-top: 1px solid var(--border); background: var(--bg-panel); }
+.import-step-footer { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+/* ── Sticky commit bar (Блок 1) ─────────────────────────────────────────── */
+.import-sticky {
+  position: sticky; bottom: 0;
+  background: var(--bg-panel); border-top: 1px solid var(--border);
+  padding: 12px 0; margin-top: 16px;
+  display: flex; align-items: center; gap: 12px;
+  z-index: 20;
+}
+
+/* ── Import preview table (Блок 1) ─────────────────────────────────────── */
+.plan-preview-summary {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center;
+}
+.plan-preview-period { font-size: 11px; color: var(--text-3); margin-left: auto; }
+.plan-rows-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.plan-rows-table th {
+  text-align: left; font-size: 10px; font-family: var(--font-mono); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--text-3);
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+}
+.plan-rows-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; }
+.plan-rows-table tr:last-child td { border-bottom: none; }
+.plan-rows-table tr.row-warn td { background: rgba(245,158,11,.06); }
+.plan-rows-table tr.row-bad  td { background: rgba(248,113,113,.06); }
+.plan-row-status { font-size: 14px; text-align: center; }
+.plan-row-text { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
+.plan-row-issue { font-size: 11px; color: var(--error); margin-top: 2px; }
+.plan-row-warn-text { font-size: 11px; color: var(--amber); margin-top: 2px; }
 
 /* ── Guide: интерактивная инструкция подключения ─────────────────────────── */
 .guide-intro {
@@ -2670,7 +2755,7 @@ const MEDIA_SRC_LABEL = {
   upload: "загружено",
   folder: "из папки",
   http: "по ссылке",
-  gdrive: "Google Drive",
+  gdrive: "Google Drive ✗",
   yadisk: "Яндекс.Диск",
 };
 // Логические поля таблицы для ручного сопоставления (первые два обязательны).
@@ -2698,19 +2783,65 @@ function TableDrop({ file, onPick }) {
   );
 }
 
-function RuleFields({ startDate, times, onStart, onTimes }) {
-  return h("div", { className: "rule-grid" },
-    h("div", { className: "form-group", style: { margin: 0 } },
-      h("label", { className: "form-label" }, "Первый день"),
-      h("input", { className: "form-input", type: "date", value: startDate,
-        onChange: (e) => onStart(e.target.value) }),
+const INTERVAL_OPTIONS = [
+  ["daily", "Каждый день"],
+  ["every_n_days", "Через N дней"],
+  ["weekly", "По дням недели"],
+  ["monthly", "Раз в месяц"],
+];
+const WEEKDAY_LABELS = [["0", "Пн"], ["1", "Вт"], ["2", "Ср"], ["3", "Чт"], ["4", "Пт"], ["5", "Сб"], ["6", "Вс"]];
+
+function RuleFields({ startDate, times, interval, intervalN, weekdays,
+                      onStart, onTimes, onInterval, onIntervalN, onWeekdays }) {
+  function toggleDay(n) {
+    onWeekdays(weekdays.includes(n) ? weekdays.filter(d => d !== n) : [...weekdays, n]);
+  }
+  return h("div", null,
+    h("div", { className: "form-group", style: { marginBottom: "14px" } },
+      h("label", { className: "form-label" }, "Периодичность"),
+      h("div", { className: "seg-group", role: "radiogroup", "aria-label": "Периодичность" },
+        INTERVAL_OPTIONS.map(([val, lbl]) =>
+          h("button", {
+            key: val, type: "button", role: "radio", "aria-checked": interval === val,
+            className: `seg-btn ${interval === val ? "on" : ""}`,
+            onClick: () => onInterval(val),
+          }, lbl)),
+      ),
     ),
-    h("div", { className: "form-group", style: { margin: 0 } },
-      h("label", { className: "form-label" }, "Времена постинга"),
-      h("input", { className: "form-input mono", placeholder: "10:00, 18:00", value: times,
-        onChange: (e) => onTimes(e.target.value) }),
-      h("p", { className: "form-hint" },
-        "Через запятую. Строки без явной даты раскидаются по слотам, в порядке имён файлов."),
+    interval === "every_n_days" && h("div", { className: "form-group", style: { marginBottom: "14px" } },
+      h("label", { className: "form-label" }, "Шаг, дней"),
+      h("input", { className: "form-input", type: "number", min: 1, max: 365, value: intervalN,
+        style: { maxWidth: "120px" },
+        onChange: (e) => onIntervalN(Math.max(1, parseInt(e.target.value, 10) || 1)) }),
+    ),
+    interval === "weekly" && h("div", { className: "form-group", style: { marginBottom: "14px" } },
+      h("label", { className: "form-label" }, "Дни недели"),
+      h("div", { className: "weekday-row" },
+        WEEKDAY_LABELS.map(([val, lbl]) => {
+          const n = parseInt(val, 10);
+          return h("button", {
+            key: val, type: "button", "aria-pressed": weekdays.includes(n),
+            className: `weekday-btn ${weekdays.includes(n) ? "on" : ""}`,
+            onClick: () => toggleDay(n),
+          }, lbl);
+        }),
+      ),
+      weekdays.length === 0 && h("p", { className: "form-hint", style: { color: "var(--amber)" } },
+        "Выберите хотя бы один день."),
+    ),
+    h("div", { className: "rule-grid" },
+      h("div", { className: "form-group", style: { margin: 0 } },
+        h("label", { className: "form-label" }, "Первый день"),
+        h("input", { className: "form-input", type: "date", value: startDate,
+          onChange: (e) => onStart(e.target.value) }),
+      ),
+      h("div", { className: "form-group", style: { margin: 0 } },
+        h("label", { className: "form-label" }, "Времена постинга"),
+        h("input", { className: "form-input mono", placeholder: "10:00, 18:00", value: times,
+          onChange: (e) => onTimes(e.target.value) }),
+        h("p", { className: "form-hint" },
+          "Через запятую. Строки без явной даты раскидаются по слотам, в порядке имён файлов."),
+      ),
     ),
   );
 }
@@ -2755,49 +2886,82 @@ function MappingEditor({ report, onApply, busy }) {
 
 function ImportReportView({ report }) {
   const warnings = report.warnings || [];
+  const problems = report.problems || [];
+  const resolved = report.resolved || [];
+
+  // Период: мин и макс scheduled_at среди resolved.
+  const dates = resolved.map(r => new Date(r.scheduled_at)).filter(d => !isNaN(d));
+  const periodStr = dates.length >= 2
+    ? `${dates[0].toLocaleDateString("ru-RU")} — ${dates[dates.length-1].toLocaleDateString("ru-RU")}`
+    : dates.length === 1 ? dates[0].toLocaleDateString("ru-RU") : "";
+
+  // Индекс warnings по row_number для быстрого поиска.
+  const warnMap = Object.fromEntries(warnings.map(w => [w.row_number, w]));
+
   return h("div", null,
-    h("div", { className: "report-chips" },
-      h("span", { className: "chip ok" }, `Запланировано: ${report.resolved_count}`),
-      warnings.length > 0 && h("span", { className: "chip warn" }, `Без фото: ${warnings.length}`),
-      report.problem_count > 0 && h("span", { className: "chip err" }, `Пропущено: ${report.problem_count}`),
-      report.unmatched_files.length > 0
-        && h("span", { className: "chip warn" }, `Файлов без строк: ${report.unmatched_files.length}`),
+    // Сводка.
+    h("div", { className: "plan-preview-summary" },
+      h("span", { className: "chip ok" }, `✓ ${report.resolved_count} готово`),
+      warnings.length > 0 && h("span", { className: "chip warn" }, `⚠ ${warnings.length} без фото`),
+      problems.length > 0 && h("span", { className: "chip err" }, `✕ ${problems.length} пропущено`),
+      report.unmatched_files?.length > 0
+        && h("span", { className: "chip warn" }, `${report.unmatched_files.length} файлов без строк`),
+      periodStr && h("span", { className: "plan-preview-period" }, `📅 ${periodStr}`),
     ),
-    report.resolved.length > 0 && h("div", null,
-      h("p", { className: "section-title" }, "Расписание"),
-      h("div", { className: "plan-rows" },
-        report.resolved.map((r, i) => h("div", { key: i, className: "plan-row" },
-          h("span", { className: "plan-when mono" }, new Date(r.scheduled_at).toLocaleString("ru-RU")),
-          h("span", { className: "plan-file mono" }, r.file || "текст",
-            r.media_source && h("span", { className: `plan-msrc ${r.media_source}`,
-              title: "Источник картинки" }, MEDIA_SRC_LABEL[r.media_source] || r.media_source)),
-          h("span", { className: "plan-text" },
-            r.text || "(без текста)",
-            r.has_article && h("span", { className: "sched-badge",
-              title: "Строка несёт статью Telegraph — выйдет первой, пост получит ссылку" }, " + статья"),
+
+    // Таблица-превью (все строки вместе).
+    (resolved.length > 0 || warnings.length > 0 || problems.length > 0) && h("div", { style: { overflowX: "auto", maxHeight: "420px", overflowY: "auto" } },
+      h("table", { className: "plan-rows-table" },
+        h("thead", null,
+          h("tr", null,
+            h("th", null, ""),
+            h("th", null, "Время"),
+            h("th", null, "Файл / источник"),
+            h("th", null, "Текст"),
+            h("th", null, "Тип"),
           ),
-          h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата"),
-        ))),
+        ),
+        h("tbody", null,
+          resolved.map((r, i) => {
+            const warn = warnMap[r.row_number];
+            return h("tr", { key: `r${i}`, className: warn ? "row-warn" : "" },
+              h("td", { className: "plan-row-status" }, warn ? "⚠" : "✓"),
+              h("td", null, h("span", { className: "mono", style: { fontSize: "11px", color: "var(--accent)" } },
+                new Date(r.scheduled_at).toLocaleString("ru-RU", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))),
+              h("td", null,
+                r.file
+                  ? h("span", null,
+                      h("span", { className: "mono", style: { fontSize: "11px", color: "var(--text-3)" } }, r.file.length > 18 ? r.file.slice(0, 16) + "…" : r.file),
+                      r.media_source && h("span", { className: `plan-msrc ${r.media_source}`, title: "Источник" }, MEDIA_SRC_LABEL[r.media_source] || r.media_source),
+                    )
+                  : h("span", { style: { color: "var(--text-3)", fontSize: "11px" } }, "текст"),
+                warn && h("div", { className: "plan-row-warn-text" },
+                  warn.file ? h("span", { className: "mono", style: { marginRight: "4px" } }, `«${warn.file}»`) : null,
+                  warn.reason,
+                ),
+              ),
+              h("td", null,
+                h("div", { className: "plan-row-text" },
+                  (r.text || "(без текста)").slice(0, 80) + ((r.text || "").length > 80 ? "…" : ""),
+                  r.has_article && h("span", { className: "sched-badge",
+                    title: "Строка несёт статью Telegraph — выйдет первой, пост получит ссылку" }, " + статья"),
+                ),
+              ),
+              h("td", null, h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата")),
+            );
+          }),
+          problems.map((p, i) =>
+            h("tr", { key: `p${i}`, className: "row-bad" },
+              h("td", { className: "plan-row-status" }, "✕"),
+              h("td", null, h("span", { className: "mono", style: { fontSize: "11px", color: "var(--text-3)" } }, `стр. ${p.row_number}`)),
+              h("td", null, h("span", { className: "mono", style: { fontSize: "11px", color: "var(--text-3)" } }, p.file || "—")),
+              h("td", { colSpan: 2 }, h("div", { className: "plan-row-issue" }, p.reason)),
+            )
+          ),
+        ),
+      ),
     ),
-    warnings.length > 0 && h("div", null,
-      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Предупреждения — посты выйдут без фото"),
-      h("div", { className: "plan-rows" },
-        warnings.map((w, i) => h("div", { key: i, className: "plan-row warn" },
-          h("span", { className: "plan-file mono" }, `стр. ${w.row_number}`),
-          h("span", { className: "plan-file mono" }, w.file || "—"),
-          h("span", { className: "plan-reason" }, w.reason),
-        ))),
-    ),
-    report.problems.length > 0 && h("div", null,
-      h("p", { className: "section-title", style: { marginTop: "18px" } }, "Пропущенные строки"),
-      h("div", { className: "plan-rows" },
-        report.problems.map((p, i) => h("div", { key: i, className: "plan-row bad" },
-          h("span", { className: "plan-file mono" }, `стр. ${p.row_number}`),
-          h("span", { className: "plan-file mono" }, p.file || "—"),
-          h("span", { className: "plan-reason" }, p.reason),
-        ))),
-    ),
-    report.unmatched_files.length > 0 && h("p", { className: "plan-unmatched" },
+    report.unmatched_files?.length > 0 && h("p", { className: "plan-unmatched" },
       `Картинки без строки в таблице: ${report.unmatched_files.join(", ")}`),
   );
 }
@@ -2813,6 +2977,9 @@ function ImportView({ profile }) {
   const [mapping, setMapping] = useState({});  // применённое ручное сопоставление колонок
   const [startDate, setStartDate] = useState(() => todayStr());
   const [times, setTimes] = useState("10:00, 18:00");
+  const [interval, setInterval] = useState("daily");   // daily | every_n_days | weekly | monthly
+  const [intervalN, setIntervalN] = useState(2);        // шаг для every_n_days
+  const [weekdays, setWeekdays] = useState([0, 2, 4]);  // 0=пн..6=вс, для weekly
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [report, setReport] = useState(null);
@@ -2855,6 +3022,9 @@ function ImportView({ profile }) {
   function appendRule(fd) {
     if (startDate) fd.append("start_date", startDate);
     if (times.trim()) fd.append("times_csv", times);
+    fd.append("interval", interval);
+    if (interval === "every_n_days") fd.append("interval_n", String(intervalN));
+    if (interval === "weekly") fd.append("weekdays_csv", [...weekdays].sort((a, b) => a - b).join(","));
   }
   // Источник таблицы: ссылка на Google Таблицу имеет приоритет над файлом.
   const hasTableSource = !!table || !!sheetUrl.trim();
@@ -2913,83 +3083,131 @@ function ImportView({ profile }) {
   const canCommit = hasTableSource && selected.size > 0 && report
     && !needsMapping && report.resolved_count > 0 && !committing;
 
+  const [openStep, setOpenStep] = useState(1);
+
+  // Сводки завершённых шагов.
+  const tableSummary = table ? table.name : sheetUrl.trim() ? "Google Таблица" : null;
+  const imagesSummary = images.length > 0 ? `${images.length} картин${images.length === 1 ? "ка" : images.length < 5 ? "ки" : "ок"}` : folder.trim() ? "папка на сервере" : null;
+  const intervalLabel = {
+    daily: "каждый день",
+    every_n_days: `через ${intervalN} дн.`,
+    weekly: `${weekdays.length ? [...weekdays].sort((a, b) => a - b).map(n => WEEKDAY_LABELS.find(([v]) => +v === n)[1]).join(" ") : "дни?"}`,
+    monthly: "раз в месяц",
+  }[interval];
+  const ruleSummary = startDate
+    ? `${intervalLabel} · от ${startDate.split("-").reverse().join(".")} · ${times.trim() || "—"}`
+    : null;
+  const targetsSummary = selected.size > 0 ? `${selected.size} выбрано` : null;
+
+  function ImportStep({ num, title, summary, done, children }) {
+    const isOpen = openStep === num;
+    return h("div", { className: `import-step ${isOpen ? "open active" : done ? "done" : ""}` },
+      h("button", { className: "import-step-header", onClick: () => setOpenStep(isOpen ? 0 : num) },
+        h("span", { className: "import-step-num" }, done && !isOpen ? "✓" : num),
+        h("span", { className: "import-step-label" }, title),
+        done && !isOpen && h("span", { className: "import-step-summary" }, summary),
+        h("span", { className: "import-step-chevron" }, "▸"),
+      ),
+      isOpen && h("div", { className: "import-step-body" }, children),
+    );
+  }
+
   return h("div", null,
     h("h1", { className: "page-title" }, "Импорт контент-плана"),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
 
-    h("p", { className: "section-title" }, "Таблица плана"),
-    h(TableDrop, { file: table, onPick: (f) => { setTable(f); setSheetUrl(""); } }),
-    h("div", { className: "form-panel", style: { maxWidth: "100%", marginTop: "10px" } },
-      h("label", { className: "form-label" }, "…или ссылка на Google Таблицу"),
-      h("div", { className: "flex-gap" },
-        h("input", { className: "form-input mono", type: "url", value: sheetUrl,
-          placeholder: "https://docs.google.com/spreadsheets/d/…",
-          onChange: (e) => { setSheetUrl(e.target.value); if (e.target.value.trim()) setTable(null); } }),
-        h("button", { className: "btn btn-ghost btn-sm", onClick: () => preview(),
-          disabled: !sheetUrl.trim() || busy }, "Обновить из таблицы"),
+    h(ImportStep, { num: 1, title: "Таблица плана", summary: tableSummary, done: !!tableSummary },
+      h(TableDrop, { file: table, onPick: (f) => { setTable(f); setSheetUrl(""); } }),
+      h("div", { style: { marginTop: "10px" } },
+        h("label", { className: "form-label" }, "…или ссылка на Google Таблицу"),
+        h("div", { className: "flex-gap" },
+          h("input", { className: "form-input mono", type: "url", value: sheetUrl,
+            placeholder: "https://docs.google.com/spreadsheets/d/…",
+            onChange: (e) => { setSheetUrl(e.target.value); if (e.target.value.trim()) setTable(null); } }),
+          h("button", { className: "btn btn-ghost btn-sm", onClick: () => preview(),
+            disabled: !sheetUrl.trim() || busy }, "Обновить"),
+        ),
+        h("p", { className: "form-hint mt-2" }, "Первый лист скачается как CSV. Доступ — «по ссылке»."),
       ),
-      h("p", { className: "form-hint mt-2" },
-        "Откройте доступ к таблице «по ссылке» (просмотр). Первый лист скачается как CSV."),
+      tableSummary && h("div", { className: "import-step-footer" },
+        h("button", { className: "btn btn-primary btn-sm", onClick: () => setOpenStep(2) }, "Далее →"),
+      ),
     ),
 
-    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Картинки"),
-    h("div", { className: "form-panel", style: { maxWidth: "100%" } },
+    h(ImportStep, { num: 2, title: "Картинки", summary: imagesSummary, done: true },
+      h("div", { className: "flex-gap", style: { alignItems: "center", flexWrap: "wrap", gap: "8px", marginBottom: "10px" } },
+        h("label", { className: "btn btn-ghost btn-sm", style: { cursor: "pointer", margin: 0 } },
+          "📁 Выбрать папку с картинками",
+          h("input", {
+            type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true,
+            webkitdirectory: "", style: { display: "none" },
+            onChange: (e) => {
+              const files = [...e.target.files].filter(f => /\.(jpe?g|png|webp)$/i.test(f.name));
+              setImages(prev => { const names = new Set(prev.map(f => f.name)); return [...prev, ...files.filter(f => !names.has(f.name))]; });
+              e.target.value = "";
+            },
+          }),
+        ),
+        images.length > 0 && h("span", { className: "form-hint", style: { margin: 0 } },
+          `${images.length} картин${images.length === 1 ? "ка" : images.length < 5 ? "ки" : "ок"} выбрано`),
+        images.length > 0 && h("button", { className: "btn btn-ghost btn-sm", style: { color: "var(--text-3)" }, onClick: () => setImages([]) }, "Очистить"),
+      ),
       h(PhotoPicker, { files: images, onChange: setImages }),
       h("p", { className: "form-hint mt-2" },
-        "Свяжутся со строками таблицы по имени файла (2.jpg < 10.jpg — натуральный порядок)."),
-      h("div", { className: "form-group", style: { marginTop: "12px", marginBottom: 0 } },
-        h("label", { className: "form-label" }, "Папка с картинками (на этом компьютере)"),
+        "Файлы связываются со строками по имени. В колонке «файл» работают: прямая http-ссылка, публичная ссылка Яндекс.Диска."),
+      h("div", { style: { marginTop: "12px" } },
+        h("label", { className: "form-label" }, "Или путь к папке на сервере"),
         h("div", { className: "flex-gap" },
-          h("input", { className: "form-input mono", type: "text", value: folder,
-            placeholder: "/Users/…/plan_images",
-            onChange: (e) => setFolder(e.target.value) }),
-          h("button", { className: "btn btn-ghost btn-sm", onClick: saveFolder,
-            disabled: !folderDirty || savingFolder },
+          h("input", { className: "form-input mono", type: "text", value: folder, placeholder: "/Users/…/plan_images", onChange: (e) => setFolder(e.target.value) }),
+          h("button", { className: "btn btn-ghost btn-sm", onClick: saveFolder, disabled: !folderDirty || savingFolder },
             savingFolder && h(Spinner), savingFolder ? " Сохраняю…" : folderDirty ? "Сохранить" : "Сохранено"),
         ),
-        h("p", { className: "form-hint mt-2" },
-          "Если в колонке «файл» — имя файла (а не ссылка), картинка возьмётся из этой папки. ",
-          "Ссылки http/Google Drive/Яндекс.Диск в колонке скачиваются автоматически."),
+        h("p", { className: "form-hint mt-2" }, "Google Drive не поддерживается."),
+      ),
+      h("div", { className: "import-step-footer" },
+        h("button", { className: "btn btn-primary btn-sm", onClick: () => setOpenStep(3) }, "Далее →"),
       ),
     ),
 
-    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Правило раскидки"),
-    h("div", { className: "form-panel", style: { maxWidth: "100%" } },
-      h(RuleFields, { startDate, times, onStart: setStartDate, onTimes: setTimes })),
+    h(ImportStep, { num: 3, title: "Расписание", summary: ruleSummary, done: !!ruleSummary },
+      h(RuleFields, { startDate, times, interval, intervalN, weekdays,
+        onStart: setStartDate, onTimes: setTimes,
+        onInterval: setInterval, onIntervalN: setIntervalN, onWeekdays: setWeekdays }),
+      h("div", { className: "import-step-footer" },
+        h("button", { className: "btn btn-primary btn-sm", onClick: () => setOpenStep(4) }, "Далее →"),
+      ),
+    ),
 
-    h("p", { className: "section-title", style: { marginTop: "20px" } }, "Куда публикуем"),
-    targets === null
-      ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
-      : targets.length === 0
-        ? h("div", { className: "empty-inline" },
-            "Нет доступных каналов. Подключите канал во вкладке «Каналы».")
-        : h("div", null,
-            eligibleCount === 0 && h("div", { className: "empty-inline", style: { marginBottom: "10px" } },
-              "Каналы подключены, но у каждого не задана цель публикации. ",
-              "Откройте вкладку «Каналы» и заполните адрес группы / ID канала."),
-            h("div", { className: "target-grid" },
-              targets.map((t) => h(TargetToggle, {
-                key: selKey(t.channel, t.target_id), t,
-                checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
-              })))),
+    h(ImportStep, { num: 4, title: "Куда публикуем", summary: targetsSummary, done: !!targetsSummary },
+      targets === null
+        ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
+        : targets.length === 0
+          ? h("div", { className: "empty-inline" },
+              "Нет доступных каналов. Подключите канал во вкладке «Каналы».")
+          : h("div", null,
+              eligibleCount === 0 && h("div", { className: "empty-inline", style: { marginBottom: "10px" } },
+                "Каналы подключены, но у каждого не задана цель. Откройте вкладку «Каналы»."),
+              h("div", { className: "target-grid" },
+                targets.map((t) => h(TargetToggle, {
+                  key: selKey(t.channel, t.target_id), t,
+                  checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
+                })))),
+    ),
 
-    h("div", { className: "publish-actions" },
+    // Превью + commit actions.
+    h("div", { className: "publish-actions", style: { marginTop: "12px" } },
       h("button", { className: "btn btn-ghost", onClick: () => preview(), disabled: !canPreview },
         busy && h(Spinner), busy ? " Считаю…" : "Показать превью"),
-      h("button", { className: "btn btn-primary", onClick: commit, disabled: !canCommit },
-        committing && h(Spinner), committing ? " Планирую…" : "Запланировать всё"),
       !hasTableSource ? h("span", { className: "hint-inline" }, "выберите таблицу")
         : !report ? h("span", { className: "hint-inline" }, "сначала превью")
           : needsMapping ? h("span", { className: "hint-inline" }, "сопоставьте колонки")
             : selected.size === 0 ? h("span", { className: "hint-inline" }, "выберите канал") : null,
     ),
-    alert && h(Alert, { type: alert.type }, alert.text),
+    alert && h(Alert, { type: alert.type, onDismiss: () => setAlert(null) }, alert.text),
 
     needsMapping && h(MappingEditor, { key: (report.headers || []).join("|"), report, onApply: applyMapping, busy }),
-
     report && !needsMapping && h("div", { style: { marginTop: "16px" } }, h(ImportReportView, { report })),
 
-    // Итоги последнего commit: ошибки скачивания / посты без фото.
     commitInfo && (commitInfo.warnings || []).length > 0 && h("div", { style: { marginTop: "16px" } },
       h("p", { className: "section-title" }, "Итоги импорта — не удалось получить картинку"),
       h("div", { className: "plan-rows" },
@@ -2998,6 +3216,13 @@ function ImportView({ profile }) {
           h("span", { className: "plan-file mono" }, w.file || "—"),
           h("span", { className: "plan-reason" }, w.reason),
         ))),
+    ),
+
+    // Sticky commit bar.
+    canCommit && h("div", { className: "import-sticky" },
+      h("span", { className: "hint-inline" }, `${report?.resolved_count || 0} постов готово к планированию`),
+      h("button", { className: "btn btn-primary", onClick: commit, disabled: committing },
+        committing && h(Spinner), committing ? " Планирую…" : "Запланировать всё"),
     ),
 
     h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),

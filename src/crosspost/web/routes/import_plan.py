@@ -58,7 +58,7 @@ class ResolvedOut(BaseModel):
     scheduled_at: str  # ISO-8601
     source: str  # "rule" | "explicit"
     has_article: bool = False  # строка несёт article_text → превью покажет бейдж «+ статья»
-    media_source: str = ""  # откуда картинка: upload|folder|http|gdrive|yadisk|""
+    media_source: str = ""  # откуда картинка: upload|folder|http|yadisk|""
 
 
 class ProblemOut(BaseModel):
@@ -102,12 +102,31 @@ class SettingsIn(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _parse_rule_or_422(start_date: str | None, times_csv: str | None):
+def _parse_rule_or_422(
+    start_date: str | None,
+    times_csv: str | None,
+    *,
+    interval: str = "daily",
+    interval_n: int = 1,
+    weekdays_csv: str | None = None,
+):
     """None, если оба поля пусты (допустимо при all-explicit таблице)."""
     if not start_date and not times_csv:
         return None
+    weekdays: tuple[int, ...] = ()
+    if weekdays_csv:
+        try:
+            weekdays = tuple(int(p) for p in weekdays_csv.split(",") if p.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Дни недели: список чисел 0…6.") from exc
     try:
-        return parse_rule(start_date or "", times_csv or "")
+        return parse_rule(
+            start_date or "",
+            times_csv or "",
+            interval=interval or "daily",
+            interval_n=interval_n,
+            weekdays=weekdays,
+        )
     except PlanImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -269,6 +288,9 @@ async def import_preview(
     filenames: str = Form(...),  # JSON list[str] — имена будущих картинок
     start_date: str | None = Form(None),
     times_csv: str | None = Form(None),
+    interval: str = Form("daily"),  # daily | every_n_days | weekly | monthly
+    interval_n: int = Form(1),  # шаг для every_n_days
+    weekdays_csv: str | None = Form(None),  # для weekly: '0,2,4' (пн,ср,пт)
     column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
 ) -> PreviewOut:
     """Stateless превью: таблица + имена картинок → отчёт связывания без записи в БД.
@@ -304,7 +326,10 @@ async def import_preview(
         return _needs_mapping_preview(headers, detected_idx, missing)
 
     rows = _parse_table_or_422(data, filename, mapping=mapping)
-    rule = _parse_rule_or_422(start_date, times_csv)
+    rule = _parse_rule_or_422(
+        start_date, times_csv,
+        interval=interval, interval_n=interval_n, weekdays_csv=weekdays_csv,
+    )
     folder = await settings.get_media_folder()
     report = build_plan(rows, file_list, rule, folder_configured=bool(folder))
 
@@ -325,6 +350,9 @@ async def import_commit(
     content_type: str = Form("post"),
     start_date: str | None = Form(None),
     times_csv: str | None = Form(None),
+    interval: str = Form("daily"),  # daily | every_n_days | weekly | monthly
+    interval_n: int = Form(1),  # шаг для every_n_days
+    weekdays_csv: str | None = Form(None),  # для weekly: '0,2,4' (пн,ср,пт)
     column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
 ) -> CommitOut:
     """Создать ScheduledPost на каждую строку плана (без исполнения).
@@ -364,7 +392,10 @@ async def import_commit(
     for f in real_media:
         media_by_basename.setdefault(_basename_lower(f.filename or ""), f)
 
-    rule = _parse_rule_or_422(start_date, times_csv)
+    rule = _parse_rule_or_422(
+        start_date, times_csv,
+        interval=interval, interval_n=interval_n, weekdays_csv=weekdays_csv,
+    )
     folder = await settings.get_media_folder()
     report = build_plan(rows, available_names, rule, folder_configured=bool(folder))
 
@@ -390,7 +421,7 @@ async def import_commit(
                     await upload.seek(0)
                     saved_paths = await media_store.save_uploads([upload], key)
             elif rrow.media_source:
-                # Внешний источник (папка/http/Drive/Диск) — скачиваем/читаем сейчас.
+                # Внешний источник (папка/http/Яндекс.Диск) — скачиваем/читаем сейчас.
                 try:
                     fetched = await fetch_media(rrow.file, folder=folder)
                     saved_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
