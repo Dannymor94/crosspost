@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC
 from unittest.mock import patch
 
 import pytest
@@ -508,8 +509,14 @@ async def _make_executed(
                 message=f"scheduler: {ch} → failed",
                 screenshot_path=path,
             )
-        await SchedulerRepository(s).mark_published(post.id)
-        # Детерминированный маркер исполнения (перебиваем реальные часы mark_published).
+        sched = SchedulerRepository(s)
+        await sched.claim(post.id)
+        success = all(
+            st in (PublicationStatus.DONE, PublicationStatus.SUBMITTED)
+            for st, _ in channels.values()
+        )
+        await sched.finalize(post.id, success=success)
+        # Детерминированный маркер исполнения (перебиваем реальные часы finalize).
         await s.execute(
             sql_update(ScheduledPost)
             .where(ScheduledPost.id == post.id)
@@ -730,6 +737,1032 @@ async def test_reschedule_missing_post_404(client, factory):
     assert resp.status_code == 404
 
 
+# ── Patch scheduled text/targets ──────────────────────────────────────────────
+
+
+async def test_patch_scheduled_cross_profile_404(client, factory):
+    """Чужой post_id → 404 (не палим существование)."""
+    pid_a = await _make_profile_with_live(factory, ["telegram"])
+    pid_b = await _make_profile_with_live(factory, ["telegram"], name="client-b")
+    resp = await client.post(
+        f"/api/profiles/{pid_a}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "orig",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200
+    sched_id = resp.json()["id"]
+
+    r = await client.patch(
+        f"/api/profiles/{pid_b}/scheduled/{sched_id}",
+        json={"text": "evil"},
+    )
+    assert r.status_code == 404
+
+
+async def test_patch_scheduled_published_409(client, factory):
+    """Пост в статусе published → 409 Conflict."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost, ScheduledPostStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "later",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(status=ScheduledPostStatus.DONE)
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "should fail"},
+    )
+    assert r.status_code == 409
+
+
+async def test_patch_scheduled_failed_is_editable(client, factory):
+    """SCHEDULED-пост (в т.ч. с упавшими публикациями) — редактируется."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "orig",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "retry text"},
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "retry text"
+
+
+async def test_patch_scheduled_text_changes_pubid_preserved(client, factory):
+    """Текст меняется; publication_id (schedpost-<id>) детерминирован по id — не меняется."""
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "before",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "after"},
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "after"
+    assert r.json()["id"] == sched_id
+    assert scheduled_publication_id(sched_id) == f"schedpost-{sched_id}"
+
+
+async def test_patch_scheduled_invalid_target_422(client, factory):
+    """Несуществующий target_id → 422."""
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    t1 = await _add_target(factory, pid, "vk_wall", "Группа А", "groupa")
+    sel = [{"channel": "vk_wall", "target_id": t1}]
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "hi",
+            "channels": json.dumps(sel),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200
+    sched_id = resp.json()["id"]
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"channels": [{"channel": "vk_wall", "target_id": "99999"}]},
+    )
+    assert r.status_code == 422
+
+
+# ── Таймзонная консистентность scheduled_at при PATCH ─────────────────────────
+
+
+async def test_patch_aware_utc_stored_as_naive_local(client, factory):
+    """Aware-UTC (+00:00) принимается и хранится как naive-local (конвертация, не стрип)."""
+    from datetime import datetime, timedelta
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    # "Через час по UTC" — в aware-формате
+    future_utc = datetime.now(UTC) + timedelta(hours=1)
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": future_utc.isoformat()},
+    )
+    assert r.status_code == 200
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        post = await SchedulerRepository(s).get(sched_id)
+    # Хранится naive (tzinfo=None) — конвенция импорта
+    assert post.scheduled_at.tzinfo is None
+    # Значение = local-time эквивалент UTC+0: разница не больше 1 сек от ожидаемого
+    expected_naive = future_utc.astimezone().replace(tzinfo=None)
+    assert abs((post.scheduled_at - expected_naive).total_seconds()) < 2
+
+
+async def test_patch_aware_offset_and_naive_local_same_instant_stored_identically(client, factory):
+    """Aware +02:00 и naive-local для одного момента → одинаковый DB-value."""
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+
+    # Одно и то же мгновение через hour from now, в двух форматах
+    future_utc = datetime.now(UTC) + timedelta(hours=2)
+    tz_plus2 = timezone(timedelta(hours=2))
+    aware_plus2 = future_utc.astimezone(tz_plus2)  # aware +02:00
+    naive_local = future_utc.astimezone().replace(tzinfo=None)  # naive-local системы
+
+    id1 = await _create_scheduled(client, pid, text="a")
+    id2 = await _create_scheduled(client, pid, text="b")
+
+    r1 = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{id1}",
+        json={"scheduled_at": aware_plus2.isoformat()},
+    )
+    r2 = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{id2}",
+        json={"scheduled_at": naive_local.isoformat()},
+    )
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        repo = SchedulerRepository(s)
+        p1 = await repo.get(id1)
+        p2 = await repo.get(id2)
+
+    # Оба naive, с разницей < 1с
+    assert p1.scheduled_at.tzinfo is None
+    assert p2.scheduled_at.tzinfo is None
+    assert abs((p1.scheduled_at - p2.scheduled_at).total_seconds()) < 1
+
+
+async def test_patch_aware_utc_past_correctly_rejected(client, factory):
+    """Прошедший момент в aware-UTC → 422 (без ложного пропуска из-за стрипа tzinfo)."""
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    # "Час назад по UTC" — если бы стрипали tzinfo без конвертации, это выглядело бы
+    # как "час назад локально" — всё равно прошлое. Тест проверяет нетривиальный случай:
+    # aware-время, которое после стрипа tzinfo стало бы БУДУЩИМ (offset < 0).
+    # UTC-5: "через час UTC" = "через 6 часов локально" — после неправильного стрипа
+    # выглядит как будущее, хотя в UTC это прошлое.
+    past_utc = datetime.now(UTC) - timedelta(hours=2)
+    tz_minus5 = timezone(timedelta(hours=-5))
+    # past_utc в UTC-5 = 3 часа назад по UTC-5, всё равно прошлое
+    past_aware_minus5 = past_utc.astimezone(tz_minus5)
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": past_aware_minus5.isoformat()},
+    )
+    assert r.status_code == 422
+
+
+async def test_patch_aware_utc_executor_matures_correctly(factory):
+    """Executor видит aware-отредактированный пост зрелым в правильный момент."""
+    from datetime import datetime, timedelta
+    from unittest.mock import patch as mock_patch
+
+    from crosspost.adapters.base import ChannelResult, ResultStatus
+    from crosspost.db.engine import create_engine_and_tables
+    from crosspost.db.models import ConnectionState
+    from crosspost.db.profile_repo import ProfileRepository
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.vault import get_vault
+    from crosspost.scheduler.executor import ScheduledExecutor
+
+    _PATCH_ADAPTER = "crosspost.scheduler.executor.build_profile_adapter"
+
+    engine = await create_engine_and_tables("sqlite+aiosqlite:///:memory:")
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    fac = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with fac() as s:
+        repo = ProfileRepository(s, vault=get_vault())
+        p = await repo.create_profile("tz_exec")
+        await repo.upsert_connection(p.id, "telegram", ConnectionState.LIVE)
+        pid = p.id
+
+    # Сохраняем aware-UTC "+1 минута" — должно зреть через 1 минуту
+    future_utc = datetime.now(UTC) + timedelta(minutes=1)
+    # Нормализуем как будет делать роут (astimezone().replace(tzinfo=None))
+    naive_local = future_utc.astimezone().replace(tzinfo=None)
+
+    async with fac() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        post = await repo.create_scheduled(
+            content_type="post",
+            text="tz",
+            title=None,
+            media_paths=[],
+            channels=["telegram"],
+            scheduled_at=naive_local,
+        )
+        post_id = post.id
+
+    adapter_calls = []
+
+    async def fake_build(repo, profile_id, channel, target_id="", **kw):
+        adapter_calls.append(channel)
+
+        class _A:
+            async def publish(self, c, *, publication_id):
+                return ChannelResult(channel, ResultStatus.DONE, "ok")
+
+        return _A()
+
+    ex = ScheduledExecutor(fac, pacing_seconds=0)
+    with mock_patch(_PATCH_ADAPTER, new=fake_build):
+        # Сейчас ещё не зрел
+        processed = await ex.run_once(now=datetime.now())
+        assert post_id not in processed
+
+        # «Через минуту» — зрел
+        processed = await ex.run_once(now=datetime.now() + timedelta(minutes=2))
+        assert post_id in processed
+
+    await engine.dispose()
+
+
+# ── Валидация scheduled_at при PATCH ──────────────────────────────────────────
+
+
+async def test_patch_scheduled_at_past_gives_422(client, factory):
+    """scheduled_at в прошлом (старше допуска 60с) → 422, пост не тронут."""
+    from datetime import datetime, timedelta
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    past = (datetime.now() - timedelta(hours=1)).isoformat()
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": past},
+    )
+    assert r.status_code == 422
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        post = await SchedulerRepository(s).get(sched_id)
+    # Оригинальное время не изменилось
+    assert "2026-08-01" in post.scheduled_at.isoformat()
+
+
+async def test_patch_scheduled_at_future_accepted(client, factory):
+    """Валидное будущее время у SCHEDULED → принимается, статус остаётся SCHEDULED."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    future = "2099-01-01T12:00:00"
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": future},
+    )
+    assert r.status_code == 200
+    assert r.json()["scheduled_at"].startswith("2099-01-01")
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        post = await SchedulerRepository(s).get(sched_id)
+    assert str(post.status) == "scheduled"
+
+
+async def test_patch_scheduled_at_failed_rewinds(client, factory):
+    """Правка времени у FAILED-поста → статус→SCHEDULED, попытки→0."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+    pubid = scheduled_publication_id(sched_id)
+
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        from crosspost.db.models import PublicationStatus as PS
+
+        await repo.set_status(pubid, "telegram", PS.FAILED, error="boom")
+        await repo.bump_attempt(pubid, "telegram")
+        await s.execute(
+            _upd(ScheduledPost).where(ScheduledPost.id == sched_id).values(status="failed")
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": "2099-06-01T09:00:00"},
+    )
+    assert r.status_code == 200
+    assert r.json()["scheduled_at"].startswith("2099-06-01")
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+        rows = await PublicationRepository(s, profile_id=pid).list_statuses(pubid)
+    assert str(post.status) == "scheduled"
+    assert all(row.attempt_count == 0 for row in rows)
+
+
+async def test_patch_scheduled_at_tolerance_passes(client, factory):
+    """Правка 'на сейчас' (в пределах 60с допуска) → проходит."""
+    from datetime import datetime, timedelta
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    near_now = (datetime.now() - timedelta(seconds=30)).isoformat()
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": near_now},
+    )
+    assert r.status_code == 200
+
+
+async def test_patch_scheduled_at_aware_stored_consistently(client, factory):
+    """Aware-datetime в PATCH сохраняется; при чтении нет смешения naive/aware."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    aware_future = "2099-03-15T14:00:00+03:00"
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"scheduled_at": aware_future},
+    )
+    assert r.status_code == 200
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        post = await SchedulerRepository(s).get(sched_id)
+    # Храним как есть (aware или naive) — не None, не crash
+    assert post.scheduled_at is not None
+
+
+async def _create_scheduled(client, pid, text="orig", channels=None):
+    channels = channels or ["telegram"]
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": text,
+            "channels": json.dumps(channels),
+            "scheduled_at": "2026-08-01T12:00:00+00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200
+    return resp.json()["id"]
+
+
+async def test_patch_scheduled_text_and_channels(client, factory):
+    """Патч SCHEDULED: текст и цели меняются, статус остаётся SCHEDULED, id тот же."""
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+    orig_pubid = scheduled_publication_id(sched_id)
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "updated"},
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "updated"
+    assert r.json()["id"] == sched_id
+    # publication_id детерминирован, не меняется
+    assert orig_pubid == scheduled_publication_id(sched_id)
+
+    async with factory() as s:
+        from crosspost.db.scheduler_repo import SchedulerRepository
+
+        post = await SchedulerRepository(s).get(sched_id)
+    assert str(post.status) == "scheduled"
+
+
+async def test_patch_failed_rewinds_to_scheduled(client, factory):
+    """Патч FAILED: контент меняется, статус→SCHEDULED, попытки→0."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import PublicationStatus as PS
+    from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+    pubid = scheduled_publication_id(sched_id)
+
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        await repo.set_status(pubid, "telegram", PS.FAILED, error="boom")
+        await repo.bump_attempt(pubid, "telegram")
+        await s.execute(
+            _upd(ScheduledPost).where(ScheduledPost.id == sched_id).values(status="failed")
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "retry"},
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "retry"
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+        rows = await PublicationRepository(s, profile_id=pid).list_statuses(pubid)
+    assert str(post.status) == "scheduled"
+    # Счётчики попыток сброшены
+    assert all(r.attempt_count == 0 for r in rows)
+
+
+async def test_patch_publishing_gives_409(client, factory):
+    """Executor склеймил (PUBLISHING) до патча → 409."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost).where(ScheduledPost.id == sched_id).values(status="publishing")
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "nope"},
+    )
+    assert r.status_code == 409
+
+
+async def test_patch_done_gives_409(client, factory):
+    """Патч DONE → 409."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost).where(ScheduledPost.id == sched_id).values(status="done")
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "nope"},
+    )
+    assert r.status_code == 409
+
+
+async def test_patch_invalid_target_no_side_effects(client, factory):
+    """Невалидная цель → 422, статус и контент не тронуты."""
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid, text="original")
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"channels": [{"channel": "telegram", "target_id": "nonexistent_target_xyz"}]},
+    )
+    assert r.status_code == 422
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert post.text == "original"
+    assert str(post.status) == "scheduled"
+
+
+# ── Медиа при PATCH (часть 1: замена/установка, без удаления старого) ───────
+
+
+def _make_http_transport(data: bytes):
+    """Мок-транспорт httpx возвращающий фиксированный файл."""
+    import httpx
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=data, headers={"content-type": "image/jpeg"})
+
+    return httpx.MockTransport(handler)
+
+
+def _resolve_public(host: str) -> list[str]:
+    return ["93.184.216.34"]  # example.com публичный
+
+
+def _resolve_private(host: str) -> list[str]:
+    return ["127.0.0.1"]  # локальный — SSRF
+
+
+_IMG = b"\xff\xd8\xff" + b"x" * 100  # минимальный валидный JPEG-заголовок
+
+
+async def test_patch_image_via_http_url(client, factory, monkeypatch, tmp_path):
+    """Замена изображения через http URL → новый файл сохранён, пост обновлён, статус SCHEDULED."""
+    import httpx
+
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    transport = _make_http_transport(_IMG)
+    with (
+        patch(
+            "crosspost.web.routes.publish._make_http_client",
+            return_value=httpx.AsyncClient(transport=transport),
+        ),
+        patch(
+            "crosspost.scheduler.media_sources._default_resolve",
+            side_effect=lambda host: ["93.184.216.34"],
+        ),
+    ):
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert len(post.media_paths) == 1
+    assert post.media_paths[0].endswith(".jpg")
+    assert str(post.status) == "scheduled"
+
+
+async def test_patch_image_via_yadisk(client, factory, monkeypatch, tmp_path):
+    """Замена через Яндекс.Диск публичную ссылку → проходит тот же fetch_media путь."""
+    import httpx
+
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    def yadisk_handler(req: httpx.Request) -> httpx.Response:
+        if "cloud-api.yandex.net" in req.url.host:
+            return httpx.Response(
+                200,
+                json={"href": "https://dl.example.com/photo.jpg", "method": "GET"},
+            )
+        # Прямая ссылка
+        return httpx.Response(200, content=_IMG, headers={"content-type": "image/jpeg"})
+
+    transport = httpx.MockTransport(yadisk_handler)
+
+    yadisk_url = "https://disk.yandex.ru/i/abc123"
+    with (
+        patch(
+            "crosspost.web.routes.publish._make_http_client",
+            return_value=httpx.AsyncClient(transport=transport),
+        ),
+        patch(
+            "crosspost.scheduler.media_sources._default_resolve",
+            side_effect=lambda host: ["93.184.216.34"],  # все хосты публичны в тесте
+        ),
+    ):
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": yadisk_url},
+        )
+    assert r.status_code == 200
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert len(post.media_paths) == 1
+
+
+async def test_patch_image_folder_escape_rejected(client, factory, tmp_path):
+    """../ escape через source-folder → 422, пост не тронут."""
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid, text="safe")
+
+    # Настраиваем source-folder
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_media_folder(str(tmp_path))
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"image": "../secret.txt"},
+    )
+    assert r.status_code == 422
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert post.text == "safe"
+    assert str(post.status) == "scheduled"
+
+
+async def test_patch_image_ssrf_rejected(client, factory):
+    """SSRF: URL на локальный/приватный адрес → 422, пост не тронут."""
+    import httpx
+
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid, text="orig")
+
+    def ssrf_handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("SSRF guard должен был отклонить запрос до отправки")
+
+    with (
+        patch(
+            "crosspost.web.routes.publish._make_http_client",
+            return_value=httpx.AsyncClient(transport=httpx.MockTransport(ssrf_handler)),
+        ),
+        patch(
+            "crosspost.scheduler.media_sources._default_resolve",
+            side_effect=lambda host: ["127.0.0.1"],
+        ),
+    ):
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://internal.lan/photo.jpg"},
+        )
+    assert r.status_code == 422
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert post.text == "orig"
+
+
+async def test_patch_image_failed_post_rewinds(client, factory):
+    """Установка изображения на FAILED → статус→SCHEDULED, попытки→0."""
+    import httpx
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+    pubid = scheduled_publication_id(sched_id)
+
+    async with factory() as s:
+        from crosspost.db.models import PublicationStatus as PS
+
+        repo = PublicationRepository(s, profile_id=pid)
+        await repo.set_status(pubid, "telegram", PS.FAILED, error="fail")
+        await repo.bump_attempt(pubid, "telegram")
+        await s.execute(
+            _upd(ScheduledPost).where(ScheduledPost.id == sched_id).values(status="failed")
+        )
+        await s.commit()
+
+    transport = _make_http_transport(_IMG)
+    with (
+        patch(
+            "crosspost.web.routes.publish._make_http_client",
+            return_value=httpx.AsyncClient(transport=transport),
+        ),
+        patch(
+            "crosspost.scheduler.media_sources._default_resolve",
+            side_effect=lambda host: ["93.184.216.34"],
+        ),
+    ):
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+        rows = await PublicationRepository(s, profile_id=pid).list_statuses(pubid)
+    assert str(post.status) == "scheduled"
+    assert all(row.attempt_count == 0 for row in rows)
+
+
+async def test_patch_image_capability_check_before_download(client, factory):
+    """Канал не поддерживает POST (image-содержимое) → 422 до скачивания."""
+    import httpx
+
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    # telegraph поддерживает только ARTICLE, не POST
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid, text="orig")
+
+    download_called = []
+
+    def counting_handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover
+        download_called.append(req.url)
+        return httpx.Response(200, content=_IMG)
+
+    # Патчим channels на пост → telegraph (не поддерживает POST)
+    with patch(
+        "crosspost.web.routes.publish._make_http_client",
+        return_value=httpx.AsyncClient(transport=httpx.MockTransport(counting_handler)),
+    ):
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={
+                "image": "https://example.com/photo.jpg",
+                "channels": [{"channel": "telegraph", "target_id": ""}],
+            },
+        )
+    assert r.status_code == 422
+    assert not download_called  # файл не скачивался
+
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert post.text == "orig"
+
+
+# ── Медиа при PATCH (часть 2: cleanup) ────────────────────────────────────────
+
+
+def _resolve_pub(host: str) -> list[str]:
+    return ["93.184.216.34"]
+
+
+def _patch_image_ctx(img_bytes=None):
+    """Контекст-менеджер: мокает http-клиент и DNS для PATCH image."""
+    from contextlib import ExitStack
+
+    import httpx
+
+    transport = _make_http_transport(img_bytes or _IMG)
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "crosspost.web.routes.publish._make_http_client",
+            return_value=httpx.AsyncClient(transport=transport),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "crosspost.scheduler.media_sources._default_resolve",
+            side_effect=_resolve_pub,
+        )
+    )
+    return stack
+
+
+async def test_cleanup_old_media_after_replace(client, factory, tmp_path, monkeypatch):
+    """Старый файл удалён после успешной замены; новый присутствует; пост указывает на новый."""
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    # Подменяем media_paths поста на реальный файл в tmp
+    old_key = "sched-old"
+    old_dir = tmp_path / "media" / old_key
+    old_dir.mkdir(parents=True)
+    old_file = old_dir / "00_photo.jpg"
+    old_file.write_bytes(b"\xff\xd8\xff")
+    async with factory() as s:
+        from sqlalchemy import update as _upd
+
+        from crosspost.db.models import ScheduledPost
+
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(old_file)])
+        )
+        await s.commit()
+
+    with _patch_image_ctx():
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+
+    # Старый каталог должен быть удалён
+    assert not old_dir.exists()
+    # Пост указывает на новый файл
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert len(post.media_paths) == 1
+    assert "sched-old" not in post.media_paths[0]
+
+
+async def test_cleanup_skip_on_422(client, factory, tmp_path, monkeypatch):
+    """422 (плохой capability) → старый файл не тронут, новый не скачан."""
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid, text="orig")
+
+    old_key = "sched-old2"
+    old_dir = tmp_path / "media" / old_key
+    old_dir.mkdir(parents=True)
+    old_file = old_dir / "00_photo.jpg"
+    old_file.write_bytes(b"\xff\xd8\xff")
+    async with factory() as s:
+        from sqlalchemy import update as _upd
+
+        from crosspost.db.models import ScheduledPost
+
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(old_file)])
+        )
+        await s.commit()
+
+    # Запоминаем каталоги до patch
+    media_root = tmp_path / "media"
+    dirs_before = {d.name for d in media_root.iterdir()}
+
+    # telegraph не поддерживает POST → 422 до скачивания
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={
+            "image": "https://example.com/photo.jpg",
+            "channels": [{"channel": "telegraph", "target_id": ""}],
+        },
+    )
+    assert r.status_code == 422
+    assert old_dir.exists()
+    # Новых каталогов не появилось
+    dirs_after = {d.name for d in media_root.iterdir()}
+    assert dirs_after == dirs_before
+
+
+async def test_cleanup_orphan_on_cas_409(client, factory, tmp_path, monkeypatch):
+    """CAS False (PUBLISHING → 409) → скачанный новый файл удалён, старый не тронут."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    old_key = "sched-old3"
+    old_dir = tmp_path / "media" / old_key
+    old_dir.mkdir(parents=True)
+    old_file = old_dir / "00_photo.jpg"
+    old_file.write_bytes(b"\xff\xd8\xff")
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(old_file)], status="publishing")
+        )
+        await s.commit()
+
+    with _patch_image_ctx():
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 409
+
+    # Старый каталог нетронут
+    assert old_dir.exists()
+    # Новые файлы не осиротели: ни один каталог кроме old_key и оригинального sched- поста
+    media_root = tmp_path / "media"
+    # Файл для нового изображения должен быть удалён
+    orphaned = [
+        d
+        for d in media_root.iterdir()
+        if d.name != old_key and d.stat().st_mtime > old_dir.stat().st_mtime and "sched-" in d.name
+    ]
+    assert not orphaned, f"Orphaned dirs found: {orphaned}"
+
+
+async def test_cleanup_shared_reference_not_deleted(client, factory, tmp_path, monkeypatch):
+    """Старые media_paths разделены с другим постом → не удаляем."""
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import ScheduledPost
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    id1 = await _create_scheduled(client, pid, text="a")
+    id2 = await _create_scheduled(client, pid, text="b")
+
+    shared_key = "sched-shared"
+    shared_dir = tmp_path / "media" / shared_key
+    shared_dir.mkdir(parents=True)
+    shared_file = shared_dir / "00_photo.jpg"
+    shared_file.write_bytes(b"\xff\xd8\xff")
+
+    async with factory() as s:
+        for sid in (id1, id2):
+            await s.execute(
+                _upd(ScheduledPost)
+                .where(ScheduledPost.id == sid)
+                .values(media_paths=[str(shared_file)])
+            )
+        await s.commit()
+
+    with _patch_image_ctx():
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{id1}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+    # Общий файл не удалён — id2 всё ещё на него ссылается
+    assert shared_dir.exists()
+
+
+async def test_cleanup_old_file_missing_still_succeeds(client, factory, tmp_path, monkeypatch):
+    """Старый файл уже отсутствует → замена проходит без исключения."""
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    # Указываем несуществующий путь
+    async with factory() as s:
+        from sqlalchemy import update as _upd
+
+        from crosspost.db.models import ScheduledPost
+
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(tmp_path / "media" / "sched-gone" / "00_photo.jpg")])
+        )
+        await s.commit()
+
+    with _patch_image_ctx():
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+    async with factory() as s:
+        post = await SchedulerRepository(s).get(sched_id)
+    assert len(post.media_paths) == 1
+
+
 # ── Publish now (немедленная отправка запланированного) ───────────────────────
 
 
@@ -948,6 +1981,228 @@ async def test_schedule_without_article_flag_false(client, factory):
         files=_post_files(),
     )
     assert resp.json()["has_article"] is False
+
+
+# ── GET single scheduled post ────────────────────────────────────────────────
+# Новый эндпоинт GET .../scheduled/{id} используется EditSchedModal: загружает
+# полный ScheduledOut перед показом формы редактирования.
+
+
+async def test_get_single_scheduled_returns_post(client, factory):
+    """GET .../scheduled/{id} возвращает пост с теми же полями, что list."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "to edit",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2030-01-01T10:00:00",
+        },
+        files=_post_files(),
+    )
+    assert resp.status_code == 200, resp.text
+    sched_id = resp.json()["id"]
+
+    r = await client.get(f"/api/profiles/{pid}/scheduled/{sched_id}")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["id"] == sched_id
+    assert data["text"] == "to edit"
+    assert data["status"] == "scheduled"
+    assert data["channels"] == ["telegram"]
+
+
+async def test_get_single_scheduled_404_for_missing(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    r = await client.get(f"/api/profiles/{pid}/scheduled/99999")
+    assert r.status_code == 404
+
+
+async def test_get_single_scheduled_404_for_other_profile(client, factory):
+    """GET чужого поста — 404, а не данные."""
+    pid_a = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        pid_b = (await ProfileRepository(s, vault=get_vault()).create_profile("b")).id
+
+    resp = await client.post(
+        f"/api/profiles/{pid_a}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "private",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2030-01-01T10:00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+    r = await client.get(f"/api/profiles/{pid_b}/scheduled/{sched_id}")
+    assert r.status_code == 404
+
+
+# ── Защита формы редактирования от конкурентного поллинга ────────────────────
+# Фронтенд: SchedItem и ReportRow рендерятся с key=s.id / key=r.id.
+# Поллинг делает setScheduled(newList): React сравнивает ключи и не делает
+# remount существующих SchedItem — локальное состояние (editing=true, text)
+# сохраняется даже при смене порядка или обновлении полей в списке.
+#
+# Это свойство React гарантировано спецификацией reconciler; бэкенд-тест ниже
+# проверяет инвариант, на который полагается фронт: ID запланированного поста
+# не меняется после PATCH (CAS-апдейт возвращает тот же объект с тем же id).
+
+
+async def test_patch_preserves_post_id(client, factory):
+    """PATCH не меняет id поста — фронт ключует по id, remount невозможен."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "original",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2030-01-01T10:00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    patch_r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "edited", "scheduled_at": "2030-06-15T09:00:00"},
+    )
+    assert patch_r.status_code == 200, patch_r.text
+    assert patch_r.json()["id"] == sched_id
+    assert patch_r.json()["text"] == "edited"
+    # После PATCH пост виден в списке с тем же id — ключ стабилен.
+    listed = (await client.get(f"/api/profiles/{pid}/scheduled")).json()
+    assert any(p["id"] == sched_id for p in listed)
+
+
+async def test_patch_409_when_publishing(client, factory):
+    """409 когда исполнитель уже взял пост (status=publishing)."""
+    from sqlalchemy import update as sql_update
+
+    from crosspost.db.models import ScheduledPost, ScheduledPostStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "racing",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2030-01-01T10:00:00",
+        },
+        files=_post_files(),
+    )
+    sched_id = resp.json()["id"]
+
+    async with factory() as s:
+        await s.execute(
+            sql_update(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(status=ScheduledPostStatus.PUBLISHING)
+        )
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sched_id}",
+        json={"text": "too late"},
+    )
+    assert r.status_code == 409
+
+
+# ── Media preview route ───────────────────────────────────────────────────────
+# GET /api/profiles/{pid}/scheduled/{id}/media/{index}
+# Авторизация: profile isolation, index-based (клиент не называет путь).
+# Конфайнмент: resolved path должен быть внутри media root.
+
+
+async def _make_scheduled_with_real_media(factory, client, pid, tmp_path) -> tuple[int, str]:
+    """Создать scheduled post с реальным файлом на диске, вернуть (post_id, bytes_written)."""
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "post",
+            "text": "with media",
+            "channels": json.dumps(["telegram"]),
+            "scheduled_at": "2030-01-01T10:00:00",
+        },
+        files=[("media", ("photo.jpg", b"\xff\xd8\xff\xe0test-jpeg-bytes", "image/jpeg"))],
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"], b"\xff\xd8\xff\xe0test-jpeg-bytes"
+
+
+async def test_media_preview_owner_gets_200(client, factory, tmp_path):
+    """Владелец получает файл с правильным content-type."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    post_id, expected_bytes = await _make_scheduled_with_real_media(factory, client, pid, tmp_path)
+
+    r = await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/media/0")
+    assert r.status_code == 200, r.text
+    assert r.content == expected_bytes
+    assert "image" in r.headers.get("content-type", "")
+
+
+async def test_media_preview_other_profile_gets_404(client, factory, tmp_path):
+    """Клиент другого профиля получает 404, а не чужие байты."""
+    pid_a = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        pid_b = (await ProfileRepository(s, vault=get_vault()).create_profile("other")).id
+
+    post_id, _ = await _make_scheduled_with_real_media(factory, client, pid_a, tmp_path)
+
+    r = await client.get(f"/api/profiles/{pid_b}/scheduled/{post_id}/media/0")
+    assert r.status_code == 404
+
+
+async def test_media_preview_index_out_of_range(client, factory, tmp_path):
+    """Индекс за границей media_paths → 404."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    post_id, _ = await _make_scheduled_with_real_media(factory, client, pid, tmp_path)
+
+    r = await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/media/5")
+    assert r.status_code == 404
+
+
+async def test_media_preview_path_escape_blocked(client, factory, tmp_path):
+    """Путь из БД, выходящий за media root → 404 (defence in depth)."""
+    from sqlalchemy import update as sql_update
+
+    from crosspost.db.models import ScheduledPost
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    post_id, _ = await _make_scheduled_with_real_media(factory, client, pid, tmp_path)
+
+    # Прямая запись «отравленного» пути в БД.
+    poison = str(tmp_path / "outside" / "secret.jpg")
+    async with factory() as s:
+        await s.execute(
+            sql_update(ScheduledPost)
+            .where(ScheduledPost.id == post_id)
+            .values(media_paths=[poison])
+        )
+        await s.commit()
+
+    r = await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/media/0")
+    assert r.status_code == 404
+
+
+async def test_media_preview_file_missing_on_disk(client, factory, tmp_path):
+    """Файл уже удалён с диска → 404, не исключение."""
+    import os
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    post_id, _ = await _make_scheduled_with_real_media(factory, client, pid, tmp_path)
+
+    # Узнаём path из списка
+    detail = (await client.get(f"/api/profiles/{pid}/scheduled/{post_id}")).json()
+    stored_path = detail["media_paths"][0]
+    os.remove(stored_path)  # удаляем с диска, запись в БД остаётся
+
+    r = await client.get(f"/api/profiles/{pid}/scheduled/{post_id}/media/0")
+    assert r.status_code == 404
 
 
 # ── Изоляция ──────────────────────────────────────────────────────────────────

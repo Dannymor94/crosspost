@@ -64,9 +64,15 @@ class PublicationStatus(StrEnum):
 
 
 class ScheduledPostStatus(StrEnum):
-    SCHEDULED = "scheduled"
+    SCHEDULED = "scheduled"  # ждёт своего времени
+    PUBLISHING = "publishing"  # заклеймлен исполнителем, в полёте (краш-safe: реконсиляция)
     CANCELLED = "cancelled"
-    PUBLISHED = "published"  # исполнено планировщиком (следующая итерация)
+    DONE = "done"  # исполнен: все каналы терминально-успешны
+    FAILED = "failed"  # исполнен: есть канал, упавший после исчерпания попыток
+
+
+# Терминальные (исполненные) статусы поста — попадают в журнал, не берутся снова.
+SCHEDULED_TERMINAL = (ScheduledPostStatus.DONE, ScheduledPostStatus.FAILED)
 
 
 class Role(StrEnum):
@@ -262,7 +268,7 @@ class ScheduledPost(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now()
     )
-    # Момент ИСПОЛНЕНИЯ (перехода в published). Проставляется один раз в mark_published.
+    # Момент ИСПОЛНЕНИЯ (перехода в DONE/FAILED). Проставляется один раз в finalize.
     # Монотонный маркер: сортировка/курсор журнала и since-инкремент строятся на нём,
     # а не на scheduled_at (то — плановое время, при publish-now скачет в будущее).
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

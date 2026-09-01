@@ -47,7 +47,26 @@ def _migrate_sqlite(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_scheduled_report "
         "ON scheduled_posts (profile_id, status, published_at)"
     )
+    _migrate_scheduled_status(conn)
     _migrate_publications_target(conn)
+
+
+def _migrate_scheduled_status(conn) -> None:
+    """Ленивая миграция легаси-статуса 'published' → 'done' | 'failed'.
+
+    Раньше исполненный пост был просто 'published'. Новый автомат разводит его по
+    факту поканальных публикаций: все терминально-успешны (done/submitted) → 'done',
+    иначе (есть упавший после исчерпания попыток) → 'failed'. Ключ publications —
+    'schedpost-<id>'. Идемпотентно: после прогона строк 'published' не остаётся.
+    """
+    conn.exec_driver_sql(
+        "UPDATE scheduled_posts SET status='failed' "
+        "WHERE status='published' AND EXISTS ("
+        "  SELECT 1 FROM publications p "
+        "  WHERE p.publication_id = 'schedpost-' || scheduled_posts.id "
+        "    AND p.status NOT IN ('done','submitted'))"
+    )
+    conn.exec_driver_sql("UPDATE scheduled_posts SET status='done' WHERE status='published'")
 
 
 def _migrate_publications_target(conn) -> None:

@@ -49,21 +49,65 @@ class SchedulerRepository:
         )
         return result.scalar_one_or_none()
 
-    async def mark_published(self, scheduled_id: int) -> bool:
-        """Перевести пост в терминальный статус published (исполнен планировщиком).
+    async def claim(self, scheduled_id: int) -> bool:
+        """Атомарно заклеймить пост под исполнение: SCHEDULED → PUBLISHING.
 
-        «Исполнен» = все каналы финализировались (успех ИЛИ исчерпан ретрай).
-        Поканальные итоги живут в publications; здесь только флаг «не брать снова».
-        published_at — момент исполнения (маркер журнала); ставим только при первом
-        переходе scheduled → published, чтобы курсор/since не «пересдвигались».
+        Единственная точка входа в обработку. UPDATE ... WHERE status='scheduled'
+        сериализуется БД: ровно один клеймящий получает rowcount==1, остальные — 0
+        (пост уже взят/отменён/исполнен) и обработку не начинают. Так закрыт гонок
+        двух тиков/воркеров на один пост без внешнего лока.
         """
         result = await self._s.execute(
             sql_update(ScheduledPost)
             .where(
                 ScheduledPost.id == scheduled_id,
-                ScheduledPost.status != ScheduledPostStatus.PUBLISHED,
+                ScheduledPost.status == ScheduledPostStatus.SCHEDULED,
             )
-            .values(status=ScheduledPostStatus.PUBLISHED, published_at=datetime.now(UTC))
+            .values(status=ScheduledPostStatus.PUBLISHING)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) == 1
+
+    async def finalize(self, scheduled_id: int, *, success: bool) -> bool:
+        """PUBLISHING → терминал: DONE (все каналы успешны) или FAILED (есть упавший).
+
+        published_at — момент исполнения (монотонный маркер журнала), ставится здесь
+        (единственный переход в терминал). Поканальные итоги — в publications.
+        """
+        status = ScheduledPostStatus.DONE if success else ScheduledPostStatus.FAILED
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.status == ScheduledPostStatus.PUBLISHING,
+            )
+            .values(status=status, published_at=datetime.now(UTC))
         )
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0
+
+    async def release(self, scheduled_id: int) -> bool:
+        """PUBLISHING → SCHEDULED: попытки ещё не исчерпаны, добьёт следующий тик."""
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.status == ScheduledPostStatus.PUBLISHING,
+            )
+            .values(status=ScheduledPostStatus.SCHEDULED)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
+
+    async def reconcile_stuck(self) -> int:
+        """Старт приложения: посты, застрявшие в PUBLISHING (процесс умер в полёте),
+        вернуть в SCHEDULED. Идемпотентность по (publication_id, канал, цель) не даст
+        дублей при повторной публикации уже успевших каналов. Возвращает число сброшенных.
+        """
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(ScheduledPost.status == ScheduledPostStatus.PUBLISHING)
+            .values(status=ScheduledPostStatus.SCHEDULED)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0)

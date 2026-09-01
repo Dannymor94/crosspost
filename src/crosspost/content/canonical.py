@@ -8,6 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from crosspost.content.article_blocks import Block
 
 
 class ContentType(StrEnum):
@@ -23,3 +27,4 @@ class CanonicalContent:
     text: str = ""
     title: str | None = None  # для article
     media_paths: list[Path] = field(default_factory=list)  # локальные temp-файлы
+    blocks: list[Block] | None = None  # structured article blocks; None → legacy flat text

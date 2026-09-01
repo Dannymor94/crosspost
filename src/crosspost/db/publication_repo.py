@@ -14,12 +14,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy import delete, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import (
+    SCHEDULED_TERMINAL,
     Publication,
     PublicationStatus,
     ScheduledPost,
@@ -200,7 +202,7 @@ class PublicationRepository:
         """
         stmt = select(ScheduledPost).where(
             ScheduledPost.profile_id == self._pid,
-            ScheduledPost.status == ScheduledPostStatus.PUBLISHED,
+            ScheduledPost.status.in_(SCHEDULED_TERMINAL),
             ScheduledPost.published_at.isnot(None),
         )
         if since is not None:
@@ -234,6 +236,120 @@ class PublicationRepository:
         )
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0
+
+    async def update_scheduled_content(
+        self, scheduled_id: int, *, text: str | None = None, channels: list | None = None
+    ) -> bool:
+        """Обновить текст и/или каналы запланированного поста. True если нашли."""
+        values: dict = {}
+        if text is not None:
+            values["text"] = text
+        if channels is not None:
+            values["channels"] = channels
+        if not values:
+            return True
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.profile_id == self._pid,
+            )
+            .values(**values)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
+
+    async def patch_scheduled_cas(
+        self,
+        scheduled_id: int,
+        *,
+        text: str | None = None,
+        channels: list | None = None,
+        scheduled_at: datetime | None = None,
+        media_paths: list[str] | None = None,
+        rewind_failed: bool = False,
+    ) -> bool:
+        """CAS-патч поста: UPDATE WHERE status IN ('scheduled','failed').
+
+        rowcount==0 → пост не найден, чужой, или в PUBLISHING/DONE → caller кидает 409.
+        rewind_failed=True: если текущий статус был FAILED → переводим в SCHEDULED и
+        сбрасываем attempt_count по всем publication-строкам этого поста (перевзвод).
+        Возвращает True если обновление прошло.
+        """
+        _editable = (ScheduledPostStatus.SCHEDULED.value, ScheduledPostStatus.FAILED.value)
+        values: dict = {}
+        if text is not None:
+            values["text"] = text
+        if channels is not None:
+            values["channels"] = channels
+        if scheduled_at is not None:
+            values["scheduled_at"] = scheduled_at
+        if media_paths is not None:
+            values["media_paths"] = media_paths
+
+        # Читаем текущий статус — нужно знать был ли FAILED чтобы решить о перевзводе.
+        # Читаем ВНУТРИ транзакции перед апдейтом, чтобы не было TOCTOU: если между
+        # чтением и апдейтом executor заклеймит пост → статус изменится и WHERE не сработает.
+        # Если нечего менять (нет полей), всё равно делаем no-op UPDATE чтобы CAS сработал.
+        if not values:
+            values["id"] = scheduled_id  # no-op: SET id=id (текущее значение)
+
+        stmt = (
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status.in_(_editable),
+            )
+            .values(**values)
+            .returning(ScheduledPost.status)
+        )
+        result = await self._s.execute(stmt)
+        row = result.fetchone()
+        if row is None:
+            await self._s.rollback()
+            return False
+
+        prev_status = str(row[0])
+        if rewind_failed and prev_status == ScheduledPostStatus.FAILED.value:
+            # Перевзвод: статус → SCHEDULED, попытки → 0 по всем publication-строкам.
+            await self._s.execute(
+                sql_update(ScheduledPost)
+                .where(ScheduledPost.id == scheduled_id)
+                .values(status=ScheduledPostStatus.SCHEDULED)
+            )
+            from crosspost.scheduler.executor import scheduled_publication_id
+
+            pubid = scheduled_publication_id(scheduled_id)
+            await self._s.execute(
+                sql_update(Publication)
+                .where(
+                    Publication.profile_id == self._pid,
+                    Publication.publication_id == pubid,
+                )
+                .values(attempt_count=0)
+            )
+
+        await self._s.commit()
+        return True
+
+    async def media_key_shared(self, scheduled_id: int, media_key: str) -> bool:
+        """True если хотя бы один другой scheduled_post профиля ссылается на тот же ключ каталога.
+
+        Используется перед удалением старого медиа при PATCH: не удаляем файл,
+        если он разделён с другим постом (одинаковый sched-<uuid> каталог).
+        Проверяем LIKE '%/<key>/%' по JSON-строке media_paths.
+        """
+        result = await self._s.execute(
+            select(ScheduledPost.id)
+            .where(
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.id != scheduled_id,
+                ScheduledPost.media_paths.cast(sa.Text).contains(f"/{media_key}/"),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def cancel_scheduled(self, scheduled_id: int) -> bool:
         """Удалить запланированный пост профиля. True если что-то удалено."""

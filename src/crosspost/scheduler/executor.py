@@ -153,10 +153,12 @@ class ScheduledExecutor:
             post = await sched_repo.get(post_id)
             if post is None or str(post.status) != "scheduled":
                 return  # отменён/уже исполнен между сканом и обработкой
+            if not await sched_repo.claim(post_id):
+                return  # атомарный клейм не удался — пост уже взят/изменён
 
             selections = selections_from_stored(post.channels)
             if not selections:
-                await sched_repo.mark_published(post_id)  # нечего слать → закрыть
+                await sched_repo.finalize(post_id, success=True)  # нечего слать → закрыть
                 return
 
             pub_repo = PublicationRepository(session, profile_id=post.profile_id)
@@ -182,10 +184,13 @@ class ScheduledExecutor:
                 article_item=Selection("telegraph", ""),
             )
 
-            # pending → не финализируем: следующий тик добьёт (потолок ещё не исчерпан).
+            # pending → не финализируем: вернуть в SCHEDULED, следующий тик добьёт.
             if flow.pending:
+                await sched_repo.release(post_id)
                 return
-            await sched_repo.mark_published(post_id)
+            # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
+            success = all(o.status in _SUCCESS for o in flow.outcomes)
+            await sched_repo.finalize(post_id, success=success)
             self._cleanup_media(post.media_paths)
 
     def _ceiling_step(

@@ -16,15 +16,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import csv
 import io
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
-from crosspost.scheduler.media_sources import SourceKind, classify_source
+from crosspost.scheduler.media_sources import (
+    MediaSourceError,
+    SourceKind,
+    classify_source,
+    fetch_media,
+)
+
+# ── Plan image resolution settings (env-configurable, consistent with SCHEDULER_* naming) ──
+_IMPORT_PACING_SECONDS = float(os.getenv("IMPORT_PACING_SECONDS", "2.0"))
+_IMPORT_MAX_CONCURRENCY = int(os.getenv("IMPORT_MAX_CONCURRENCY", "3"))
+_IMPORT_MAX_IMAGES = int(os.getenv("IMPORT_MAX_IMAGES", "200"))
+_IMPORT_MAX_BYTES = int(os.getenv("IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))  # 50 MB total
+_IMPORT_IMAGE_MAX_BYTES = int(
+    os.getenv("IMPORT_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))
+)  # 5 MB per image
+
+# Patchable sleep — tests monkeypatch crosspost.scheduler.import_plan._plan_sleep.
+_plan_sleep = asyncio.sleep
 
 # ── Ошибки ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +70,8 @@ _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "date": ("дата", "date", "день"),
     "time": ("время", "time", "час"),
     "article": ("статья", "article", "лонгрид", "longread", "тело"),
+    "type": ("тип", "type", "тип контента", "content type", "вид", "kind"),
+    "title": ("заголовок", "title", "название", "heading"),
 }
 
 # Обязательные логические колонки (без них план не собрать без ручного маппинга).
@@ -126,6 +147,8 @@ class PlanRow:
     article_text: str = ""  # тело лонгрида для Telegraph; пусто → обычный пост
     explicit_date: date | None = None
     explicit_time: time | None = None
+    content_type: str = "post"  # "post" | "article"
+    title: str = ""  # article title (required for article rows)
 
 
 # ── Парсинг даты/времени из ячеек ─────────────────────────────────────────────
@@ -222,9 +245,23 @@ def parse_table(
         file_val = cell("file")
         text_val = cell("text")
         article_val = cell("article")
+        type_val = cell("type")
+        title_val = cell("title")
         file_str = "" if file_val is None else str(file_val).strip()
         text_str = "" if text_val is None else str(text_val).strip()
         article_str = "" if article_val is None else str(article_val).strip()
+        type_str = "" if type_val is None else str(type_val).strip().lower()
+        title_str = "" if title_val is None else str(title_val).strip()
+
+        # Нормализация типа контента. Пустая ячейка → post.
+        _TYPE_MAP = {
+            "": "post",
+            "пост": "post",
+            "post": "post",
+            "статья": "article",
+            "article": "article",
+        }
+        content_type = _TYPE_MAP.get(type_str)  # None = неизвестный тип
 
         # Полностью пустая строка — молча пропускаем (хвост таблицы).
         if not file_str and not text_str:
@@ -238,6 +275,8 @@ def parse_table(
                 article_text=article_str,
                 explicit_date=_parse_date(cell("date")),
                 explicit_time=_parse_time(cell("time")),
+                content_type=content_type or type_str,  # preserve raw if unknown
+                title=title_str,
             )
         )
     return rows
@@ -403,6 +442,9 @@ class ResolvedRow:
     # Откуда возьмётся картинка (для отчёта связывания, Блок 3):
     # "upload" | "folder" | "http" | "yadisk" | "" (нет файла).
     media_source: str = ""
+    content_type: str = "post"  # "post" | "article"
+    title: str = ""  # article title (required for articles)
+    blocks: list | None = None  # article_blocks.Block list; None for posts
 
 
 @dataclass
@@ -474,8 +516,69 @@ def build_plan(
     rule_candidates: list[tuple[PlanRow, str, str]] = []
 
     for row in rows:
+        # Unknown content_type → row-level error.
+        if row.content_type not in ("post", "article"):
+            report.problems.append(
+                RowProblem(
+                    row.row_number,
+                    row.file,
+                    f"неизвестный тип контента «{row.content_type}» (ожидается «пост» или «статья»)",
+                )
+            )
+            continue
+
         if not row.text:
             report.problems.append(RowProblem(row.row_number, row.file, "пустой текст поста"))
+            continue
+
+        # Article-specific validation and block parsing.
+        if row.content_type == "article":
+            if not row.title:
+                report.problems.append(
+                    RowProblem(
+                        row.row_number,
+                        row.file,
+                        "статья: заголовок обязателен (колонка «заголовок» / «title» пуста)",
+                    )
+                )
+                continue
+
+            from crosspost.content.article_blocks import parse_blocks
+
+            blocks = parse_blocks(row.text)
+
+            # File column is meaningless for articles: article images come only from
+            # http(s) URL blocks inside the body (parse_blocks / _is_sole_url).
+            # Report the ignored filename explicitly rather than silently dropping it.
+            if row.file:
+                report.warnings.append(
+                    RowProblem(
+                        row.row_number,
+                        row.file,
+                        f"статья: колонка «файл» игнорируется (значение «{row.file}»); "
+                        "картинки статьи берутся только из URL внутри тела",
+                    )
+                )
+
+            t = row.explicit_time or (rule.times[0] if rule else time(12, 0))
+            if row.explicit_date is not None:
+                report.resolved.append(
+                    ResolvedRow(
+                        row.row_number,
+                        "",
+                        row.text,
+                        datetime.combine(row.explicit_date, t),
+                        source="explicit",
+                        content_type="article",
+                        title=row.title,
+                        blocks=blocks,
+                    )
+                )
+            else:
+                rule_candidates.append((row, "", ""))
+                # Store blocks so _build_resolved_row can use them later.
+                # We attach blocks to the row object directly as a transient attribute.
+                row._blocks = blocks  # type: ignore[attr-defined]
             continue
 
         matched: str
@@ -533,6 +636,8 @@ def build_plan(
                     source="explicit",
                     article_text=row.article_text,
                     media_source=msource,
+                    content_type=row.content_type,
+                    title=row.title,
                 )
             )
         else:
@@ -552,6 +657,7 @@ def build_plan(
             # иначе гибкое совпадение 'cover_1.png' ломает порядок '1.jpg < 2.jpg < 10.jpg'.
             rule_candidates.sort(key=lambda rc: natural_key(rc[0].file or rc[1]))
             for ordinal, (row, matched, msource) in enumerate(rule_candidates):
+                row_blocks = getattr(row, "_blocks", None)
                 report.resolved.append(
                     ResolvedRow(
                         row.row_number,
@@ -561,6 +667,9 @@ def build_plan(
                         source="rule",
                         article_text=row.article_text,
                         media_source=msource,
+                        content_type=row.content_type,
+                        title=row.title,
+                        blocks=row_blocks,
                     )
                 )
 
@@ -577,3 +686,165 @@ def build_plan(
 def _basename(path: str) -> str:
     """Только имя файла, без каталогов (терпимо к / и \\)."""
     return re.split(r"[\\/]", path.strip())[-1]
+
+
+# ── Plan-level image resolution ───────────────────────────────────────────────
+
+
+async def resolve_plan_images(
+    report: ImportReport,
+    import_key: str,
+    *,
+    client=None,
+    pacing: float | None = None,
+    max_concurrency: int | None = None,
+    max_images: int | None = None,
+    max_bytes: int | None = None,
+) -> ImportReport:
+    """Resolve image URLs in article blocks for all resolved article rows.
+
+    Fail-closed policy (deliberate): a row with ANY failed image block is moved
+    to problems and not imported. This mirrors the fail-closed choice already made
+    for Telegraph+Telegram linking — if the article cannot be fully assembled, the
+    whole article row is rejected rather than imported with holes.
+
+    Deduplication: the same URL across rows/blocks is downloaded once and the stored
+    path is shared. All images land under import_key so pub_repo.media_key_shared
+    (the existing mechanism) prevents premature cleanup while other scheduled posts
+    from the same import still reference that key.
+
+    Bounds (all env-configurable, consistent with SCHEDULER_* naming):
+      IMPORT_PACING_SECONDS   — delay between downloads (default 2 s)
+      IMPORT_MAX_CONCURRENCY  — max simultaneous downloads (default 3)
+      IMPORT_MAX_IMAGES       — unique-URL ceiling; exceeded → explicit report entry
+      IMPORT_MAX_BYTES        — total bytes ceiling; exceeded → explicit report entry
+      IMPORT_IMAGE_MAX_BYTES  — per-image cap passed to fetch_media (default 5 MB)
+    """
+    from crosspost.content.article_blocks import ImageBlock
+    from crosspost.web.media import save_binaries
+
+    _pacing = pacing if pacing is not None else _IMPORT_PACING_SECONDS
+    _max_conc = max_concurrency if max_concurrency is not None else _IMPORT_MAX_CONCURRENCY
+    _max_imgs = max_images if max_images is not None else _IMPORT_MAX_IMAGES
+    _max_b = max_bytes if max_bytes is not None else _IMPORT_MAX_BYTES
+
+    # Find article rows and their image URLs.
+    article_row_indices = [
+        i for i, rr in enumerate(report.resolved) if rr.content_type == "article" and rr.blocks
+    ]
+    if not article_row_indices:
+        return report
+
+    # Collect unique URLs preserving first-seen order.
+    url_to_refs: dict[str, list[tuple[int, int]]] = {}  # url → [(row_idx, block_idx)]
+    for row_idx in article_row_indices:
+        for block_idx, block in enumerate(report.resolved[row_idx].blocks or []):
+            if isinstance(block, ImageBlock):
+                url_to_refs.setdefault(block.url, []).append((row_idx, block_idx))
+
+    unique_urls = list(url_to_refs.keys())
+    if not unique_urls:
+        return report
+
+    # Image count ceiling — checked upfront before any I/O.
+    if len(unique_urls) > _max_imgs:
+        report.problems.append(
+            RowProblem(
+                0,
+                "",
+                f"план содержит {len(unique_urls)} уникальных изображений — "
+                f"лимит {_max_imgs} (IMPORT_MAX_IMAGES). Сократите план.",
+            )
+        )
+        _eject_article_rows(
+            report, set(article_row_indices), "превышен лимит изображений (IMPORT_MAX_IMAGES)"
+        )
+        return report
+
+    # Download all unique URLs with semaphore + pacing.
+    url_data: dict[str, tuple[str, bytes]] = {}  # url → (filename, data)
+    url_errors: dict[str, str] = {}  # url → error reason
+    total_bytes = 0
+    bytes_ceiling_hit = False
+    sem = asyncio.Semaphore(_max_conc)
+
+    async def _download(url: str) -> None:
+        nonlocal total_bytes, bytes_ceiling_hit
+        if bytes_ceiling_hit:
+            url_errors[url] = "превышен лимит суммарного объёма (IMPORT_MAX_BYTES)"
+            return
+        async with sem:
+            await _plan_sleep(_pacing)
+            try:
+                media = await fetch_media(url, client=client, max_bytes=_IMPORT_IMAGE_MAX_BYTES)
+            except MediaSourceError as exc:
+                url_errors[url] = str(exc)
+                return
+            if total_bytes + len(media.data) > _max_b:
+                bytes_ceiling_hit = True
+                url_errors[url] = "превышен лимит суммарного объёма (IMPORT_MAX_BYTES)"
+                return
+            total_bytes += len(media.data)
+            url_data[url] = (media.filename, media.data)
+
+    await asyncio.gather(*[_download(url) for url in unique_urls])
+
+    if bytes_ceiling_hit:
+        report.problems.append(
+            RowProblem(
+                0,
+                "",
+                f"суммарный объём изображений превысил лимит "
+                f"{_max_b // (1024 * 1024)} МБ (IMPORT_MAX_BYTES).",
+            )
+        )
+        _eject_article_rows(
+            report, set(article_row_indices), "превышен лимит суммарного объёма байт"
+        )
+        return report
+
+    # Save all successful downloads at once (single save_binaries call → unique indices).
+    ordered_success = [u for u in unique_urls if u in url_data]
+    if ordered_success:
+        items = [url_data[u] for u in ordered_success]
+        paths = save_binaries(items, import_key)
+        url_paths: dict[str, str] = dict(zip(ordered_success, paths, strict=True))
+    else:
+        url_paths = {}
+
+    # Update blocks and apply fail-closed policy.
+    failed_indices: set[int] = set()
+    for row_idx in article_row_indices:
+        rr = report.resolved[row_idx]
+        for block_idx, block in enumerate(rr.blocks or []):
+            if not isinstance(block, ImageBlock):
+                continue
+            if block.url in url_paths:
+                block.path = url_paths[block.url]
+            else:
+                reason = url_errors.get(block.url, "неизвестная ошибка загрузки")
+                rr._fail_reason = f"блок {block_idx} ({block.url}): {reason}"  # type: ignore[attr-defined]
+                failed_indices.add(row_idx)
+                break  # stop at first failure in this row
+
+    # Move failed rows from resolved to problems.
+    new_resolved = []
+    for i, rr in enumerate(report.resolved):
+        if i in failed_indices:
+            reason = getattr(rr, "_fail_reason", "ошибка загрузки изображения статьи")
+            report.problems.append(RowProblem(rr.row_number, rr.file, f"статья: {reason}"))
+        else:
+            new_resolved.append(rr)
+    report.resolved = new_resolved
+    return report
+
+
+def _eject_article_rows(report: ImportReport, article_idx: set[int], reason: str) -> None:
+    """Move article rows (by index in report.resolved) to problems."""
+    new_resolved = []
+    for i, rr in enumerate(report.resolved):
+        if i in article_idx:
+            report.problems.append(RowProblem(rr.row_number, rr.file, reason))
+        else:
+            new_resolved.append(rr)
+    report.resolved = new_resolved

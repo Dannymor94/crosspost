@@ -66,13 +66,30 @@ body {
 #root { display: flex; min-height: 100dvh; }
 
 .sidebar {
-  width: 260px;
+  width: var(--sidebar-w, 260px);
+  min-width: 180px;
+  max-width: 480px;
   flex-shrink: 0;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  position: relative;
+}
+.sidebar-resize-handle {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 10;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+  background: var(--accent);
+  opacity: .35;
 }
 .main {
   flex: 1;
@@ -512,6 +529,11 @@ body {
   #root { flex-direction: column; }
   .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
   .main { padding: 20px 16px; }
+  .sched-item { flex-direction: column; align-items: flex-start; }
+  .sched-actions { width: 100%; }
+  .target-grid { grid-template-columns: 1fr; }
+  .channel-grid { grid-template-columns: 1fr; }
+  .plan-rows-table th:nth-child(4), .plan-rows-table td:nth-child(4) { display: none; }
 }
 
 /* ── Utilities ───────────────────────────────────────────────────────────── */
@@ -587,7 +609,7 @@ body {
 .target-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .target-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
 .target-id { font-size: 10.5px; color: var(--text-3); }
-.target-reason { font-size: 10.5px; color: var(--amber); }
+.target-reason { font-size: 10.5px; color: var(--text-3); }
 .target-check {
   width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;
   border: 1px solid var(--border-f); display: flex; align-items: center; justify-content: center;
@@ -748,6 +770,22 @@ body {
 .sched-result-row { font-size: 12px; }
 .sched-result-row.ok   { color: var(--success, #4ade80); }
 .sched-result-row.fail { color: var(--error); }
+.sched-status-note { font-size: 12px; color: var(--text-3); }
+.sched-edit-form { display: flex; flex-direction: column; gap: 12px; padding-top: 6px; }
+.sched-edit-field { display: flex; flex-direction: column; gap: 4px; }
+.sched-edit-targets { display: flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto; }
+.sched-edit-check { display: flex; align-items: baseline; gap: 7px; font-size: 13px; color: var(--text-1); cursor: pointer; }
+.sched-edit-check.disabled { opacity: .5; cursor: not-allowed; }
+.sched-edit-check input { flex-shrink: 0; cursor: inherit; accent-color: var(--accent); }
+.sched-media-cur { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--radius); background: var(--bg-input); border: 1px solid var(--border); }
+.sched-media-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: calc(var(--radius) - 2px); flex-shrink: 0; display: block; }
+.sched-media-filename { font-size: 12px; font-family: var(--font-mono); color: var(--text-2); word-break: break-all; }
+.sched-media-none { font-size: 13px; color: var(--text-3); }
+.sched-media-input-row { display: flex; flex-direction: column; gap: 4px; }
+.sched-media-toggle { font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; align-self: flex-start; }
+
+/* ── Media URL input (publish form alternative to file picker) ─────────────── */
+.media-url-divider { font-size: 12px; color: var(--text-3); margin: 6px 0 2px; }
 
 /* ── Import: план ─────────────────────────────────────────────────────────── */
 .import-drop {
@@ -981,6 +1019,72 @@ body {
 .wiz-alt { background: none; border: none; color: var(--accent); cursor: pointer;
   font-size: 12px; padding: 2px 0; }
 .wiz-alt:hover { text-decoration: underline; }
+
+/* ── Content-type switch (Пост / Статья) ─────────────────────────────────── */
+.ctype-switch { display: flex; gap: 4px; margin-bottom: 18px; }
+.ctype-btn {
+  padding: 7px 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: var(--bg-card); color: var(--text-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.ctype-btn:hover { color: var(--text-1); border-color: var(--border-f); }
+.ctype-btn.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.ctype-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Article block preview ───────────────────────────────────────────────── */
+.block-preview {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.block-preview-header {
+  padding: 7px 14px;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  font-size: 10px; font-family: var(--font-mono); font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--text-3);
+}
+.block-preview-empty {
+  padding: 20px 14px;
+  color: var(--text-3); font-size: 13px; text-align: center;
+}
+.preview-block {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.preview-block:last-child { border-bottom: none; }
+.preview-block-p { border-left: 2px solid var(--border-f); }
+.preview-block-img { border-left: 2px solid var(--amber); }
+.preview-idx {
+  font-size: 10px; font-family: var(--font-mono); color: var(--text-3); margin-bottom: 3px;
+}
+.preview-text {
+  font-size: 13px; color: var(--text-1); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.preview-img-row { display: flex; align-items: flex-start; gap: 10px; }
+.preview-img-ic {
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: var(--amber-bg); border: 1px solid rgba(245,158,11,.3);
+  border-radius: var(--radius); display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+}
+.preview-img-body { flex: 1; min-width: 0; }
+.preview-img-label {
+  font-size: 10px; font-family: var(--font-mono); font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--amber); margin-bottom: 3px;
+}
+.preview-img-url {
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-2);
+  word-break: break-all; line-height: 1.4;
+}
+.preview-img-hint {
+  font-size: 11px; color: var(--text-3); margin-top: 3px; line-height: 1.4; font-style: italic;
+}
+.field-err { font-size: 11.5px; color: var(--error); margin-top: 4px; }
 
 /* ── Login ───────────────────────────────────────────────────────────────── */
 .login-wrap {
@@ -1715,6 +1819,7 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
   const [adding, setAdding] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
 
   const load = useCallback(async () => {
     try { setItems(await api.get(base)); setErr(null); }
@@ -1729,7 +1834,7 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
     setAdding(true); setErr(null);
     try {
       await api.post(base, { name: newName.trim(), value: newValue.trim() });
-      setNewName(""); setNewValue("");
+      setNewName(""); setNewValue(""); setShowAdd(false);
       refresh();
     } catch (ex) { setErr(ex.message); }
     finally { setAdding(false); }
@@ -1744,9 +1849,11 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
             "Пока нет ни одной цели — добавьте хотя бы одну, иначе канал недоступен для публикации.")
         : h("div", { className: "tgt-list" }, items.map((it) =>
             h(TargetRow, { key: it.id, channel, profileId, item: it, field, onChanged: refresh }))),
-    // Форма добавления новой цели.
-    h("div", { className: "tgt-add" },
-      h("p", { className: "tgt-add-title" }, "+ Добавить цель"),
+    h("button", {
+      className: "btn btn-ghost btn-sm", style: { marginTop: "8px", alignSelf: "flex-start" },
+      onClick: () => setShowAdd(!showAdd),
+    }, showAdd ? "↑ Свернуть" : "+ Добавить цель"),
+    showAdd && h("div", { className: "tgt-add" },
       h("p", { className: "tgt-add-hint" },
         "Можно добавить несколько целей — публикация пойдёт в каждую под одной учётной записью.",
       ),
@@ -1770,7 +1877,7 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
         className: "btn btn-ghost btn-sm", onClick: add,
         disabled: adding || !newName.trim() || !newValue.trim(),
         style: { alignSelf: "flex-start", marginTop: "4px" },
-      }, adding ? h(Spinner) : "Добавить цель"),
+      }, adding ? h(Spinner) : "Сохранить цель"),
     ),
     err && h("p", { className: "form-hint", style: { color: "var(--error)" } }, err),
   );
@@ -1801,7 +1908,9 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
   const cardRef = useRef(null);
 
   const state = ch.state;
+  const dimmed = state !== "live" && !wizard;
   const cardClass = `channel-card ${state === "live" ? "live-card" : state === "needs_relogin" ? "amber-card" : ""}${focus ? " focus" : ""}`;
+  const cardStyle = dimmed ? { opacity: 0.75 } : undefined;
 
   // Переход из консоли ошибок: подсветить и прокрутить к нужному каналу.
   useEffect(() => {
@@ -1837,7 +1946,7 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
   const icon = CHANNEL_ICONS[ch.channel] ?? ch.channel.slice(0, 2).toUpperCase();
   const connectLabel = ch.has_credential ? "Переподключить" : (ch.kind === "browser" ? "Войти" : "Подключить");
 
-  return h("div", { className: cardClass, ref: cardRef },
+  return h("div", { className: cardClass, ref: cardRef, style: cardStyle },
     h("div", { className: "card-header" },
       h("div", { className: "card-icon", "aria-hidden": true }, icon),
       h("div", { className: "card-names" },
@@ -1956,8 +2065,63 @@ function NoProfileView() {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
+const SIDEBAR_DEFAULT_W = 260;
+const SIDEBAR_LS_KEY = "sidebar_w";
+
 function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConsole, consoleActive }) {
-  return h("nav", { className: "sidebar", "aria-label": "Профили" },
+  const navRef = useRef(null);
+  const dragging = useRef(false);
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Restore saved width
+  useEffect(() => {
+    const saved = parseInt(localStorage.getItem(SIDEBAR_LS_KEY), 10);
+    if (saved >= 180 && saved <= 480) setW(saved);
+  }, []);
+
+  function setW(w) {
+    const clamped = Math.min(480, Math.max(180, w));
+    document.documentElement.style.setProperty("--sidebar-w", clamped + "px");
+    if (navRef.current) navRef.current.style.width = clamped + "px";
+  }
+
+  function onHandleMouseDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging.current = true;
+    const handle = e.currentTarget;
+    handle.classList.add("dragging");
+    const startX = e.clientX;
+    const startW = navRef.current.getBoundingClientRect().width;
+
+    function onMove(ev) {
+      if (!dragging.current) return;
+      setW(startW + ev.clientX - startX);
+    }
+    function onUp(ev) {
+      dragging.current = false;
+      handle.classList.remove("dragging");
+      const w = Math.min(480, Math.max(180, startW + ev.clientX - startX));
+      localStorage.setItem(SIDEBAR_LS_KEY, w);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function onHandleDblClick() {
+    setW(SIDEBAR_DEFAULT_W);
+    localStorage.removeItem(SIDEBAR_LS_KEY);
+  }
+
+  return h("nav", { className: "sidebar", "aria-label": "Профили", ref: navRef },
+    h("div", {
+      className: "sidebar-resize-handle",
+      onMouseDown: onHandleMouseDown,
+      onDoubleClick: onHandleDblClick,
+      title: "Перетащите для изменения ширины; двойной клик — сброс",
+    }),
     h("div", { className: "sidebar-header" },
       h("div", { className: "logo" }, h("span", null, "⊹"), " CROSSPOST"),
     ),
@@ -2309,11 +2473,102 @@ function ScheduleModal({ onClose, onConfirm }) {
   );
 }
 
+// ── Article block parser (mirrors Python parse_blocks logic) ─────────────────
+// Solo URL = starts with http(s), no whitespace → image block.
+// Everything else → paragraph block. Blank chunks dropped.
+// ── Block preview component ───────────────────────────────────────────────────
+// Calls the server-side preview endpoint (400ms debounce) so the client never
+// reimplements the parser. Server returns resolved image data URIs or per-block
+// error reasons (SSRF-blocked, unreachable). In-flight requests do not wipe the
+// last good result; a failed fetch leaves the stale blocks visible.
+function BlockPreview({ profileId, text }) {
+  const [blocks, setBlocks] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const abortRef = useRef(null);
+
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      // Cancel any prior in-flight request.
+      if (abortRef.current) abortRef.current.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      if (!text.trim()) { setBlocks([]); return; }
+      setLoading(true);
+      try {
+        const fd = new FormData();
+        fd.append("text", text);
+        const resp = await fetch(
+          `/api/profiles/${profileId}/publish/preview-blocks`,
+          { method: "POST", body: fd, signal: ctrl.signal }
+        );
+        if (!resp.ok) return; // leave stale blocks on error
+        const data = await resp.json();
+        setBlocks(data);
+      } catch (ex) {
+        if (ex.name !== "AbortError") { /* leave stale */ }
+      } finally {
+        setLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [profileId, text]);
+
+  function pluralBlocks(n) {
+    if (n === 1) return "1 блок";
+    if (n < 5) return `${n} блока`;
+    return `${n} блоков`;
+  }
+
+  const header = loading
+    ? "Предпросмотр · …"
+    : blocks.length ? `Предпросмотр · ${pluralBlocks(blocks.length)}` : "Предпросмотр";
+
+  return h("div", { className: "block-preview" },
+    h("div", { className: "block-preview-header" }, header),
+    blocks.length === 0
+      ? h("div", { className: "block-preview-empty" }, "Начните вводить текст статьи — блоки появятся здесь")
+      : blocks.map((b) =>
+          b.type === "img"
+            ? h("div", { key: b.index, className: "preview-block preview-block-img" },
+                h("div", { className: "preview-img-row" },
+                  b.data_uri
+                    ? h("img", {
+                        src: b.data_uri, alt: "",
+                        style: { width: 40, height: 40, objectFit: "cover", borderRadius: 4, flexShrink: 0 },
+                      })
+                    : h("div", { className: "preview-img-ic" }, b.error ? "⚠" : "🖼"),
+                  h("div", { className: "preview-img-body" },
+                    h("div", { className: "preview-img-label" },
+                      `Блок ${b.index + 1} · картинка${b.error ? " · ошибка" : ""}`),
+                    h("div", { className: "preview-img-url" }, b.url),
+                    b.error
+                      ? h("div", { className: "preview-img-hint", style: { color: "var(--error)" } }, b.error)
+                      : h("div", { className: "preview-img-hint" },
+                          "Эта строка стала блоком изображения. Если имели в виду ссылку — впишите её в текст абзаца."),
+                  ),
+                )
+              )
+            : h("div", { key: b.index, className: "preview-block preview-block-p" },
+                h("div", { className: "preview-idx" }, `Блок ${b.index + 1} · абзац`),
+                h("div", { className: "preview-text" }, b.text),
+              )
+        )
+  );
+}
+
 function PublishView({ profile }) {
+  const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
+  const [articleTitle, setArticleTitle] = useState("");
   const [articleText, setArticleText] = useState("");
+  const [titleErr, setTitleErr] = useState("");
   const [linkPhrase, setLinkPhrase] = useState("");
   const [files, setFiles] = useState([]);
+  const [mediaUrl, setMediaUrl] = useState("");        // URL/disk/filename alternative
+  const [mediaThumb, setMediaThumb] = useState(null);  // {data_uri, filename} | null
+  const [mediaErr, setMediaErr] = useState("");
+  const mediaDebounceRef = useRef(null);
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [outcomes, setOutcomes] = useState(null);
@@ -2329,13 +2584,13 @@ function PublishView({ profile }) {
 
   const loadTargets = useCallback(async () => {
     try {
-      const t = await api.get(`${base}/publish/targets?content_type=post`);
+      const t = await api.get(`${base}/publish/targets?content_type=${contentType}`);
       setTargets(t);
       // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
       setSelected((prev) => new Set([...prev].filter((k) =>
         t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-  }, [base]);
+  }, [base, contentType]);
 
   const loadScheduled = useCallback(async () => {
     try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
@@ -2406,23 +2661,62 @@ function PublishView({ profile }) {
     });
   }
 
+  function onFilesChange(newFiles) {
+    setFiles(newFiles);
+    if (newFiles.length > 0) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
+  }
+
+  function onMediaUrlChange(url) {
+    setMediaUrl(url);
+    setMediaThumb(null);
+    setMediaErr("");
+    clearTimeout(mediaDebounceRef.current);
+    if (url.trim()) setFiles([]);  // mutually exclusive
+    if (!url.trim()) return;
+    mediaDebounceRef.current = setTimeout(async () => {
+      try {
+        const fd = new FormData(); fd.append("image", url.trim());
+        const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
+        if (r.ok) { setMediaThumb(await r.json()); }
+        else {
+          const b = await r.json().catch(() => ({ detail: r.statusText }));
+          setMediaErr(b.detail || "Не удалось загрузить изображение");
+        }
+      } catch (ex) { setMediaErr(ex.message); }
+    }, 600);
+  }
+
   function buildForm(extra) {
     const fd = new FormData();
-    fd.append("content_type", "post");
+    fd.append("content_type", contentType);
     fd.append("text", text);
-    fd.append("article_text", articleText);
+    fd.append("article_text", contentType === "article" ? articleText : "");
+    if (contentType === "article" && articleTitle.trim()) fd.append("title", articleTitle.trim());
     fd.append("link_phrase", linkPhrase);
     fd.append("channels", JSON.stringify([...selected].map(parseSelKey)));
-    files.forEach((f) => fd.append("media", f));
+    if (contentType === "post") {
+      if (mediaUrl.trim()) fd.append("image", mediaUrl.trim());
+      else files.forEach((f) => fd.append("media", f));
+    }
     Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
     return fd;
   }
 
-  // Пост валиден, если есть текст ИЛИ фото (текстовый пост — норма).
-  const hasContent = text.trim().length > 0 || files.length > 0;
+  // Пост: есть текст ИЛИ фото (файл или URL). Статья: есть заголовок И тело.
+  const hasContent = contentType === "article"
+    ? articleTitle.trim().length > 0 && articleText.trim().length > 0
+    : text.trim().length > 0 || files.length > 0 || mediaUrl.trim().length > 0;
   const canSend = selected.size > 0 && hasContent && !busy;
 
+  function validateArticle() {
+    if (contentType !== "article") return true;
+    if (!articleTitle.trim()) { setTitleErr("Заголовок обязателен для статьи"); return false; }
+    setTitleErr("");
+    return true;
+  }
+
   async function publishNow() {
+    if (!validateArticle()) return;
     setBusy(true); setAlert(null); setOutcomes(null);
     try {
       const res = await api.postForm(`${base}/publish`, buildForm());
@@ -2446,12 +2740,14 @@ function PublishView({ profile }) {
   }
 
   async function doSchedule(whenLocal) {
+    if (!validateArticle()) { setShowSchedule(false); return; }
     setShowSchedule(false); setBusy(true); setAlert(null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
       await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleText(""); setLinkPhrase(""); setFiles([]); setOutcomes(null);
+      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setFiles([]); setOutcomes(null); setTitleErr("");
+      setMediaUrl(""); setMediaThumb(null); setMediaErr("");
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); }
@@ -2463,42 +2759,95 @@ function PublishView({ profile }) {
     h("h1", { className: "page-title" }, "Публикация"),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
 
+    // Content type switch
+    h("div", { className: "ctype-switch" },
+      h("button", {
+        type: "button", className: `ctype-btn ${contentType === "post" ? "active" : ""}`,
+        onClick: () => { setContentType("post"); setSelected(new Set()); setTitleErr(""); },
+      }, "Пост"),
+      h("button", {
+        type: "button", className: `ctype-btn ${contentType === "article" ? "active" : ""}`,
+        onClick: () => { setContentType("article"); setSelected(new Set()); setTitleErr(""); },
+      }, "Статья"),
+    ),
+
     // Контент
-    h("p", { className: "section-title" }, "Контент"),
     h("div", { className: "form-panel", style: { maxWidth: "100%" } },
-      h("textarea", {
-        className: "form-input", rows: 4, placeholder: "Текст поста…",
-        value: text, onChange: (e) => setText(e.target.value),
-        style: { resize: "vertical", fontFamily: "var(--font-ui)" },
-      }),
-      h("div", { className: "mt-2" }, h(PhotoPicker, { files, onChange: setFiles })),
-      // Опциональный лонгрид: заполнено → статья уйдёт в Telegraph ПЕРВОЙ,
-      // а в пост добавится ссылка на неё (Instant View). Пусто → обычный пост.
-      h("div", { className: "mt-2" },
-        h("label", { className: "form-label" }, "Текст статьи (Telegraph) — необязательно"),
+
+      // ── Пост ──────────────────────────────────────────────────────────────
+      contentType === "post" && h("div", null,
         h("textarea", {
-          className: "form-input", rows: 4,
-          placeholder: "Заполните — выйдет статья в Telegraph, а в пост добавится ссылка на неё…",
-          value: articleText, onChange: (e) => setArticleText(e.target.value),
+          className: "form-input", rows: 4, placeholder: "Текст поста…",
+          value: text, onChange: (e) => setText(e.target.value),
           style: { resize: "vertical", fontFamily: "var(--font-ui)" },
         }),
-        articleText.trim()
-          ? h("p", { className: "hint-inline", style: { marginTop: "6px" } },
-              "Статья опубликуется первой; пост получит ссылку на неё.")
-          : null,
-        articleText.trim() && h("div", { className: "mt-2" },
-          h("label", { className: "form-label" }, "Текст ссылки"),
+        h("div", { className: "mt-2" },
+          h(PhotoPicker, { files, onChange: onFilesChange }),
+          h("p", { className: "media-url-divider" }, "или по ссылке:"),
+          h("div", { className: "sched-media-input-row" },
+            h("input", {
+              className: "form-input mono", type: "text", value: mediaUrl,
+              placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg",
+              onChange: (e) => onMediaUrlChange(e.target.value),
+              style: { fontFamily: "var(--font-mono)", fontSize: "13px" },
+            }),
+            h("p", { className: "form-hint" },
+              "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Google Drive не поддерживается."),
+          ),
+          mediaErr && h("div", { className: "outcome-err", style: { fontSize: "12px", marginTop: "4px" } }, mediaErr),
+          mediaThumb && h("div", { className: "sched-media-cur", style: { marginTop: "6px" } },
+            h("img", {
+              className: "sched-media-thumb", src: mediaThumb.data_uri, alt: mediaThumb.filename,
+              onError: (e) => { e.target.style.display = "none"; },
+            }),
+            h("span", { className: "sched-media-filename" }, mediaThumb.filename),
+          ),
+        ),
+      ),
+
+      // ── Статья ─────────────────────────────────────────────────────────────
+      contentType === "article" && h("div", null,
+        // Заголовок (обязателен — Telegraph adapter требует явный title)
+        h("div", { className: "form-group" },
+          h("label", { className: "form-label", htmlFor: "art-title" },
+            "Заголовок ", h("span", { className: "req-star" }, "*")),
           h("input", {
-            className: "form-input",
+            id: "art-title",
+            className: `form-input${titleErr ? " wf-bad" : ""}`,
             type: "text",
+            placeholder: "Заголовок статьи…",
+            value: articleTitle,
+            onChange: (e) => { setArticleTitle(e.target.value); if (titleErr) setTitleErr(""); },
+            maxLength: 256,
+          }),
+          titleErr && h("div", { className: "field-err" }, titleErr),
+        ),
+        // Тело статьи
+        h("div", { className: "form-group" },
+          h("label", { className: "form-label", htmlFor: "art-body" }, "Текст статьи"),
+          h("textarea", {
+            id: "art-body",
+            className: "form-input", rows: 10,
+            placeholder: "Текст статьи. Пустая строка между абзацами — разрыв блока.\nСтрока только с http-ссылкой становится блоком изображения.",
+            value: articleText, onChange: (e) => setArticleText(e.target.value),
+            style: { resize: "vertical", fontFamily: "var(--font-ui)" },
+          }),
+        ),
+        // Текст ссылки (как в посте появится ссылка на статью)
+        h("div", { className: "form-group" },
+          h("label", { className: "form-label", htmlFor: "art-phrase" }, "Текст ссылки в посте"),
+          h("input", {
+            id: "art-phrase",
+            className: "form-input", type: "text",
             placeholder: "Подробнее",
-            value: linkPhrase,
-            onChange: (e) => setLinkPhrase(e.target.value),
+            value: linkPhrase, onChange: (e) => setLinkPhrase(e.target.value),
             maxLength: 64,
           }),
           h("p", { className: "form-hint" },
-            `В посте слово «${linkPhrase.trim() || "Подробнее"}» станет кликабельной ссылкой на статью.`),
+            `В постах Telegram слово «${linkPhrase.trim() || "Подробнее"}» станет кликабельной ссылкой на статью.`),
         ),
+        // Предпросмотр блоков
+        h(BlockPreview, { profileId: profile.id, text: articleText }),
       ),
     ),
 
@@ -2508,7 +2857,9 @@ function PublishView({ profile }) {
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
       : eligibleCount === 0
         ? h("div", { className: "empty-inline" },
-            "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
+            contentType === "article"
+              ? "Нет каналов, поддерживающих статьи. Для статей нужен Telegraph или Дзен."
+              : "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
         : h("div", { className: "target-grid" },
             targets.map((t) => h(TargetToggle, {
               key: selKey(t.channel, t.target_id), t,
@@ -2524,7 +2875,8 @@ function PublishView({ profile }) {
       selected.size === 0 && targets && eligibleCount > 0
         ? h("span", { className: "hint-inline" }, "выберите канал")
         : !hasContent
-          ? h("span", { className: "hint-inline" }, "добавьте текст или фото")
+          ? h("span", { className: "hint-inline" },
+              contentType === "article" ? "добавьте заголовок и текст" : "добавьте текст или фото")
           : null,
     ),
     alert && h(Alert, { type: alert.type }, alert.text),
@@ -2543,7 +2895,7 @@ function PublishView({ profile }) {
     h(ScheduledList, { base, items: scheduled, onChanged: loadScheduled }),
 
     // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
-    h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore }),
+    h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore, onRefresh: loadReportInitial }),
 
     showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
@@ -2584,7 +2936,7 @@ function reportDayLabel(iso) {
   return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
-function SchedulerReport({ base, items, hasMore, onMore }) {
+function SchedulerReport({ base, items, hasMore, onMore, onRefresh }) {
   const [filter, setFilter] = useState("all");  // all | problems
   if (!items || items.length === 0) return null;
 
@@ -2615,7 +2967,9 @@ function SchedulerReport({ base, items, hasMore, onMore }) {
       : groups.map((g, i) => h("div", { key: i },
           h("div", { className: "report-day" }, g.label),
           h("div", { className: "report-rows" },
-            g.rows.map((r) => h(ReportRow, { key: r.id, base, r })),
+            // key — r.id, не индекс: индексный ключ делает remount ReportRow при каждом
+            // тике поллинга и закрывает открытый EditSchedModal с несохранёнными правками.
+            g.rows.map((r) => h(ReportRow, { key: r.id, base, r, onRefresh })),
           ),
         )),
     hasMore && h("button", { className: "btn-ghost report-more", onClick: onMore }, "Показать ещё"),
@@ -2625,10 +2979,11 @@ function SchedulerReport({ base, items, hasMore, onMore }) {
 // Компактная строка: время · превью · статус-точки каналов · раскрытие деталей по клику.
 // Успешные свёрнуты и приглушены; проблемные (partial/failed) раскрыты и заметны.
 // Скриншоты сбоя тянем лениво (только для проблемных) при первом раскрытии.
-function ReportRow({ base, r }) {
+function ReportRow({ base, r, onRefresh }) {
   const problem = isReportProblem(r);
   const [open, setOpen] = useState(problem);
   const [shots, setShots] = useState(null);  // null=не грузили, {} или {channel: path}
+  const [editOpen, setEditOpen] = useState(false);
   useEffect(() => {
     if (open && problem && shots === null) {
       api.get(`${base}/scheduled/${r.id}/screenshots`).then(setShots).catch(() => setShots({}));
@@ -2638,6 +2993,8 @@ function ReportRow({ base, r }) {
   const meta = REPORT_META[r.overall] || REPORT_META.unknown;
   const when = new Date(r.cursor).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const preview = (r.text || "").trim() || "(без текста)";
+  // Редактировать можно только failed (post.status=failed); done/partial — завершены.
+  const canEdit = r.overall === "failed";
   return h("div", { className: `report-row ${meta.cls}${problem ? "" : " muted"}` },
     h("button", { className: "report-row-head", onClick: () => setOpen(!open) },
       h("span", { className: "report-time mono" }, when),
@@ -2664,28 +3021,210 @@ function ReportRow({ base, r }) {
           shot && h("span", { className: "text-3 mono" }, "📷 скриншот сбоя"),
         );
       }),
+      canEdit && h("button", { className: "btn btn-ghost btn-sm", style: { marginTop: "8px" },
+        onClick: (e) => { e.stopPropagation(); setEditOpen(true); } }, "Редактировать и перезапустить"),
+    ),
+    editOpen && h(EditSchedModal, { base, postId: r.id, contentType: r.content_type,
+      onClose: () => setEditOpen(false),
+      onSaved: () => { setEditOpen(false); onRefresh?.(); },
+    }),
+  );
+}
+
+// ── Запланированные: список с отменой и правкой ──────────────────────────────
+
+// Конвертация сохранённого снимка каналов в Set ключей selKey.
+function _channelsToSet(channels) {
+  return new Set((channels || []).map((c) =>
+    typeof c === "string" ? selKey(c, "") : selKey(c.channel, c.target_id || "")));
+}
+function _setsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+function _schedStatusNote(status) {
+  if (status === "publishing") return "Публикуется — редактирование недоступно";
+  if (status === "done") return "Опубликовано";
+  if (status === "cancelled") return "Отменено";
+  return status;
+}
+
+// Форма редактирования поста: текст, каналы, время. Используется inline в SchedItem
+// и через модальное окно из журнала (ReportRow). post — объект ScheduledOut.
+function SchedEditForm({ base, post, onSaved, onClose }) {
+  const [text, setText] = useState(() => post.text);
+  const [when, setWhen] = useState(() => toLocalInput(post.scheduled_at));
+  const [selected, setSelected] = useState(() => _channelsToSet(post.channels));
+  const [targets, setTargets] = useState(null);
+  // Медиа: null = не менялось (шлём без поля image), "" = удалить (не поддержано API),
+  // непустая строка = новый источник (URL / имя файла).
+  const [imageInput, setImageInput] = useState("");   // что ввёл пользователь
+  const [showImageInput, setShowImageInput] = useState(false); // раскрыт ли блок замены
+  const [busy, setBusy] = useState(false);
+  const [fieldErr, setFieldErr] = useState({});
+  const isFailed = post.status === "failed";
+
+  // Показываем текущее медиа из post.media_paths (первый файл, остальные игнорируем в форме).
+  const currentMediaPath = (post.media_paths || [])[0] || null;
+  // Имя файла для отображения (последняя часть пути).
+  const mediaFilename = (p) => p ? p.split(/[\\/]/).pop() : "";
+
+  useEffect(() => {
+    api.get(`${base}/publish/targets?content_type=${post.content_type}`)
+      .then(setTargets).catch(() => setTargets([]));
+  }, [base, post.content_type]);
+
+  async function save() {
+    setBusy(true); setFieldErr({});
+    const patch = {};
+    if (text !== post.text) patch.text = text;
+    if (when !== toLocalInput(post.scheduled_at)) patch.scheduled_at = when;
+    const origSet = _channelsToSet(post.channels);
+    if (!_setsEqual(selected, origSet))
+      patch.channels = [...selected].map(parseSelKey)
+        .map(({ channel, target_id }) => target_id ? { channel, target_id } : channel);
+    // Медиа: шлём только если пользователь ввёл новый источник.
+    if (showImageInput && imageInput.trim()) patch.image = imageInput.trim();
+    if (!Object.keys(patch).length) { onClose?.(); setBusy(false); return; }
+    try {
+      // Используем fetch напрямую — нужен статус-код для различения 409/422/404.
+      const r = await fetch(`${base}/scheduled/${post.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (r.ok) { onSaved?.(); return; }
+      const body = await r.json().catch(() => ({ detail: r.statusText }));
+      const msg = body.detail || r.statusText;
+      if (r.status === 409) {
+        // Исполнитель успел захватить пост — правка не применена; обновляем список.
+        onSaved?.();
+        setFieldErr({ _general: "Пост взят в обработку — изменения не применены. Статус обновлён." });
+      } else if (r.status === 404) {
+        onSaved?.();  // пост исчез — обновить список
+      } else {
+        const fe = {};
+        if (msg.startsWith("scheduled_at:")) fe.scheduled_at = msg;
+        else if (msg.startsWith("channels:")) fe.channels = msg;
+        else if (patch.image !== undefined) fe.image = msg;  // ошибка разрешения медиа
+        else fe._general = msg;
+        setFieldErr(fe);
+      }
+    } catch (ex) { setFieldErr({ _general: ex.message }); }
+    finally { setBusy(false); }
+  }
+
+  return h("div", { className: "sched-edit-form" },
+    h("div", { className: "sched-edit-field" },
+      h("label", { className: "form-label" }, "Время публикации"),
+      h("input", { className: "form-input", type: "datetime-local", value: when,
+        onChange: (e) => setWhen(e.target.value), style: { maxWidth: "220px" } }),
+      fieldErr.scheduled_at && h("div", { className: "outcome-err" }, fieldErr.scheduled_at),
+    ),
+    h("div", { className: "sched-edit-field" },
+      h("label", { className: "form-label" }, "Текст"),
+      h("textarea", { className: "form-input", value: text, rows: 4,
+        style: { resize: "vertical", minHeight: "80px", fontFamily: "inherit" },
+        onChange: (e) => setText(e.target.value) }),
+      fieldErr.text && h("div", { className: "outcome-err" }, fieldErr.text),
+    ),
+    h("div", { className: "sched-edit-field" },
+      h("label", { className: "form-label" }, "Медиа"),
+      // Текущее медиа — показываем всегда, чтобы пользователь видел что прикреплено.
+      // URL превью — аутентифицированный маршрут; клиент не называет путь.
+      currentMediaPath
+        ? h("div", { className: "sched-media-cur" },
+            h("img", {
+              className: "sched-media-thumb",
+              // ?v= — cache-bust по имени файла: меняется при замене медиа (новый sched-key).
+              src: `${base}/scheduled/${post.id}/media/0?v=${encodeURIComponent(mediaFilename(currentMediaPath))}`,
+              alt: mediaFilename(currentMediaPath),
+              onError: (e) => { e.target.style.display = "none"; },
+            }),
+            h("span", { className: "sched-media-filename" }, mediaFilename(currentMediaPath)),
+          )
+        : h("span", { className: "sched-media-none" }, "Медиа не прикреплено"),
+      // Блок замены раскрывается по кнопке.
+      h("button", { className: "sched-media-toggle", style: { marginTop: "6px" },
+        onClick: () => { setShowImageInput((v) => !v); setImageInput(""); setFieldErr((e) => ({ ...e, image: undefined })); } },
+        showImageInput ? "Отмена замены" : currentMediaPath ? "Заменить картинку" : "Прикрепить картинку"),
+      showImageInput && h("div", { className: "sched-media-input-row", style: { marginTop: "6px" } },
+        h("input", { className: "form-input mono", type: "text", value: imageInput,
+          placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg",
+          onChange: (e) => setImageInput(e.target.value),
+          style: { fontFamily: "var(--font-mono)", fontSize: "13px" } }),
+        h("p", { className: "form-hint" },
+          "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Google Drive не поддерживается."),
+      ),
+      fieldErr.image && h("div", { className: "outcome-err" }, fieldErr.image),
+    ),
+    h("div", { className: "sched-edit-field" },
+      h("label", { className: "form-label" }, "Каналы"),
+      targets === null
+        ? h("span", { className: "text-3", style: { fontSize: "13px" } }, "Загружаю каналы…")
+        : targets.length === 0
+          ? h("span", { className: "outcome-err" }, "Нет доступных каналов")
+          : h("div", { className: "sched-edit-targets" },
+              targets.map((t) => {
+                const k = selKey(t.channel, t.target_id);
+                const label = t.target_name ? `${t.title} · ${t.target_name}` : t.title;
+                return h("label", { key: k, className: `sched-edit-check${t.eligible ? "" : " disabled"}` },
+                  h("input", { type: "checkbox", disabled: !t.eligible,
+                    checked: selected.has(k),
+                    onChange: (e) => setSelected((prev) => {
+                      const next = new Set(prev); e.target.checked ? next.add(k) : next.delete(k); return next;
+                    }) }),
+                  label,
+                  !t.eligible && t.reason && h("span", { className: "text-3", style: { fontSize: "11px" } }, ` (${t.reason})`),
+                );
+              }),
+            ),
+      fieldErr.channels && h("div", { className: "outcome-err" }, fieldErr.channels),
+    ),
+    isFailed && h("p", { className: "form-hint" },
+      "Сохранение перезапустит пост. Каналы, которые уже опубликовали, повторно отправлены не будут.",
+    ),
+    fieldErr._general && h("div", { className: "outcome-err" }, fieldErr._general),
+    h("div", { className: "sched-edit" },
+      h("button", { className: "btn btn-primary btn-sm", onClick: save, disabled: busy || targets === null },
+        busy && h(Spinner), busy ? " Сохраняю…" : isFailed ? "Сохранить и перезапустить" : "Сохранить"),
+      h("button", { className: "btn btn-ghost btn-sm", onClick: onClose, disabled: busy }, "Отмена"),
     ),
   );
 }
 
-// ── Запланированные: список с отменой и правкой времени ──────────────────────
+// Модальное окно редактирования — для записей журнала (ReportRow).
+// Загружает полный ScheduledOut с сервера перед показом формы.
+function EditSchedModal({ base, postId, contentType, onClose, onSaved }) {
+  const [post, setPost] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
+  useEffect(() => {
+    api.get(`${base}/scheduled/${postId}`)
+      .then(setPost)
+      .catch((ex) => setLoadErr(ex.message));
+  }, [base, postId]);
+
+  return h(Modal, { title: "Редактировать пост", onClose },
+    loadErr
+      ? h("div", { className: "outcome-err" }, loadErr)
+      : !post
+        ? h("div", { className: "text-3", style: { padding: "8px 0" } }, "Загружаю…")
+        : h(SchedEditForm, { base, post, onClose, onSaved: () => { onSaved?.(); onClose(); } }),
+  );
+}
 
 function SchedItem({ base, s, onChanged }) {
   const [editing, setEditing] = useState(false);
-  const [when, setWhen] = useState(() => toLocalInput(s.scheduled_at));
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState(null); // {all_done, results}
+  const [sendResult, setSendResult] = useState(null);
   const [err, setErr] = useState(null);
 
-  async function save() {
-    setBusy(true); setErr(null);
-    try {
-      // Шлём naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await api.patch(`${base}/scheduled/${s.id}`, { scheduled_at: when });
-      setEditing(false); onChanged?.();
-    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
-  }
+  const canEdit = s.status === "scheduled" || s.status === "failed";
+
+  function startEdit() { setErr(null); setEditing(true); }
+
   async function cancel() {
     try { await api.del(`${base}/scheduled/${s.id}`); onChanged?.(); }
     catch (ex) { setErr(ex.message); }
@@ -2695,28 +3234,23 @@ function SchedItem({ base, s, onChanged }) {
     try {
       const res = await api.post(`${base}/scheduled/${s.id}/publish-now`, {});
       setSendResult(res);
-      if (res.all_done) onChanged?.(); // пост опубликован — убрать из списка
+      if (res.all_done) onChanged?.();
     } catch (ex) { setErr(ex.message); } finally { setSending(false); }
   }
 
   return h("div", { className: "sched-item" },
     h("div", { className: "sched-main" },
-      editing
-        ? h("div", { className: "sched-edit" },
-            h("input", { className: "form-input", type: "datetime-local", value: when,
-              onChange: (e) => setWhen(e.target.value), style: { maxWidth: "220px" } }),
-            h("button", { className: "btn btn-primary btn-sm", onClick: save, disabled: busy },
-              busy && h(Spinner), busy ? " Сохраняю…" : "Сохранить"),
-            h("button", { className: "btn btn-ghost btn-sm", onClick: () => setEditing(false) }, "Отмена"),
-          )
-        : h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
-      h("div", { className: "sched-text" },
+      !editing && h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
+      !editing && h("div", { className: "sched-text" },
         s.text || "(без текста)",
         s.has_article && h("span", { className: "sched-badge",
-          title: "К посту привязана статья Telegraph — выйдет первой, пост получит ссылку" },
-          " + статья"),
+          title: "К посту привязана статья Telegraph — выйдет первой, пост получит ссылку" }, " + статья"),
       ),
-      h("div", { className: "sched-chans mono" }, schedChannelsLabel(s.channels)),
+      !editing && h("div", { className: "sched-chans mono" }, schedChannelsLabel(s.channels)),
+      editing && h(SchedEditForm, { base, post: s,
+        onClose: () => setEditing(false),
+        onSaved: () => { setEditing(false); onChanged?.(); },
+      }),
       err && h("div", { className: "outcome-err" }, err),
       sendResult && h("div", { className: "sched-result" },
         (sendResult.results || []).map((r, i) => h("div", {
@@ -2724,17 +3258,17 @@ function SchedItem({ base, s, onChanged }) {
           className: `sched-result-row ${r.status === "done" || r.status === "submitted" ? "ok" : "fail"}`,
         },
           h("span", { className: "mono" }, r.target_name ? `${r.channel} · ${r.target_name}` : r.channel),
-          h("span", null, " → "),
-          h("span", null, r.status === "done" || r.status === "submitted" ? "✓ опубликовано" : `✗ ${r.error || r.status}`),
+          " → ",
+          r.status === "done" || r.status === "submitted" ? "✓ опубликовано" : `✗ ${r.error || r.status}`,
         )),
       ),
     ),
     !editing && h("div", { className: "sched-actions" },
-      h("button", { className: "btn btn-primary btn-sm", onClick: sendNow, disabled: sending },
+      canEdit && h("button", { className: "btn btn-primary btn-sm", onClick: sendNow, disabled: sending },
         sending && h(Spinner), sending ? " Отправляю…" : "Отправить сейчас"),
-      h("button", { className: "btn btn-ghost btn-sm",
-        onClick: () => { setWhen(toLocalInput(s.scheduled_at)); setEditing(true); } }, "Время"),
-      h("button", { className: "btn btn-danger btn-sm", onClick: cancel }, "Отменить"),
+      canEdit && h("button", { className: "btn btn-ghost btn-sm", onClick: startEdit }, "Редактировать"),
+      canEdit && h("button", { className: "btn btn-danger btn-sm", onClick: cancel }, "Отменить"),
+      !canEdit && h("span", { className: "sched-status-note" }, _schedStatusNote(s.status)),
     ),
   );
 }
@@ -2744,6 +3278,8 @@ function ScheduledList({ base, items, onChanged }) {
   return h("div", null,
     h("p", { className: "section-title", style: { marginTop: "24px" } }, `Запланировано (${items.length})`),
     h("div", { className: "sched-list" },
+      // key — s.id, не индекс: индексный ключ делает remount SchedItem при каждом
+      // тике поллинга и сбрасывает открытую форму редактирования с несохранённым текстом.
       items.map((s) => h(SchedItem, { key: s.id, base, s, onChanged }))),
   );
 }
@@ -2897,6 +3433,7 @@ function ImportReportView({ report }) {
 
   // Индекс warnings по row_number для быстрого поиска.
   const warnMap = Object.fromEntries(warnings.map(w => [w.row_number, w]));
+  const problemSet = new Set(problems.map(p => p.row_number));
 
   return h("div", null,
     // Сводка.
@@ -2943,8 +3480,7 @@ function ImportReportView({ report }) {
               h("td", null,
                 h("div", { className: "plan-row-text" },
                   (r.text || "(без текста)").slice(0, 80) + ((r.text || "").length > 80 ? "…" : ""),
-                  r.has_article && h("span", { className: "sched-badge",
-                    title: "Строка несёт статью Telegraph — выйдет первой, пост получит ссылку" }, " + статья"),
+                  r.has_article && h("span", { className: "sched-badge" }, " + статья"),
                 ),
               ),
               h("td", null, h("span", { className: `plan-src ${r.source}` }, r.source === "rule" ? "правило" : "дата")),

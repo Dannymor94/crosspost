@@ -17,12 +17,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
@@ -43,6 +47,7 @@ from crosspost.orchestrator.publish_service import (
     selections_from_stored,
 )
 from crosspost.orchestrator.task import new_publication_id
+from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import SessionDep, require_profile_access
 
@@ -51,7 +56,61 @@ logger = logging.getLogger(__name__)
 # client не дёрнет чужой profile_id (403), даже мимо UI.
 router = APIRouter(tags=["publish"], dependencies=[Depends(require_profile_access)])
 
+
+def _make_http_client() -> httpx.AsyncClient:
+    """Фабрика httpx-клиента — переопределяется в тестах через unittest.mock.patch."""
+    return httpx.AsyncClient()
+
+
+def _make_preview_client() -> httpx.AsyncClient:
+    """Preview-specific httpx client factory — patched in tests."""
+    return httpx.AsyncClient()
+
+
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
+
+# ── Preview block cache ───────────────────────────────────────────────────────
+# Process-level URL → (data_uri, expiry) cache.
+# Avoids re-fetching the same image URL on every debounced keystroke while the user
+# edits. TTL = 5 minutes; capped at 50 entries (oldest evicted first).
+_PREVIEW_CACHE_MAX = 50
+_PREVIEW_CACHE_TTL = 300.0  # seconds
+
+# key: url → (data_uri: str, expiry: float)
+_preview_url_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
+
+
+async def _fetch_preview_data_uri(url: str, *, client: httpx.AsyncClient) -> str:
+    """Fetch image URL and return base64 data URI, using the process-level cache.
+
+    Only http(s) URLs are accepted.  parse_blocks guarantees this via _is_sole_url
+    (bare filenames become ParagraphBlock, never ImageBlock), but we guard here
+    explicitly so a future caller cannot accidentally reach the URL-keyed cache
+    with a filesystem path, which would be a cross-profile data leak.
+
+    Caps individual image downloads at 1 MB so preview responses stay small.
+    """
+    # Defense-in-depth: reject non-http(s) URLs regardless of caller assumptions.
+    if not url.startswith(("http://", "https://")):
+        raise MediaSourceError(f"preview: только http(s) URL допустимы (получено: {url!r})")
+
+    now = time.monotonic()
+    if url in _preview_url_cache:
+        data_uri, expiry = _preview_url_cache[url]
+        if now < expiry:
+            _preview_url_cache.move_to_end(url)
+            return data_uri
+        del _preview_url_cache[url]
+
+    media = await fetch_media(url, client=client, max_bytes=1024 * 1024)
+    ext = media.filename.rsplit(".", 1)[-1].lower() if "." in media.filename else "jpeg"
+    mime = {"png": "image/png", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/jpeg")
+    data_uri = f"data:{mime};base64,{base64.b64encode(media.data).decode()}"
+
+    _preview_url_cache[url] = (data_uri, now + _PREVIEW_CACHE_TTL)
+    while len(_preview_url_cache) > _PREVIEW_CACHE_MAX:
+        _preview_url_cache.popitem(last=False)
+    return data_uri
 
 
 @dataclass
@@ -119,6 +178,7 @@ class ScheduledOut(BaseModel):
     scheduled_at: str
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
+    media_paths: list[str] = []  # пути к файлам медиа (для показа в форме редактирования)
 
 
 class ScheduledReportOut(BaseModel):
@@ -220,6 +280,89 @@ def _build_content(content_type: str, text: str, title: str | None, media_paths:
     )
 
 
+# ── Article block preview ─────────────────────────────────────────────────────
+
+
+class PreviewBlock(BaseModel):
+    type: str  # "p" | "img"
+    index: int
+    text: str | None = None  # paragraph text
+    url: str | None = None  # image source URL
+    data_uri: str | None = None  # base64 data URI if resolved
+    error: str | None = None  # MediaSourceError reason if failed
+
+
+@router.post("/api/profiles/{profile_id}/publish/resolve-media")
+async def resolve_media_preview(
+    profile_id: int,
+    session: SessionDep,
+    image: str = Form(""),
+) -> dict:
+    """Preview-resolve a media URL (http, Yandex.Disk, source-folder filename).
+
+    Returns {data_uri, filename} for thumbnail display before publishing.
+    Raises 422 with the server's reason on SSRF, unreachable, oversized, path-escape.
+    Cap: 1 MB (preview only — publish re-fetches at full size).
+    """
+    if not image.strip():
+        raise HTTPException(status_code=422, detail="image: URL не указан")
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+    try:
+        async with _make_http_client() as http:
+            media = await fetch_media(
+                image.strip(), folder=folder, client=http, max_bytes=1024 * 1024
+            )
+    except MediaSourceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    ext = media.filename.rsplit(".", 1)[-1].lower() if "." in media.filename else "jpeg"
+    mime = {"png": "image/png", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/jpeg")
+    data_uri = f"data:{mime};base64,{base64.b64encode(media.data).decode()}"
+    return {"data_uri": data_uri, "filename": media.filename}
+
+
+@router.post(
+    "/api/profiles/{profile_id}/publish/preview-blocks",
+    response_model=list[PreviewBlock],
+)
+async def preview_article_blocks(
+    profile_id: int,
+    text: str = Form(""),
+) -> list[PreviewBlock]:
+    """Parse article text into blocks and attempt image resolution.
+
+    Returns ordered blocks mirroring article_blocks.parse_blocks.
+    Image blocks are resolved via fetch_media (SSRF guard, Yandex.Disk, etc.)
+    and returned as base64 data URIs (capped at 1 MB per image) so the client
+    can render thumbnails without extra requests. Failed blocks carry the reason
+    string; they are never silently dropped.
+
+    Caching: resolved images are cached by URL for 5 minutes (_PREVIEW_CACHE_TTL)
+    to avoid hammering remote hosts during debounced edits. Cache is process-level,
+    capped at _PREVIEW_CACHE_MAX entries (LRU eviction).
+    """
+    from crosspost.content.article_blocks import ParagraphBlock, parse_blocks
+
+    blocks = parse_blocks(text)
+    result: list[PreviewBlock] = []
+
+    async with _make_preview_client() as client:
+        for i, block in enumerate(blocks):
+            if isinstance(block, ParagraphBlock):
+                result.append(PreviewBlock(type="p", index=i, text=block.text))
+            else:
+                try:
+                    data_uri = await _fetch_preview_data_uri(block.url, client=client)
+                    result.append(
+                        PreviewBlock(type="img", index=i, url=block.url, data_uri=data_uri)
+                    )
+                except MediaSourceError as exc:
+                    result.append(PreviewBlock(type="img", index=i, url=block.url, error=str(exc)))
+
+    return result
+
+
 # ── Targets (доступные каналы) ────────────────────────────────────────────────
 
 
@@ -304,6 +447,7 @@ async def publish_now(
     channels: str = Form(...),  # JSON-массив каналов
     article_text: str = Form(""),  # тело лонгрида → статья Telegraph + ссылка в посте
     link_phrase: str = Form(""),  # фраза ссылки на статью (пусто → «Подробнее»)
+    image: str = Form(""),  # URL / Яндекс.Диск / имя файла — альтернатива file upload
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -315,6 +459,18 @@ async def publish_now(
 
     publication_id = new_publication_id()
     media_paths = await _save_media(media, publication_id)
+    if not media_paths and image.strip():
+        from crosspost.db.settings_repo import ProfileSettingsRepository
+
+        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+        try:
+            async with _make_http_client() as http:
+                fetched = await fetch_media(image.strip(), folder=folder, client=http)
+            media_paths = media_store.save_binaries(
+                [(fetched.filename, fetched.data)], publication_id
+            )
+        except MediaSourceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     content = _build_content(content_type, text, title, media_paths)
     _validate_or_422(content)
 
@@ -420,6 +576,7 @@ async def schedule_post(
     channels: str = Form(...),
     article_text: str = Form(""),  # тело лонгрида → статья Telegraph при исполнении
     link_phrase: str = Form(""),  # фраза ссылки на статью (пусто → «Подробнее»)
+    image: str = Form(""),  # URL / Яндекс.Диск / имя файла — альтернатива file upload
     media: list[UploadFile] = File(default=[]),  # noqa: B008
 ) -> ScheduledOut:
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -447,6 +604,16 @@ async def schedule_post(
 
     key = f"sched-{new_publication_id()}"
     media_paths = await _save_media(media, key)
+    if not media_paths and image.strip():
+        from crosspost.db.settings_repo import ProfileSettingsRepository
+
+        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+        try:
+            async with _make_http_client() as http:
+                fetched = await fetch_media(image.strip(), folder=folder, client=http)
+            media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
+        except MediaSourceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     content = _build_content(content_type, text, title, media_paths)
     _validate_or_422(content)
 
@@ -568,23 +735,144 @@ async def scheduled_screenshots(
     return shots
 
 
-class RescheduleBody(BaseModel):
-    scheduled_at: str  # ISO-8601
+@router.get("/api/profiles/{profile_id}/scheduled/{scheduled_id}/media/{index}")
+async def scheduled_media(profile_id: int, scheduled_id: int, index: int, session: SessionDep):
+    """Отдать медиафайл запланированного поста по индексу (для превью в форме).
+
+    Клиент называет только числовой индекс — путь на диске берётся из БД по post_id.
+    Конфайнмент: путь должен быть внутри media root; выход за root → 404.
+    Изоляция: пост должен принадлежать profile_id; иначе 404.
+    """
+    import mimetypes
+
+    from starlette.responses import FileResponse
+
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+
+    post = await pub_repo.get_scheduled(scheduled_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    paths = list(post.media_paths or [])
+    if index < 0 or index >= len(paths):
+        raise HTTPException(status_code=404, detail="Нет медиафайла с таким индексом")
+
+    candidate = Path(paths[index]).resolve()
+
+    # Конфайнмент: resolved path должен быть внутри media root.
+    # Defence in depth даже для путей из БД.
+    try:
+        candidate.relative_to(media_store._media_root().resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Файл недоступен") from None
+
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден на диске")
+
+    mime, _ = mimetypes.guess_type(candidate.name)
+    return FileResponse(str(candidate), media_type=mime or "application/octet-stream")
+
+
+@router.get("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
+async def get_scheduled_post(
+    profile_id: int, scheduled_id: int, session: SessionDep
+) -> ScheduledOut:
+    """Получить один запланированный пост (для формы редактирования журнала)."""
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    post = await pub_repo.get_scheduled(scheduled_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+    return _scheduled_out(post)
+
+
+class PatchScheduledBody(BaseModel):
+    scheduled_at: str | None = None  # ISO-8601
+    text: str | None = None
+    channels: list | None = None  # list[str] или list[{channel, target_id}]
+    image: str | None = None  # http URL / Yandex.Disk link / source-folder filename
+
+
+# backward-compat alias (старые тесты/клиенты шлют {"scheduled_at": ...})
+RescheduleBody = PatchScheduledBody
 
 
 @router.patch("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
 async def reschedule(
-    profile_id: int, scheduled_id: int, body: RescheduleBody, session: SessionDep
+    profile_id: int, scheduled_id: int, body: PatchScheduledBody, session: SessionDep
 ) -> ScheduledOut:
-    """Сдвинуть время запланированного поста (правка из UI). Изоляция по profile_id."""
+    """Редактировать запланированный пост: текст, цели, время. Изоляция по profile_id."""
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
-    try:
-        when = datetime.fromisoformat(body.scheduled_at)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="scheduled_at: ISO-8601 дата/время") from exc
-    if not await pub_repo.update_scheduled_time(scheduled_id, when):
+
+    # 404 если пост не найден или чужой профиль — до CAS, чтобы не палить существование.
+    post = await pub_repo.get_scheduled(scheduled_id)
+    if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+
+    # Валидация каналов и capability ДО CAS и ДО скачивания медиа — 422 не меняет данные.
+    effective_channels = body.channels if body.channels is not None else list(post.channels or [])
+    try:
+        selections = selections_from_stored(effective_channels)
+    except (TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
+    if body.channels is not None or body.image is not None:
+        await _reject_ineligible(
+            profile_repo, profile_id, selections, post.content_type, session=session
+        )
+
+    when: datetime | None = None
+    if body.scheduled_at is not None:
+        try:
+            when = datetime.fromisoformat(body.scheduled_at)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="scheduled_at: ISO-8601 дата/время"
+            ) from exc
+        # Нормализуем в naive-local (конвенция хранения — как datetime.combine в import_plan):
+        # aware → конвертируем в локальное время системы, потом снимаем tzinfo.
+        # Голый .replace(tzinfo=None) НЕЛЬЗЯ — он молча сдвигает стену на величину offset.
+        when = when.astimezone().replace(tzinfo=None) if when.tzinfo is not None else when
+        if when < datetime.now() - timedelta(seconds=60):
+            raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
+
+    # Разрешаем медиа ДО CAS: если источник невалиден — 422 без записи в БД.
+    new_media_paths: list[str] | None = None
+    if body.image is not None:
+        from crosspost.db.settings_repo import ProfileSettingsRepository
+
+        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+        try:
+            async with _make_http_client() as http:
+                fetched = await fetch_media(body.image, folder=folder, client=http)
+        except MediaSourceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        key = f"sched-{new_publication_id()}"
+        new_media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
+
+    # Запоминаем старые пути ДО CAS (нужны для cleanup после успеха).
+    old_media_paths = list(post.media_paths or []) if new_media_paths is not None else []
+
+    # CAS-апдейт: WHERE status IN ('scheduled','failed') — PUBLISHING/DONE дают rowcount=0.
+    updated = await pub_repo.patch_scheduled_cas(
+        scheduled_id,
+        text=body.text,
+        channels=body.channels,
+        scheduled_at=when,
+        media_paths=new_media_paths,
+        rewind_failed=True,
+    )
+    if not updated:
+        # Orphaned new media: CAS не прошёл — удаляем свежескачанный файл до 409.
+        if new_media_paths:
+            _cleanup_paths_safe(new_media_paths)
+        raise HTTPException(status_code=409, detail="Пост уже исполнен или обрабатывается")
+
+    # Удаляем старое медиа после успешной замены (если не shared).
+    if old_media_paths:
+        await _cleanup_old_media(pub_repo, scheduled_id, old_media_paths)
+
     post = await pub_repo.get_scheduled(scheduled_id)
     assert post is not None
     return _scheduled_out(post)
@@ -651,6 +939,30 @@ async def publish_scheduled_now(
 
 
 # ── Внутреннее ────────────────────────────────────────────────────────────────
+
+
+def _cleanup_paths_safe(paths: list[str]) -> None:
+    """Удалить каталоги медиа по списку путей. Идемпотентно, ошибки логируются."""
+    keys = {Path(p).parent.name for p in paths if p}
+    for key in keys:
+        media_store.cleanup_media(key)
+
+
+async def _cleanup_old_media(
+    pub_repo: PublicationRepository,
+    scheduled_id: int,
+    old_paths: list[str],
+) -> None:
+    """Удалить каталоги старого медиа, только если они не shared с другим постом."""
+    keys = {Path(p).parent.name for p in old_paths if p}
+    for key in keys:
+        try:
+            shared = await pub_repo.media_key_shared(scheduled_id, key)
+        except Exception:  # noqa: BLE001
+            logger.warning("cleanup: failed to check shared for key=%s", key)
+            continue
+        if not shared:
+            media_store.cleanup_media(key)
 
 
 async def _reject_ineligible(
@@ -760,4 +1072,5 @@ def _scheduled_out(post) -> ScheduledOut:
         scheduled_at=post.scheduled_at.isoformat(),
         status=str(post.status),
         has_article=bool(post.article_text),
+        media_paths=list(post.media_paths or []),
     )

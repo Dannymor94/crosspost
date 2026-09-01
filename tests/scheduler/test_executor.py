@@ -18,9 +18,14 @@ from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crosspost.adapters.base import ChannelResult, ResultStatus
-from crosspost.db.engine import create_engine_and_tables
+from crosspost.db.engine import _migrate_scheduled_status, create_engine_and_tables
 from crosspost.db.log_repo import LogRepository
-from crosspost.db.models import ConnectionState, CredentialKind, ScheduledPostStatus
+from crosspost.db.models import (
+    ConnectionState,
+    CredentialKind,
+    PublicationStatus,
+    ScheduledPostStatus,
+)
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.scheduler_repo import SchedulerRepository
@@ -134,7 +139,7 @@ async def test_due_post_is_published(factory):
 
     assert processed == [post_id]
     assert adapter.calls == 1
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
     rows = await _channel_rows(factory, pid, post_id)
     assert str(rows["telegram"].status) == "done"
     assert rows["telegram"].external_id == "tg1"
@@ -197,7 +202,7 @@ async def test_retry_until_cap_then_failed(factory):
         await ex.run_once()
 
     assert adapter.calls == 3
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED
     rows = await _channel_rows(factory, pid, post_id)
     assert str(rows["telegram"].status) == "failed"
     assert rows["telegram"].attempt_count == 3
@@ -224,7 +229,7 @@ async def test_media_kept_until_all_channels_final(factory):
         assert await _post_status(factory, post_id) == ScheduledPostStatus.SCHEDULED
         await ex.run_once()  # vk_wall attempt 2 → потолок → все терминальны
 
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED
     assert not media_dir.exists()  # теперь очищено
     # telegram НЕ публиковался повторно (был done).
     assert ok.calls == 1
@@ -343,7 +348,7 @@ async def test_article_binding_telegraph_first_then_tg_with_link(factory):
     assert tgraph.texts == ["Тело лонгрида"]
     assert tg.calls == 1
     assert url in tg.texts[0]
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
     assert not media_dir.exists()
 
 
@@ -361,9 +366,7 @@ async def test_article_ceiling_fail_closed_channel_not_sent(factory):
         await ex.run_once()  # telegraph падает до потолка (max=1) → fail-closed
 
     assert tg.calls == 0  # TG не публиковался
-    assert (
-        await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
-    )  # не крутится вечно
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED  # не крутится вечно
     rows = await _channel_rows(factory, pid, post_id)
     assert str(rows["telegram"].status) == "failed"
     assert rows["telegram"].error == NO_ARTICLE_REASON
@@ -432,7 +435,7 @@ async def test_multi_target_post_publishes_each_target(factory):
     assert rows[("vk_wall", "10")].external_id == "A"
     assert str(rows[("vk_wall", "20")].status) == "done"
     assert rows[("vk_wall", "20")].external_id == "B"
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
     assert not media_dir.exists()
 
 
@@ -506,9 +509,103 @@ async def test_multi_target_partial_success(factory):
     rows = await _target_rows(factory, pid, post_id)
     assert str(rows[("vk_wall", "10")].status) == "done"
     assert str(rows[("vk_wall", "20")].status) == "failed"
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED
     assert not media_dir.exists()
     assert ok.calls == 1  # успешная цель не пересылалась
+
+
+# ── Статусный автомат: атомарный клейм, реконсиляция, миграция ─────────────────
+
+
+async def test_concurrent_claim_only_one_wins(factory):
+    """Два клейма одного SCHEDULED-поста → ровно один rowcount=1, второй пропускает."""
+    pid = await _make_profile(factory, ["telegram"], name="claim")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"])
+
+    async with factory() as s1, factory() as s2:
+        won1 = await SchedulerRepository(s1).claim(post_id)
+        won2 = await SchedulerRepository(s2).claim(post_id)
+    assert [won1, won2].count(True) == 1
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHING
+
+
+async def test_claim_non_scheduled_fails(factory):
+    """Клейм не-SCHEDULED поста (уже PUBLISHING/DONE/FAILED) → rowcount=0."""
+    pid = await _make_profile(factory, ["telegram"], name="claim2")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"])
+
+    async with factory() as s:
+        repo = SchedulerRepository(s)
+        assert await repo.claim(post_id) is True  # первый клейм — PUBLISHING
+        assert await repo.claim(post_id) is False  # повторный — уже не scheduled
+        await repo.finalize(post_id, success=True)
+        assert await repo.claim(post_id) is False  # DONE — тоже не заклеймить
+
+
+async def test_finalize_done_and_failed(factory):
+    """finalize раскладывает по success в DONE / FAILED (из PUBLISHING)."""
+    pid = await _make_profile(factory, ["telegram"], name="fin")
+    past = datetime.now() - timedelta(minutes=1)
+    ok_id, _ = await _seed_post(factory, pid, past, ["telegram"], media_key="fin-ok")
+    bad_id, _ = await _seed_post(factory, pid, past, ["telegram"], media_key="fin-bad")
+
+    async with factory() as s:
+        repo = SchedulerRepository(s)
+        await repo.claim(ok_id)
+        await repo.finalize(ok_id, success=True)
+        await repo.claim(bad_id)
+        await repo.finalize(bad_id, success=False)
+    assert await _post_status(factory, ok_id) == ScheduledPostStatus.DONE
+    assert await _post_status(factory, bad_id) == ScheduledPostStatus.FAILED
+
+
+async def test_reconcile_resets_stuck_publishing(factory):
+    """PUBLISHING (процесс умер в полёте) на старте → реконсиляция в SCHEDULED."""
+    pid = await _make_profile(factory, ["telegram"], name="stuck")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"])
+
+    async with factory() as s:
+        repo = SchedulerRepository(s)
+        await repo.claim(post_id)  # застряли в PUBLISHING
+        assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHING
+        n = await repo.reconcile_stuck()
+    assert n == 1
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.SCHEDULED
+
+
+async def test_legacy_published_migrates_to_done_or_failed(factory):
+    """Легаси status='published' раскладывается миграцией в DONE/FAILED по публикациям."""
+    from sqlalchemy import text
+
+    pid = await _make_profile(factory, ["telegram"], name="mig")
+    past = datetime.now() - timedelta(minutes=1)
+    done_id, _ = await _seed_post(factory, pid, past, ["telegram"], media_key="mig-d")
+    fail_id, _ = await _seed_post(factory, pid, past, ["telegram"], media_key="mig-f")
+
+    async with factory() as s:
+        pubrepo = PublicationRepository(s, profile_id=pid)
+        await pubrepo.set_status(
+            scheduled_publication_id(done_id), "telegram", PublicationStatus.DONE, external_id="x"
+        )
+        await pubrepo.set_status(
+            scheduled_publication_id(fail_id), "telegram", PublicationStatus.FAILED, error="boom"
+        )
+        # Симулируем легаси-строки: оба в старом статусе 'published'.
+        for i in (done_id, fail_id):
+            await s.execute(
+                text("UPDATE scheduled_posts SET status='published' WHERE id=:i"), {"i": i}
+            )
+        await s.commit()
+        # Прогоняем миграцию напрямую (как в _migrate_sqlite на старте движка).
+        conn = await s.connection()
+        await conn.run_sync(_migrate_scheduled_status)
+        await s.commit()
+
+    assert await _post_status(factory, done_id) == ScheduledPostStatus.DONE
+    assert await _post_status(factory, fail_id) == ScheduledPostStatus.FAILED
 
 
 async def test_legacy_list_str_shape_still_executes(factory):
@@ -526,4 +623,4 @@ async def test_legacy_list_str_shape_still_executes(factory):
     assert calls == [("telegram", "")]
     rows = await _target_rows(factory, pid, post_id)
     assert str(rows[("telegram", "")].status) == "done"
-    assert await _post_status(factory, post_id) == ScheduledPostStatus.PUBLISHED
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
