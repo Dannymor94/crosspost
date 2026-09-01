@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from crosspost.content.canonical import ContentType as T
 
+# Channels that can receive video posts (mp4/mov/etc.).
+# Only channels with an implemented video-sending adapter are listed.
+VIDEO_CHANNELS: frozenset[str] = frozenset({"telegram"})
+
 CAPABILITIES: dict[str, set[T]] = {
     # API-тир
     "telegram": {T.POST, T.ARTICLE, T.REEL, T.STORY},
@@ -27,6 +31,11 @@ CAPABILITIES: dict[str, set[T]] = {
 
 def supports(channel: str, content_type: T) -> bool:
     return content_type in CAPABILITIES.get(channel, set())
+
+
+def supports_video(channel: str) -> bool:
+    """True if channel has an implemented video-sending adapter."""
+    return channel in VIDEO_CHANNELS
 
 
 def channels_for(content_type: T) -> set[str]:

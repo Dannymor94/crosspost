@@ -38,6 +38,7 @@ from datetime import datetime
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
 from crosspost.content.canonical import CanonicalContent
+from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.telegram_text import (
     MESSAGE_LIMIT,
     caption_fits,
@@ -98,9 +99,18 @@ class TelegramAdapter:
         # Telethon-исключения импортируем лениво (SDK не тянем на импорт модуля).
         from telethon.errors import FloodWaitError, RPCError
         from telethon.errors.rpcerrorlist import MediaCaptionTooLongError
+        from telethon.tl.types import DocumentAttributeVideo
 
         text = content.text or ""
         media = content.media_paths
+
+        # Build video attributes when the first media file is a video.
+        # send_file needs DocumentAttributeVideo for correct Telegram playback.
+        # Duration/dimensions default to 0 — Telegram accepts them; the client reads
+        # the actual values from the stream when supports_streaming=True.
+        video_attrs: list | None = None
+        if media and detect_media_kind(media[0]) == MediaKind.VIDEO:
+            video_attrs = [DocumentAttributeVideo(duration=0, w=0, h=0, supports_streaming=True)]
 
         try:
             if not media:
@@ -127,9 +137,15 @@ class TelegramAdapter:
                 )
 
             if caption_fits(text):
-                # ── режим «фото + подпись»: один вызов ─────────────────────────
+                # ── режим «медиа + подпись»: один вызов ────────────────────────
+                extra = {"attributes": video_attrs} if video_attrs else {}
                 sent = await self._client.send_file(
-                    self._target, media, caption=text, parse_mode="html", schedule=self._schedule
+                    self._target,
+                    media,
+                    caption=text,
+                    parse_mode="html",
+                    schedule=self._schedule,
+                    **extra,
                 )
                 ext = _first_id(sent)
                 self._store.mark_done(publication_id, self.channel, external_id=ext)
@@ -140,8 +156,8 @@ class TelegramAdapter:
                     url=_post_url(self._target, ext),
                 )
 
-            # ── режим «фото, затем текст следом»: два вызова ───────────────────
-            # Первая строка → подпись под фото (чтобы не висело немым), остальное —
+            # ── режим «медиа, затем текст следом»: два вызова ──────────────────
+            # Первая строка → подпись под медиа (чтобы не висело немым), остальное —
             # отдельным сообщением. Тело проверяем на лимит сообщения.
             caption, body = split_headline(text)
             if exceeds_message_limit(body):
@@ -154,13 +170,19 @@ class TelegramAdapter:
 
             photo_pub = publication_id + _PHOTO_STEP
 
-            # Шаг 1 — фото с короткой подписью-заголовком. Чекпоинт переживает
-            # падение шага 2: на ретрае фото не пересылается, id берём из стора.
+            # Шаг 1 — медиа с короткой подписью-заголовком. Чекпоинт переживает
+            # падение шага 2: на ретрае медиа не пересылается, id берём из стора.
             if self._store.is_done(photo_pub, self.channel):
                 photo_id = self._store.get_external_id(photo_pub, self.channel)
             else:
+                extra = {"attributes": video_attrs} if video_attrs else {}
                 sent = await self._client.send_file(
-                    self._target, media, caption=caption, parse_mode="html", schedule=self._schedule
+                    self._target,
+                    media,
+                    caption=caption,
+                    parse_mode="html",
+                    schedule=self._schedule,
+                    **extra,
                 )
                 photo_id = _first_id(sent)
                 self._store.mark_done(photo_pub, self.channel, external_id=photo_id)

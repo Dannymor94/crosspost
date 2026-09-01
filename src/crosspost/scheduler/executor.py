@@ -50,6 +50,7 @@ from crosspost.orchestrator.publish_service import (
     Selection,
     selections_from_stored,
 )
+from crosspost.scheduler.browser_cooldown import BrowserCooldown
 from crosspost.web import media as media_store
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,14 @@ class ScheduledExecutor:
         max_attempts: int = 3,
         pacing_seconds: float = 5.0,
         poll_seconds: float = 30.0,
+        browser_session_cooldown: float = 0.0,
         sleep: SleepFn = asyncio.sleep,
     ) -> None:
         self._factory = session_factory
         self._max_attempts = max(1, max_attempts)
         self._pacing = max(0.0, pacing_seconds)
         self._poll = max(0.0, poll_seconds)
+        self._browser_cooldown = max(0.0, browser_session_cooldown)
         self._sleep = sleep
 
     # ── Конфигурация ──────────────────────────────────────────────────────────
@@ -98,6 +101,9 @@ class ScheduledExecutor:
             max_attempts=int(os.environ.get("SCHEDULER_MAX_ATTEMPTS", "3")),
             pacing_seconds=float(os.environ.get("SCHEDULER_PACING_SECONDS", "5")),
             poll_seconds=float(os.environ.get("SCHEDULER_POLL_SECONDS", "30")),
+            browser_session_cooldown=float(
+                os.environ.get("BROWSER_SESSION_COOLDOWN_SECONDS", "300")
+            ),
         )
 
     # ── Публичный API ─────────────────────────────────────────────────────────
@@ -141,13 +147,14 @@ class ScheduledExecutor:
         for i, post_id in enumerate(due_ids):
             if i > 0 and self._pacing > 0:
                 await self._sleep(self._pacing)  # разнос отправок (анти-бан)
-            await self._process_post(post_id)
+            await self._process_post(post_id, now=moment)
             processed.append(post_id)
         return processed
 
     # ── Обработка одного поста ────────────────────────────────────────────────
 
-    async def _process_post(self, post_id: int) -> None:
+    async def _process_post(self, post_id: int, *, now: datetime | None = None) -> None:
+        moment = now if now is not None else datetime.now()
         async with self._factory() as session:
             sched_repo = SchedulerRepository(session)
             post = await sched_repo.get(post_id)
@@ -166,10 +173,13 @@ class ScheduledExecutor:
             profile_repo = ProfileRepository(session, vault=get_vault())
             service = self._make_service(profile_repo, pub_repo, post.profile_id)
             log_repo = LogRepository(session)
+            cooldown = BrowserCooldown(session, cooldown_seconds=self._browser_cooldown)
 
             # Единый секвенсор связки статья→каналы. Различие с publish-now —
             # ТОЛЬКО политика ретраев, инъектируемая как step (здесь — с потолком).
-            step = self._ceiling_step(pub_repo, service, log_repo, post.profile_id, pubid)
+            step = self._ceiling_step(
+                pub_repo, service, log_repo, post.profile_id, pubid, cooldown, moment
+            )
             fail_closed = self._fail_closed(pub_repo, log_repo, post.profile_id, pubid)
 
             flow = await run_binding(
@@ -200,12 +210,18 @@ class ScheduledExecutor:
         log_repo: LogRepository,
         profile_id: int,
         pubid: str,
+        cooldown: BrowserCooldown,
+        now: datetime,
     ):
         """step с ретрай-потолком: инкапсулирует bump_attempt/потолок/логирование.
 
         Уже-DONE/SUBMITTED канал короткозамыкается в DONE без повторной отправки
         (идемпотентность). Исчерпанный потолок → FAILED. Иначе одна попытка и, если
         всё ещё неуспех и лимит не достигнут, → PENDING (следующий тик добьёт).
+
+        Browser-tier cooldown: if the account is within the per-channel cooldown
+        window, the channel is deferred as PENDING WITHOUT consuming a retry attempt.
+        The deferral is logged as INFO (not ERROR) to keep operator console clean.
         """
 
         # Счётчик реальных отправок в адаптер за этот проход поста — для пейсинга
@@ -221,10 +237,26 @@ class ScheduledExecutor:
             if row is not None and row.attempt_count >= self._max_attempts:
                 return StepResult(StepState.FAILED, self._outcome_from_row(row), None)
 
+            # Browser cooldown gate — defers without consuming a retry attempt.
+            if await cooldown.is_cooling_down(profile_id, channel, now):
+                label = f"{channel}·{target}" if target else channel
+                await log_repo.add(
+                    profile_id,
+                    channel=channel,
+                    publication_id=pubid,
+                    level="INFO",
+                    message=f"scheduler: {label} → deferred (browser session cooldown)",
+                )
+                deferred_outcome = ChannelOutcome(channel, "deferred", target=target)
+                return StepResult(StepState.PENDING, deferred_outcome, None)
+
             if dispatched[0] > 0 and self._pacing > 0:
                 await self._sleep(self._pacing)  # разнос отправок между целями
             dispatched[0] += 1
 
+            # Record session BEFORE the adapter call: if the process crashes mid-flight,
+            # the cooldown window is still honoured on the next retry.
+            await cooldown.record_session(profile_id, channel, now)
             # Счётчик +1 ДО попытки — переживает падение процесса (потолок соблюдён).
             await pub_repo.bump_attempt(pubid, channel, target=target)
             outcome = await service.retry_channel(content, sel, publication_id=pubid)

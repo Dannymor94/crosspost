@@ -26,6 +26,7 @@ IP, конфайнмент папки) — без сети и БД, тестир
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -37,7 +38,11 @@ import httpx
 
 _TIMEOUT_SECONDS = 20.0
 _MAX_BYTES = 25 * 1024 * 1024  # 25 МБ — потолок картинки по умолчанию
+# Telegram allows up to 2 GB for videos; 500 MB is a practical default.
+_VIDEO_MAX_BYTES = int(os.getenv("VIDEO_MAX_BYTES", str(500 * 1024 * 1024)))
 _YADISK_API = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
+
+
 class MediaSourceError(ValueError):
     """Источник медиа непригоден: не скачать, приватный адрес, нет файла, велик размер."""
 
@@ -238,3 +243,54 @@ async def _yadisk_href(
     if not href:
         raise MediaSourceError("Яндекс.Диск: ссылка недоступна.")
     return str(href)
+
+
+async def stream_to_file(
+    url: str,
+    dest: Path,
+    *,
+    client: httpx.AsyncClient | None = None,
+    max_bytes: int = _VIDEO_MAX_BYTES,
+    timeout: float = _TIMEOUT_SECONDS,
+    resolve: Callable[[str], list[str]] | None = None,
+) -> str:
+    """Stream URL to disk without buffering the full file in memory.
+
+    SSRF guard and size ceiling apply identically to _download.
+    Cleans up the partial file on any error.
+    Returns the filename extracted from the URL.
+    """
+    assert_public_http_url(url, resolve=resolve)
+    own_client = client is None
+    _client = client or httpx.AsyncClient()
+    try:
+        total = 0
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with dest.open("wb") as fh:
+                async with _client.stream(
+                    "GET", url, timeout=timeout, follow_redirects=True
+                ) as resp:
+                    if resp.status_code != 200:
+                        raise MediaSourceError(
+                            f"Не удалось скачать файл (HTTP {resp.status_code})."
+                        )
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise MediaSourceError(
+                                "Видео превышает допустимый размер (лимит размера)."
+                            )
+                        fh.write(chunk)
+        except MediaSourceError:
+            if dest.exists():
+                dest.unlink()
+            raise
+        if total == 0:
+            if dest.exists():
+                dest.unlink()
+            raise MediaSourceError("Скачанный файл пуст.")
+        return _filename_from_url(url, "video.mp4")
+    finally:
+        if own_client:
+            await _client.aclose()

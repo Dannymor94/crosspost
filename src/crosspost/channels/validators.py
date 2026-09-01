@@ -121,6 +121,13 @@ class ChannelValidatorDef:
     # куки этих доменов — иначе сессия пустая → «вход не выполнен» (страховка от ложного LIVE)
     session_channel: str | None = None  # из какого канала брать/писать сессию
     # (vk_channel делит аккаунт с vk_wall → session_channel="vk_wall")
+    # ── Cooldown-группа аккаунта ──────────────────────────────────────────────
+    # Каналы с одинаковым непустым account_group разделяют один браузерный
+    # аккаунт и поэтому попадают в один bucket пейсинга (см. browser_cooldown.py).
+    # Пусто ("") → bucket = имя самого канала (каждый за себя).
+    # VK: vk_wall, vk_channel, vk_clips → account_group="vk".
+    # Яндекс Бизнес: своя группа (пусто → "yandex").
+    account_group: str = ""
     # ── Цель постинга (per-profile) ───────────────────────────────────────────
     # Сессия может быть общей (один аккаунт), но КУДА постим — своё у каждого
     # профиля. Без цели канал не eligible: разные клиенты → разные группы.
@@ -336,6 +343,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         reject_fragments=("vk.com/login", "id.vk.com"),
         # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
+        account_group="vk",
         needs_target=True,
         target_label="Адрес группы",
         target_hint="Вставьте адрес группы: vk.com/XXXX или полную ссылку — оставим только имя",
@@ -358,6 +366,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         # require_selector: снять с живой vk.com/feed (аватар/ссылка на свою страницу).
         session_cookie_domains=("vk.com",),
         session_channel="vk_wall",  # сессию берём/пишем в vk_wall (общий аккаунт)
+        account_group="vk",
         needs_target=True,
         target_label="ID канала VK",
         target_hint="Числовой id канала сообщества (напр. -240033402)",
