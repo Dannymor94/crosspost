@@ -287,3 +287,35 @@ async def test_photo_post_send_file_caption_and_parse_mode(tmp_path):
     _, kwargs = client.send_file.call_args
     assert kwargs["caption"] == "<b>Жирный</b> текст"
     assert kwargs["parse_mode"] == "html"
+
+
+# ── Real duration and size of the video (hachoir) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_video_attribute_carries_real_duration_and_size(tmp_path, monkeypatch):
+    """Explicit attributes override Telethon's own inference, so the adapter must put the
+    real values in: with zeros Telegram shows the reel as 0:00 with a square preview."""
+    from crosspost.adapters.api import telegram as tg
+
+    monkeypatch.setattr(tg, "_video_meta", lambda path: (37.4, 1080, 1920))
+    client = _make_client()
+    adapter = TelegramAdapter(client, target="@channel", store=_store())
+    await adapter.publish(_video_post(tmp_path), publication_id=_pub_id())
+    from telethon.tl.types import DocumentAttributeVideo
+
+    attr = next(
+        a
+        for a in client.send_file.call_args.kwargs["attributes"]
+        if isinstance(a, DocumentAttributeVideo)
+    )
+    assert (attr.duration, attr.w, attr.h, attr.supports_streaming) == (37.4, 1080, 1920, True)
+
+
+def test_video_meta_falls_back_to_zeros_on_an_unreadable_file(tmp_path):
+    from crosspost.adapters.api.telegram import _video_meta
+
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"\x00mp4")
+    assert _video_meta(bad) == (0.0, 0, 0)
+    assert _video_meta(tmp_path / "missing.mp4") == (0.0, 0, 0)

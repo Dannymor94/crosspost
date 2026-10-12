@@ -10,10 +10,12 @@ dependencies = [
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
     "telethon==1.44.0",     # Telegram (userbot)
+    "hachoir==3.3.0",       # длительность/размер видео для Telegram (иначе рилс 0:00, квадратный)
     "vkbottle==4.10.0",     # ВКонтакте (API-тир, ждёт рабочий токен)
     "httpx==0.28.1",        # Telegraph и прочие REST
     "fastapi==0.115.12",
     "uvicorn==0.34.3",
+    "python-multipart==0.0.20",  # FastAPI Form/File (POST /publish): без него роуты публикации не поднимаются
     "openpyxl==3.1.5",      # импорт контент-плана из XLSX (CSV — stdlib)
 ]
 

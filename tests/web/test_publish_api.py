@@ -716,16 +716,24 @@ async def test_reschedule_updates_time(client, factory):
     )
     sched_id = resp.json()["id"]
 
+    # Время переноса — всегда в будущем: фиксированная дата «протухла» и роняла тест
+    # (PATCH отвечает 422 «нельзя назначить в прошлое»). Время постов — naive-local.
+    from datetime import datetime, timedelta
+
+    later = (datetime.now() + timedelta(days=30)).replace(
+        hour=18, minute=30, second=0, microsecond=0
+    )
+    stamp = later.strftime("%Y-%m-%dT%H:%M")
     patched = await client.patch(
         f"/api/profiles/{pid}/scheduled/{sched_id}",
-        json={"scheduled_at": "2026-09-15T18:30:00"},
+        json={"scheduled_at": later.isoformat()},
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["scheduled_at"].startswith("2026-09-15T18:30")
+    assert patched.json()["scheduled_at"].startswith(stamp)
 
     # Изменение видно в списке.
     listed = await client.get(f"/api/profiles/{pid}/scheduled")
-    assert listed.json()[0]["scheduled_at"].startswith("2026-09-15T18:30")
+    assert listed.json()[0]["scheduled_at"].startswith(stamp)
 
 
 async def test_reschedule_missing_post_404(client, factory):

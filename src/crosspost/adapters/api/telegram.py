@@ -53,6 +53,33 @@ _PHOTO_STEP = "#photo"  # суффикс publication_id для чекпоинт�
 _USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 
 
+def _video_meta(path) -> tuple[float, int, int]:
+    """(длительность, ширина, высота) видео через hachoir — тот же разбор, что делает
+    Telethon, когда атрибуты не заданы (telethon.utils._get_metadata). Без hachoir или
+    при сбое разбора — нули: Telegram примет, но покажет 0:00 и квадратное превью."""
+    try:
+        from hachoir.core import config as hachoir_config
+        from hachoir.metadata import extractMetadata
+        from hachoir.parser import createParser
+    except ImportError:
+        return 0.0, 0, 0
+    hachoir_config.quiet = True  # its parser warnings go to stdout, not to our logs
+    try:
+        parser = createParser(str(path))
+        if parser is None:
+            return 0.0, 0, 0
+        with parser:
+            meta = extractMetadata(parser)
+    except Exception:  # noqa: BLE001 — битый/непонятный файл: публикуем с нулями
+        return 0.0, 0, 0
+    if meta is None:
+        return 0.0, 0, 0
+    dur = meta.get("duration").total_seconds() if meta.has("duration") else 0.0
+    w = int(meta.get("width")) if meta.has("width") else 0
+    h = int(meta.get("height")) if meta.has("height") else 0
+    return dur, w, h
+
+
 def _first_id(sent) -> str:
     """id первого сообщения. send_file для альбома возвращает список; caption и
     шаринг-id несёт первое сообщение."""
@@ -104,13 +131,14 @@ class TelegramAdapter:
         text = content.text or ""
         media = content.media_paths
 
-        # Build video attributes when the first media file is a video.
-        # send_file needs DocumentAttributeVideo for correct Telegram playback.
-        # Duration/dimensions default to 0 — Telegram accepts them; the client reads
-        # the actual values from the stream when supports_streaming=True.
+        # Video: DocumentAttributeVideo with supports_streaming (plays at once). Explicit
+        # attributes override the ones Telethon would infer, so the real duration and
+        # size are read here (hachoir); zeros only when the file cannot be parsed —
+        # Telegram then shows 0:00 and a square preview.
         video_attrs: list | None = None
         if media and detect_media_kind(media[0]) == MediaKind.VIDEO:
-            video_attrs = [DocumentAttributeVideo(duration=0, w=0, h=0, supports_streaming=True)]
+            dur, w, h = _video_meta(media[0])
+            video_attrs = [DocumentAttributeVideo(duration=dur, w=w, h=h, supports_streaming=True)]
 
         try:
             if not media:
