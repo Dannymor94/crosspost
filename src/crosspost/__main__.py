@@ -189,18 +189,21 @@ async def _run(
 
 
 async def _run_with_sqlite(
-    content: CanonicalContent, channels: list[str], *, profile_id: int,
+    content: CanonicalContent,
+    channels: list[str],
+    *,
+    profile_id: int,
     schedule: datetime | None = None,
 ) -> int:
-    """Запуск публикации с SQLiteIdempotencyStore (дефолтный путь)."""
+    """Запуск публикации с CheckpointStore на async-движке (дефолтный путь)."""
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from crosspost.db.engine import create_engine_and_tables
-    from crosspost.db.sqlite_store import SQLiteIdempotencyStore
+    from crosspost.db.sqlite_store import CheckpointStore
 
     engine = await create_engine_and_tables()
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        store = SQLiteIdempotencyStore(session, profile_id=profile_id)
+        store = CheckpointStore(session, profile_id=profile_id)
         return await _run(content, channels, store, schedule=schedule)
 
 
@@ -325,9 +328,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--state", default=None, help="путь к JSON-стору (устарело; умолч. → SQLite)")
     p.add_argument("--profile", type=int, default=1, help="profile_id в БД (умолч. 1)")
     p.add_argument(
-        "--schedule", default=None,
+        "--schedule",
+        default=None,
         help="ISO datetime со СМЕЩЕНИЕМ (напр. 2026-08-16T07:00:00+03:00) → нативный "
-             "отложенный пост Telegram; без него — сразу. Поддерживает только telegram.",
+        "отложенный пост Telegram; без него — сразу. Поддерживает только telegram.",
     )
 
     lg = sub.add_parser("login", help="ручной логин в браузерный канал")

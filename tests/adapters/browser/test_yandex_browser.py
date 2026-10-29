@@ -120,7 +120,7 @@ def _patch_logged_in(value: bool):
 async def test_skips_when_already_published(store, publication_id, sample_post, tmp_path):
     """is_done → SKIPPED, браузер не открывается."""
     adapter = _make_adapter(store, tmp_path)
-    store.mark_done(publication_id, "yandex", external_id="yandex_post:77")
+    await store.mark_done(publication_id, "yandex", external_id="yandex_post:77")
 
     with patch("crosspost.adapters.browser.yandex.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -141,7 +141,7 @@ async def test_needs_relogin_when_not_logged_in(store, publication_id, sample_po
     assert result.status is ResultStatus.NEEDS_RELOGIN
     assert "relogin" in result.error.lower() or "логин" in result.error.lower()
     page.get_by_placeholder.assert_not_called()  # до формы не дошли
-    assert not store.is_done(publication_id, "yandex")
+    assert not await store.is_done(publication_id, "yandex")
 
 
 @pytest.mark.asyncio
@@ -160,7 +160,7 @@ async def test_verify_before_retry_returns_submitted(store, publication_id, tmp_
     # «Создать» не нажималась
     page.get_by_role.assert_not_called()
     page.wait_for_function.assert_not_called()
-    assert store.is_done(publication_id, "yandex")
+    assert await store.is_done(publication_id, "yandex")
 
 
 @pytest.mark.asyncio
@@ -178,7 +178,7 @@ async def test_publishes_text_and_returns_submitted(store, publication_id, tmp_p
 
     assert result.status is ResultStatus.SUBMITTED
     assert result.external_id is not None
-    assert store.is_done(publication_id, "yandex")
+    assert await store.is_done(publication_id, "yandex")
 
     # текст вставлен в поле
     page.get_by_placeholder.assert_called_once_with("Расскажите о событиях, акциях и новостях")

@@ -35,6 +35,24 @@ CAPABILITIES: dict[str, set[T]] = {
 }
 
 
+def video_ineligible_reason(
+    channel: str, max_video_bytes: int | None, *, has_video: bool, video_bytes: int = 0
+) -> str:
+    """Причина видео-неприемлемости канала, или "" если по видео всё ок.
+
+    ЕДИНЫЙ источник правила: его зовут и GET /publish/targets (строит reason),
+    и _reject_ineligible (серверный гейт перед отправкой), и импорт контент-плана.
+    Тексты причин одинаковы во всех трёх местах — не дублировать правило.
+    """
+    if has_video and channel not in VIDEO_CHANNELS:
+        return "Этот канал не принимает видео"
+    if has_video and video_bytes > 0 and max_video_bytes and video_bytes > max_video_bytes:
+        return f"Видео больше лимита канала ({max_video_bytes // (1024 * 1024)} МБ)"
+    if not has_video and channel in VIDEO_REQUIRED_CHANNELS:
+        return "Прикрепите видео для публикации"
+    return ""
+
+
 def supports(channel: str, content_type: T) -> bool:
     return content_type in CAPABILITIES.get(channel, set())
 

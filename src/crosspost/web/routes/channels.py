@@ -232,7 +232,8 @@ class ChannelStatusOut(BaseModel):
     target: str = ""  # текущая per-profile цель (не секрет — адрес группы/орг)
     target_field: WizardFieldOut | None = None  # декларация поля цели (для формы мультицелей)
     guide: ChannelGuideOut | None = None  # инструкция подключения (из декларации)
-    expires_soon: bool = False  # True → токен истекает менее чем через 7 дней
+    expires_soon: bool = False  # True → токен истекает менее чем через 7 дней (оценка)
+    expires_at: str = ""  # оценочная дата истечения (ISO, YYYY-MM-DD); "" — неизвестна
 
 
 class TargetBody(BaseModel):
@@ -356,8 +357,11 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
         state_str = str(conn.state) if conn is not None else "not_connected"
 
         expires_soon = False
-        if conn is not None and getattr(conn, "expires_at", None) is not None:
-            expires_soon = is_expires_soon(conn.expires_at)
+        expires_at = ""
+        exp = conn.expires_at if conn is not None else None
+        if exp is not None:
+            expires_soon = is_expires_soon(exp)
+            expires_at = exp.date().isoformat()  # оценочная дата (не точная)
 
         cred = await repo.get_credential(profile_id, ch, v.credential_kind)
         has_cred = cred is not None
@@ -382,6 +386,7 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
                 target_field=_target_field_out(v.guide),
                 guide=_guide_out(v.guide),
                 expires_soon=expires_soon,
+                expires_at=expires_at,
             )
         )
     return result
@@ -592,7 +597,8 @@ async def connect_channel(
             await repo.set_credential(profile_id, channel, cred_kind, value)
 
     # Validate; collect field-level errors from ValidatorResult when available.
-    state = await validate_connection(repo, profile_id, channel)
+    # persist_expiry=True: учётка только что сохранена/заменена — фиксируем срок токена.
+    state = await validate_connection(repo, profile_id, channel, persist_expiry=True)
     field_errors: dict[str, str] = {}
     if state != ConnectionState.LIVE:
         # Re-run validator to get structured error (idempotent: credential already saved).

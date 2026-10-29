@@ -94,3 +94,19 @@ def test_media_static_mount_removed(monkeypatch, tmp_path):
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.get("/media/clip.mp4")
         assert r.status_code == 404
+
+
+# 8. App starts WITHOUT MEDIA_URL_SECRET (lazy check — Instagram-less deploys boot)
+def test_app_starts_without_media_secret(monkeypatch, tmp_path):
+    monkeypatch.delenv("MEDIA_URL_SECRET", raising=False)
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+    monkeypatch.setenv("SCHEDULER_ENABLED", "false")
+
+    from fastapi.testclient import TestClient
+
+    from crosspost.web.app import create_app
+
+    app = create_app()
+    # Entering the context runs lifespan startup; it must NOT raise despite no secret.
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/tunnel-health").status_code == 200

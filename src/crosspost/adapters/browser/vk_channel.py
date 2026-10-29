@@ -142,7 +142,7 @@ class VKChannelBrowserAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # 1) идемпотентность
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Сессию берём из vk_wall — тот же аккаунт ВК, не логинимся дважды.
@@ -182,7 +182,7 @@ class VKChannelBrowserAdapter:
             # 6) отправка
             external_id = await self._send(page, has_media=has_media)
 
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на сам канал (стабильного пост-URL мессенджер ВК не отдаёт):
         # переход из UI открывает канал, свежий пост виден в ленте.
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)

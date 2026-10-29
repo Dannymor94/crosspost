@@ -155,7 +155,7 @@ async def test_fail_closed_on_telegraph_failure(store, publication_id):
         result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.FAILED
-    assert not store.is_done(publication_id, "telegraph")
+    assert not await store.is_done(publication_id, "telegraph")
 
 
 # ── 4. Legacy flat-text article still publishes correctly ─────────────────────

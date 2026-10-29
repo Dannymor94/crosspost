@@ -95,11 +95,17 @@ class ProfileRepository:
         *,
         expires_at=None,
     ) -> Connection:
-        """Создать или обновить состояние подключения (profile_id × channel)."""
+        """Создать или обновить состояние подключения (profile_id × channel).
+
+        expires_at=None НЕ затирает уже сохранённый срок: ре-валидация обновляет
+        только state, а срок двигается лишь при явной передаче expires_at (сохранение
+        или замена токена). Так оценочный «истекает через N дней» не сбрасывается.
+        """
         values = {"profile_id": profile_id, "channel": channel, "state": state}
-        update = {"state": state, "expires_at": expires_at}
+        update: dict = {"state": state}
         if expires_at is not None:
             values["expires_at"] = expires_at
+            update["expires_at"] = expires_at
         stmt = (
             sqlite_insert(Connection)
             .values(**values)

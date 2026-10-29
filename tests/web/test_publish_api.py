@@ -2479,3 +2479,79 @@ async def test_adapter_size_check_uses_declared_value(tmp_path, monkeypatch):
 
     with pytest.raises(Exception, match="МБ|limit|превыша"):
         _validate_reel_file(big_file)
+
+
+# ── Video eligibility gate (finding 5): server-side defense in depth ──────────
+
+
+async def test_publish_instagram_without_video_rejected(client, factory):
+    """Instagram без видео → 422 с тем же текстом, что и в GET /publish/targets."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    with _patch_adapters({}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "x", "channels": json.dumps(["instagram"])},
+        )
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Прикрепите видео для публикации"
+
+
+async def test_publish_video_to_incapable_channel_rejected(client, factory):
+    """Видео в канал без видео-адаптера (yandex) → 422."""
+    pid = await _make_profile_with_live(factory, ["yandex"])
+    with _patch_adapters({}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "x", "channels": json.dumps(["yandex"])},
+            files=[("media", ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"))],
+        )
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Этот канал не принимает видео"
+
+
+async def test_schedule_instagram_without_video_rejected(client, factory):
+    """Планирование Instagram без видео отклоняется так же, как и publish."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    with _patch_adapters({}):
+        r = await client.post(
+            f"/api/profiles/{pid}/scheduled",
+            data={
+                "scheduled_at": "2026-09-01T10:00",
+                "content_type": "post",
+                "text": "x",
+                "channels": json.dumps(["instagram"]),
+            },
+        )
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Прикрепите видео для публикации"
+
+
+# ── Signed-token redaction (finding 1): response + publications.error ─────────
+
+
+async def test_publish_error_redacts_signed_media_token(client, factory):
+    """A channel error echoing /public-media/<token> is redacted in the response AND DB."""
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    fake_token = "ABCDEFGH1234567890abcdefTAIL.sigpart"
+    err = f"Meta: не удалось скачать https://host/public-media/{fake_token}"
+    mock = _MockAdapter(
+        "telegram", result=ChannelResult("telegram", ResultStatus.FAILED, error=err)
+    )
+
+    with _patch_adapters({"telegram": mock}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "x", "channels": json.dumps(["telegram"])},
+            files=_post_files(),
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    outcome = body["outcomes"][0]
+    # Response JSON: full token gone, truncated form kept.
+    assert fake_token not in (outcome["error"] or "")
+    assert "/public-media/ABCDEFGH…" in outcome["error"]
+
+    # Persisted publications.error must also be redacted.
+    st = await client.get(f"/api/profiles/{pid}/publish/{body['publication_id']}")
+    stored = next(x for x in st.json() if x["channel"] == "telegram")
+    assert fake_token not in (stored["error"] or "")

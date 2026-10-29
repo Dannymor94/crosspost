@@ -1,132 +1,153 @@
-"""Persistence tests for SyncSQLiteIdempotencyStore and production factory wiring.
+"""Persistence tests for the async CheckpointStore (SQLAlchemy engine).
 
 Covers:
-1. Instagram #container checkpoint survives process restart (new store instance, same DB).
-2. Telegram #photo checkpoint survives process restart.
+1. Instagram #container checkpoint survives a simulated process restart.
+2. Telegram #photo checkpoint survives a simulated restart.
 3. Profile isolation: checkpoints of profile 1 invisible to profile 2.
 4. delete_checkpoints removes step-keys but leaves the terminal publication record.
-5. Production factory supplies SyncSQLiteIdempotencyStore, not InMemory.
+5. delete_checkpoints("schedpost-5") does not touch "schedpost-50" (prefix-match pin).
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from crosspost.db.sqlite_store import SyncSQLiteIdempotencyStore
+from crosspost.db.engine import create_engine_and_tables
+from crosspost.db.sqlite_store import CheckpointStore
 
-# ── helpers ──────────────────────────────────────────────────────────────────
 
-
-def _store(db_path: str, profile_id: int = 1) -> SyncSQLiteIdempotencyStore:
-    return SyncSQLiteIdempotencyStore(str(db_path), profile_id=profile_id)
+async def _engine(db):
+    return await create_engine_and_tables(f"sqlite+aiosqlite:///{db}")
 
 
 # ── 1. Instagram container checkpoint survives restart ────────────────────────
 
 
-def test_instagram_container_checkpoint_survives_restart(tmp_path):
-    """New store instance over the same DB file sees the previously written container id."""
+@pytest.mark.asyncio
+async def test_instagram_container_checkpoint_survives_restart(tmp_path):
+    """A brand-new engine/session over the same DB file sees the written container id."""
     db = str(tmp_path / "store.db")
-    pub_id = "abc123"
-    container_id = "container_456"
+    pub_id, container_id = "abc123", "container_456"
 
-    store1 = _store(db)
-    store1.mark_done(f"{pub_id}#container", "instagram", container_id, target="ig_user_1")
+    eng1 = await _engine(db)
+    async with AsyncSession(eng1) as s1:
+        await CheckpointStore(s1, profile_id=1).mark_done(
+            f"{pub_id}#container", "instagram", container_id, target="ig_user_1"
+        )
+    await eng1.dispose()
 
-    # Simulate restart: brand-new store object, same file.
-    store2 = _store(db)
-    assert (
-        store2.get_external_id(f"{pub_id}#container", "instagram", target="ig_user_1")
-        == container_id
-    )
-    # Final publication not yet done.
-    assert not store2.is_done(pub_id, "instagram", target="ig_user_1")
+    # Simulate restart: new engine + session, same file.
+    eng2 = await _engine(db)
+    async with AsyncSession(eng2) as s2:
+        store = CheckpointStore(s2, profile_id=1)
+        assert (
+            await store.get_external_id(f"{pub_id}#container", "instagram", target="ig_user_1")
+            == container_id
+        )
+        assert not await store.is_done(pub_id, "instagram", target="ig_user_1")
+    await eng2.dispose()
 
 
 # ── 2. Telegram #photo checkpoint survives restart ────────────────────────────
 
 
-def test_telegram_photo_checkpoint_survives_restart(tmp_path):
-    """Telegram two-message flow: #photo checkpoint persists across restarts."""
+@pytest.mark.asyncio
+async def test_telegram_photo_checkpoint_survives_restart(tmp_path):
     db = str(tmp_path / "store.db")
-    pub_id = "tg_pub_789"
-    photo_msg_id = "msg:101"
+    pub_id, photo_msg_id = "tg_pub_789", "msg:101"
 
-    store1 = _store(db)
-    store1.mark_done(f"{pub_id}#photo", "telegram", photo_msg_id, target="@my_channel")
+    eng1 = await _engine(db)
+    async with AsyncSession(eng1) as s1:
+        await CheckpointStore(s1, profile_id=1).mark_done(
+            f"{pub_id}#photo", "telegram", photo_msg_id, target="@my_channel"
+        )
+    await eng1.dispose()
 
-    store2 = _store(db)
-    assert (
-        store2.get_external_id(f"{pub_id}#photo", "telegram", target="@my_channel") == photo_msg_id
-    )
-    assert not store2.is_done(pub_id, "telegram", target="@my_channel")
+    eng2 = await _engine(db)
+    async with AsyncSession(eng2) as s2:
+        store = CheckpointStore(s2, profile_id=1)
+        assert (
+            await store.get_external_id(f"{pub_id}#photo", "telegram", target="@my_channel")
+            == photo_msg_id
+        )
+        assert not await store.is_done(pub_id, "telegram", target="@my_channel")
+    await eng2.dispose()
 
 
 # ── 3. Profile isolation ──────────────────────────────────────────────────────
 
 
-def test_profile_isolation(tmp_path):
+@pytest.mark.asyncio
+async def test_profile_isolation(tmp_path):
     """Checkpoints from profile 1 are invisible to profile 2 and vice versa."""
     db = str(tmp_path / "store.db")
+    eng = await _engine(db)
+    async with AsyncSession(eng) as session:
+        s1 = CheckpointStore(session, profile_id=1)
+        s2 = CheckpointStore(session, profile_id=2)
 
-    s1 = _store(db, profile_id=1)
-    s2 = _store(db, profile_id=2)
+        await s1.mark_done("pub#container", "instagram", "cid_p1", target="ig_user")
 
-    s1.mark_done("pub#container", "instagram", "cid_p1", target="ig_user")
+        assert await s2.get_external_id("pub#container", "instagram", target="ig_user") is None
+        assert not await s2.is_done("pub#container", "instagram", target="ig_user")
 
-    assert s2.get_external_id("pub#container", "instagram", target="ig_user") is None
-    assert not s2.is_done("pub#container", "instagram", target="ig_user")
-
-    # Profile 2 can write its own entry under the same key.
-    s2.mark_done("pub#container", "instagram", "cid_p2", target="ig_user")
-    assert s1.get_external_id("pub#container", "instagram", target="ig_user") == "cid_p1"
-    assert s2.get_external_id("pub#container", "instagram", target="ig_user") == "cid_p2"
+        # Profile 2 writes its own entry under the same key — stays separate.
+        await s2.mark_done("pub#container", "instagram", "cid_p2", target="ig_user")
+        assert await s1.get_external_id("pub#container", "instagram", target="ig_user") == "cid_p1"
+        assert await s2.get_external_id("pub#container", "instagram", target="ig_user") == "cid_p2"
+    await eng.dispose()
 
 
 # ── 4. delete_checkpoints removes step-keys only ─────────────────────────────
 
 
-def test_delete_checkpoints_leaves_terminal_record(tmp_path):
-    """Checkpoint step-keys (pub#step) are removed; the final pub record survives."""
+@pytest.mark.asyncio
+async def test_delete_checkpoints_leaves_terminal_record(tmp_path):
     db = str(tmp_path / "store.db")
-    store = _store(db)
-    pub_id = "pub_xyz"
+    eng = await _engine(db)
+    async with AsyncSession(eng) as session:
+        store = CheckpointStore(session, profile_id=1)
+        pub_id = "pub_xyz"
 
-    store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig_user")
-    store.mark_done(pub_id, "instagram", "media_123", target="ig_user")
+        await store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig_user")
+        await store.mark_done(pub_id, "instagram", "media_123", target="ig_user")
 
-    # Both exist before cleanup.
-    assert store.get_external_id(f"{pub_id}#container", "instagram", target="ig_user") == "cid"
-    assert store.is_done(pub_id, "instagram", target="ig_user")
+        assert (
+            await store.get_external_id(f"{pub_id}#container", "instagram", target="ig_user")
+            == "cid"
+        )
+        assert await store.is_done(pub_id, "instagram", target="ig_user")
 
-    store.delete_checkpoints(pub_id)
+        await store.delete_checkpoints(pub_id)
 
-    # Checkpoint gone, terminal record intact.
-    assert store.get_external_id(f"{pub_id}#container", "instagram", target="ig_user") is None
-    assert store.is_done(pub_id, "instagram", target="ig_user")
-    assert store.get_external_id(pub_id, "instagram", target="ig_user") == "media_123"
+        assert (
+            await store.get_external_id(f"{pub_id}#container", "instagram", target="ig_user")
+            is None
+        )
+        assert await store.is_done(pub_id, "instagram", target="ig_user")
+        assert await store.get_external_id(pub_id, "instagram", target="ig_user") == "media_123"
+    await eng.dispose()
 
 
-# ── 5. Production factory wires persistent store ─────────────────────────────
+# ── 5. Prefix-match safety: schedpost-5 must not match schedpost-50 ───────────
 
 
 @pytest.mark.asyncio
-async def test_factory_wires_persistent_store_not_inmemory(tmp_path, monkeypatch):
-    """build_profile_adapter with store=None must create SyncSQLiteIdempotencyStore."""
-    # Point DB_URL to a temp file so the store can initialise its schema.
-    monkeypatch.setenv("DB_URL", f"sqlite+aiosqlite:///{tmp_path}/test.db")
+async def test_delete_checkpoints_prefix_does_not_match_sibling(tmp_path):
+    db = str(tmp_path / "store.db")
+    eng = await _engine(db)
+    async with AsyncSession(eng) as session:
+        store = CheckpointStore(session, profile_id=1)
+        await store.mark_done("schedpost-5#container", "instagram", "cid5", target="t")
+        await store.mark_done("schedpost-50#container", "instagram", "cid50", target="t")
 
-    # Mock ProfileRepository: get_credential returns a valid Telegraph token.
-    repo = MagicMock()
-    repo.get_credential = AsyncMock(return_value="TELEGRAPH-TOKEN")
-    repo.session = MagicMock()
-    repo.vault = MagicMock()
+        await store.delete_checkpoints("schedpost-5")
 
-    from crosspost.orchestrator.adapter_factory import build_profile_adapter
-
-    adapter = await build_profile_adapter(repo, profile_id=7, channel="telegraph")
-
-    assert adapter is not None
-    assert isinstance(adapter._store, SyncSQLiteIdempotencyStore)
+        assert await store.get_external_id("schedpost-5#container", "instagram", target="t") is None
+        # Sibling with a longer id must survive.
+        assert (
+            await store.get_external_id("schedpost-50#container", "instagram", target="t")
+            == "cid50"
+        )
+    await eng.dispose()

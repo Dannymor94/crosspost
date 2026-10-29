@@ -55,21 +55,26 @@ def _default_runner(port: int = 8000) -> str:
     import time
 
     _TUNNEL_LOG.unlink(missing_ok=True)
-    proc = subprocess.Popen(
-        [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ServerAliveInterval=30",
-            "-R",
-            f"80:localhost:{port}",
-            "nokey@localhost.run",
-        ],
-        stdout=open(_TUNNEL_LOG, "w"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    # Child keeps its own fd; close the parent's handle after spawning (no fd leak).
+    log_fh = open(_TUNNEL_LOG, "w")
+    try:
+        proc = subprocess.Popen(
+            [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "ServerAliveInterval=30",
+                "-R",
+                f"80:localhost:{port}",
+                "nokey@localhost.run",
+            ],
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log_fh.close()
     _PID_FILE.write_text(str(proc.pid))
 
     for _ in range(20):

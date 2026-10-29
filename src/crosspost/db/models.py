@@ -235,6 +235,27 @@ class Publication(Base):
     profile: Mapped[Profile] = relationship("Profile", back_populates="publications")
 
 
+class Checkpoint(Base):
+    """Промежуточные чекпоинты адаптеров (шаги многоэтапной отправки).
+
+    Отдельно от publications: хранит шаг-ключи вида "<publication_id>#<step>"
+    (например Instagram "#container", Telegram "#photo") и терминальный маркер
+    done самого адаптера. Пишется через тот же async-движок, что и остальной стейт
+    — без второго соединения к файлу БД.
+
+    Ключ: (profile_id, publication_id, channel, target). Изоляция — по profile_id.
+    external_id — сохранённая квитанция шага (id контейнера/сообщения), НЕ ключ дедупа.
+    """
+
+    __tablename__ = "checkpoints"
+
+    profile_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    publication_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(64), primary_key=True)
+    target: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class ScheduledPost(Base):
     """Запланированная публикация: контент + каналы + время. Итерация 2а.
 

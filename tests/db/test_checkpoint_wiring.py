@@ -1,100 +1,140 @@
-"""Tests for checkpoint cleanup wiring and concurrency.
+"""Wiring and concurrency tests for the async CheckpointStore.
 
-Three scenarios:
-1. A publication that reaches terminal state (all channels succeed) has its
-   pub#step checkpoints removed by _cleanup_if_final.
-2. A publication still pending (partial failure, retry possible) keeps checkpoints.
-3. Concurrent writes from the async engine and the sync checkpoint store do not
-   raise OperationalError ("database is locked").
+1. A terminal publication (all channels succeed) has its pub#step checkpoints removed.
+2. A still-pending publication (partial failure) keeps its checkpoints.
+3. Store calls do not block the event loop (a concurrent coroutine keeps running).
+4. build_profile_adapter wires the SQLAlchemy CheckpointStore (not InMemory).
+5. No stdlib sqlite3 import remains in production code paths.
 """
 
 from __future__ import annotations
 
-import threading
+import asyncio
+import pathlib
+import re
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.sqlite_store import SQLiteIdempotencyStore, SyncSQLiteIdempotencyStore
+from crosspost.db.sqlite_store import CheckpointStore
 from crosspost.orchestrator.publish_service import ChannelOutcome
+
+
+async def _engine(db):
+    return await create_engine_and_tables(f"sqlite+aiosqlite:///{db}")
+
 
 # ── 1. Terminal publication clears checkpoints ────────────────────────────────
 
 
-def test_cleanup_if_final_all_success_removes_checkpoints(tmp_path, monkeypatch):
-    """_cleanup_if_final: when all channels succeed, pub#step checkpoints are removed."""
-    db = str(tmp_path / "test.db")
-    monkeypatch.setenv("DB_URL", f"sqlite+aiosqlite:///{db}")
+@pytest.mark.asyncio
+async def test_cleanup_if_final_all_success_removes_checkpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+    eng = await _engine(str(tmp_path / "test.db"))
+    async with AsyncSession(eng) as session:
+        store = CheckpointStore(session, profile_id=1)
+        pub_id = "pub_final"
+        await store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig")
+        await store.mark_done(f"{pub_id}#photo", "telegram", "msg:1", target="@ch")
 
-    store = SyncSQLiteIdempotencyStore(db, profile_id=1)
-    pub_id = "pub_final"
-    store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig")
-    store.mark_done(f"{pub_id}#photo", "telegram", "msg:1", target="@ch")
+        from crosspost.web.routes.publish import _cleanup_if_final
 
-    from crosspost.web.routes.publish import _cleanup_if_final
+        await _cleanup_if_final(
+            session,
+            1,
+            pub_id,
+            [ChannelOutcome("instagram", "done"), ChannelOutcome("telegram", "done")],
+        )
 
-    # All channels succeeded → terminal
-    _cleanup_if_final(
-        1,
-        pub_id,
-        [ChannelOutcome("instagram", "done"), ChannelOutcome("telegram", "done")],
-    )
-
-    assert store.get_external_id(f"{pub_id}#container", "instagram", target="ig") is None
-    assert store.get_external_id(f"{pub_id}#photo", "telegram", target="@ch") is None
+        assert await store.get_external_id(f"{pub_id}#container", "instagram", target="ig") is None
+        assert await store.get_external_id(f"{pub_id}#photo", "telegram", target="@ch") is None
+    await eng.dispose()
 
 
 # ── 2. Pending publication keeps checkpoints ─────────────────────────────────
 
 
-def test_cleanup_if_final_partial_failure_keeps_checkpoints(tmp_path, monkeypatch):
-    """_cleanup_if_final: when any channel failed, checkpoints are NOT removed."""
-    db = str(tmp_path / "test.db")
-    monkeypatch.setenv("DB_URL", f"sqlite+aiosqlite:///{db}")
+@pytest.mark.asyncio
+async def test_cleanup_if_final_partial_failure_keeps_checkpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+    eng = await _engine(str(tmp_path / "test.db"))
+    async with AsyncSession(eng) as session:
+        store = CheckpointStore(session, profile_id=1)
+        pub_id = "pub_partial"
+        await store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig")
 
-    store = SyncSQLiteIdempotencyStore(db, profile_id=1)
-    pub_id = "pub_partial"
-    store.mark_done(f"{pub_id}#container", "instagram", "cid", target="ig")
+        from crosspost.web.routes.publish import _cleanup_if_final
 
-    from crosspost.web.routes.publish import _cleanup_if_final
+        await _cleanup_if_final(
+            session,
+            1,
+            pub_id,
+            [ChannelOutcome("instagram", "done"), ChannelOutcome("telegram", "failed")],
+        )
 
-    # Partial failure → not terminal
-    _cleanup_if_final(
-        1,
-        pub_id,
-        [ChannelOutcome("instagram", "done"), ChannelOutcome("telegram", "failed")],
-    )
-
-    assert store.get_external_id(f"{pub_id}#container", "instagram", target="ig") == "cid"
+        assert await store.get_external_id(f"{pub_id}#container", "instagram", target="ig") == "cid"
+    await eng.dispose()
 
 
-# ── 3. Concurrent writes: no database is locked ───────────────────────────────
+# ── 3. Store ops don't block the event loop ──────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_concurrent_async_and_sync_writes_no_locked_error(tmp_path):
-    """Async engine writes and sync store writes to the same DB file without locking."""
-    db = str(tmp_path / "concurrent.db")
-    engine = await create_engine_and_tables(f"sqlite+aiosqlite:///{db}")
-    store = SyncSQLiteIdempotencyStore(db, profile_id=1)
+async def test_store_calls_do_not_block_event_loop(tmp_path):
+    """A background coroutine keeps ticking while awaited store ops run."""
+    eng = await _engine(str(tmp_path / "test.db"))
+    ticks = 0
 
-    errors: list[Exception] = []
+    async def background() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.001)
 
-    def sync_writes() -> None:
+    async with AsyncSession(eng) as session:
+        store = CheckpointStore(session, profile_id=1)
+        task = asyncio.create_task(background())
         try:
-            for i in range(30):
-                store.mark_done(f"pub{i}#c", "instagram", f"cid{i}", target="t")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(exc)
+            for i in range(50):
+                await store.mark_done(f"pub{i}#c", "instagram", f"cid{i}", target="t")
+        finally:
+            task.cancel()
 
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        astore = SQLiteIdempotencyStore(session, profile_id=1)
-        t = threading.Thread(target=sync_writes)
-        t.start()
-        for i in range(30):
-            await astore.mark_done(f"pub{i}", "instagram", f"media{i}", target="t")
-        t.join(timeout=15)
+        # The loop stayed responsive: the background coroutine ran during the writes.
+        assert ticks > 0
+        # And all writes landed.
+        assert await store.get_external_id("pub49#c", "instagram", target="t") == "cid49"
+    await eng.dispose()
 
-    await engine.dispose()
-    assert not errors, f"concurrent writes raised: {errors}"
+
+# ── 4. Factory wires the SQLAlchemy store ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_factory_wires_sqlalchemy_store_not_inmemory():
+    repo = MagicMock()
+    repo.get_credential = AsyncMock(return_value="TELEGRAPH-TOKEN")
+    repo.session = MagicMock()  # CheckpointStore only stores the session at init
+    repo.vault = MagicMock()
+
+    from crosspost.orchestrator.adapter_factory import build_profile_adapter
+
+    adapter = await build_profile_adapter(repo, profile_id=7, channel="telegraph")
+
+    assert adapter is not None
+    assert isinstance(adapter._store, CheckpointStore)
+
+
+# ── 5. No stdlib sqlite3 import in production code paths ──────────────────────
+
+
+def test_no_sqlite3_import_in_production():
+    src = pathlib.Path(__file__).resolve().parents[2] / "src" / "crosspost"
+    offenders = []
+    pat = re.compile(r"^\s*import sqlite3\b|^\s*from sqlite3\b", re.MULTILINE)
+    for p in src.rglob("*.py"):
+        if pat.search(p.read_text(encoding="utf-8")):
+            offenders.append(str(p.relative_to(src)))
+    assert not offenders, f"stdlib sqlite3 imported in production: {offenders}"

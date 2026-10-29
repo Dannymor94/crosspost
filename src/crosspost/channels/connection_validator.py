@@ -33,6 +33,8 @@ async def validate_connection(
     repo: ProfileRepository,
     profile_id: int,
     channel: str,
+    *,
+    persist_expiry: bool = False,
 ) -> ConnectionState:
     """Проверить живость подключения и обновить connections.state.
 
@@ -43,6 +45,11 @@ async def validate_connection(
       3. Вызвать validator.fn(credential).
       4. Записать результат в connections через upsert_connection.
       5. Записать диагностику в logs.
+
+    persist_expiry=True → записать срок действия токена (expires_at) в подключение.
+    Ставить ТОЛЬКО когда учётка только что сохранена/заменена (connect), НЕ при
+    простой ре-валидации: иначе каждая проверка двигала бы «срок» на +60 дней и
+    предупреждение «истекает» никогда не сработало бы (оценка, не точный срок).
 
     Возвращает новый ConnectionState (live | needs_relogin).
     Канал не в реестре → needs_relogin + запись в лог.
@@ -77,7 +84,15 @@ async def validate_connection(
 
     if alive:
         await _log(repo, profile_id, channel, "INFO", "Подключение активно")
-        return await _write(repo, profile_id, channel, ConnectionState.LIVE, expires_at=expires_at)
+        # expires_at записываем только при сохранении/замене токена (persist_expiry),
+        # иначе ре-валидация сдвинула бы оценочный срок и предупреждение не сработало бы.
+        return await _write(
+            repo,
+            profile_id,
+            channel,
+            ConnectionState.LIVE,
+            expires_at=expires_at if persist_expiry else None,
+        )
     else:
         await _log(repo, profile_id, channel, "WARNING", "Подключение требует ре-логина")
         return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)

@@ -19,10 +19,9 @@ from crosspost.adapters.base import ChannelAdapter
 from crosspost.channels.telegram_login import parse_credential_blob
 from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.config import browser_headless
-from crosspost.db.engine import get_db_url
 from crosspost.db.models import CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
-from crosspost.db.sqlite_store import SyncSQLiteIdempotencyStore
+from crosspost.db.sqlite_store import CheckpointStore
 from crosspost.db.target_repo import ChannelTargetRepository
 
 logger = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ async def build_profile_adapter(
         return None
 
     if store is None:
-        store = SyncSQLiteIdempotencyStore(_db_path_from_url(get_db_url()), profile_id=profile_id)
+        store = CheckpointStore(repo.session, profile_id=profile_id)
     session_key = validator.session_channel or channel
     cred = await repo.get_credential(profile_id, session_key, validator.credential_kind)
     if not cred:
@@ -103,15 +102,6 @@ async def build_profile_adapter(
         target = normalize_target(channel, target)
 
     return _build_browser(channel, cred, store, target)
-
-
-def _db_path_from_url(url: str) -> str:
-    """Strip SQLAlchemy async driver prefix to get a plain filesystem path.
-
-    "sqlite+aiosqlite:///relative/path.db"  -> "relative/path.db"
-    "sqlite+aiosqlite:////abs/path.db"      -> "/abs/path.db"
-    """
-    return url.removeprefix("sqlite+aiosqlite:///")
 
 
 async def _resolve_target(

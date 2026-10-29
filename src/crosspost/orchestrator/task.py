@@ -37,11 +37,17 @@ def new_publication_id() -> str:
 
 
 class IdempotencyStore(Protocol):
-    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool: ...
-    def mark_done(
+    """Async-протокол: реализации пишут через async-движок БД (или in-memory/файл).
+
+    Все методы — корутины: единственный бэкенд в проде (CheckpointStore) живёт на
+    том же async SQLAlchemy-движке, что и остальной стейт, без второго соединения.
+    """
+
+    async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool: ...
+    async def mark_done(
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None: ...
-    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+    async def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
         """Remove an entry so the next attempt treats it as fresh (not done).
 
         Used to discard a dead checkpoint (e.g. an Instagram container that reached
@@ -50,7 +56,9 @@ class IdempotencyStore(Protocol):
         """
         ...
 
-    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+    async def get_external_id(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> str | None:
         """Квитанция по ключу (publication_id, channel, target), либо None.
 
         target — измерение цели (мультицели): одна площадка шлёт в несколько целей
@@ -62,33 +70,52 @@ class IdempotencyStore(Protocol):
         """
         ...
 
+    async def delete_checkpoints(self, publication_id: str) -> None:
+        """Удалить шаг-ключи "<publication_id>#<step>" после финализации публикации.
+
+        Терминальную строку (чистый publication_id без '#') не трогает.
+        """
+        ...
+
+
+def _is_step_key(key_pub: str, publication_id: str) -> bool:
+    """True если key_pub — шаг-ключ вида "<publication_id>#<step>"."""
+    return key_pub.startswith(f"{publication_id}#")
+
 
 class InMemoryIdempotencyStore:
-    """Заглушка для тестов/фазы A. В проде — таблица в БД."""
+    """Заглушка для тестов/фазы A. В проде — таблица в БД (async)."""
 
     def __init__(self) -> None:
         self._done: dict[tuple[str, str, str], str | None] = {}
 
-    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
+    async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
         return (publication_id, channel, target) in self._done
 
-    def mark_done(
+    async def mark_done(
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None:
         self._done[(publication_id, channel, target)] = external_id
 
-    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+    async def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
         self._done.pop((publication_id, channel, target), None)
 
-    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+    async def get_external_id(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> str | None:
         return self._done.get((publication_id, channel, target))
+
+    async def delete_checkpoints(self, publication_id: str) -> None:
+        for key in [k for k in self._done if _is_step_key(k[0], publication_id)]:
+            self._done.pop(key, None)
 
 
 class JSONIdempotencyStore:
     """Файловый store для MVP-0 (вместо БД). Ключ (publication_id, channel, target).
 
-    Достаточно для синхронного CLI. На MVP-1 заменяется БД-реализацией того же протокола.
-    Старые 2-частные файлы (без цели) читаются с target="" (обратная совместимость).
+    Async-протокол (методы — корутины), но I/O синхронный (файл). На MVP-1 заменяется
+    БД-реализацией того же протокола. Старые 2-частные файлы (без цели) читаются с
+    target="" (обратная совместимость).
     """
 
     def __init__(self, path) -> None:
@@ -115,18 +142,27 @@ class JSONIdempotencyStore:
         raw = {f"{p}|{c}|{t}": v for (p, c, t), v in self._done.items()}
         self._path.write_text(self._json.dumps(raw, ensure_ascii=False, indent=2), "utf-8")
 
-    def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
+    async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
         return (publication_id, channel, target) in self._done
 
-    def mark_done(
+    async def mark_done(
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None:
         self._done[(publication_id, channel, target)] = external_id
         self._flush()
 
-    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+    async def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
         self._done.pop((publication_id, channel, target), None)
         self._flush()
 
-    def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
+    async def get_external_id(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> str | None:
         return self._done.get((publication_id, channel, target))
+
+    async def delete_checkpoints(self, publication_id: str) -> None:
+        removed = [k for k in self._done if _is_step_key(k[0], publication_id)]
+        for key in removed:
+            self._done.pop(key, None)
+        if removed:
+            self._flush()

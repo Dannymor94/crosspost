@@ -106,7 +106,7 @@ def mock_open_page_with_existing_post():
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post, adapter):
     """is_done → SKIPPED, браузер не открывается."""
-    store.mark_done(publication_id, "vk", external_id="wall-12345_10")
+    await store.mark_done(publication_id, "vk", external_id="wall-12345_10")
 
     with patch("crosspost.adapters.browser.vk.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -134,7 +134,7 @@ async def test_verify_before_retry_finds_existing_post(
 
     assert result.status is ResultStatus.DONE
     assert result.external_id == "posted:recovered"
-    assert store.is_done(publication_id, "vk")
+    assert await store.is_done(publication_id, "vk")
     # wait_for_function НЕ вызывался — не дошли до submit
     mock_open_page_with_existing_post.wait_for_function.assert_not_called()
 
@@ -148,7 +148,7 @@ async def test_publishes_and_returns_wall_id(
 
     assert result.status is ResultStatus.DONE
     assert result.external_id == "12345_42"  # из href "/wall-12345_42"
-    assert store.is_done(publication_id, "vk")
+    assert await store.is_done(publication_id, "vk")
     # страница была открыта и пост отправлен
     mock_open_page.goto.assert_called_once()
     mock_open_page.wait_for_function.assert_called_once()

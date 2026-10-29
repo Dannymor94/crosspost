@@ -120,7 +120,7 @@ class TelegramAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # ── идемпотентность: вся публикация в канал уже прошла ────────────────
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Telethon-исключения импортируем лениво (SDK не тянем на импорт модуля).
@@ -156,7 +156,7 @@ class TelegramAdapter:
                     self._target, text, parse_mode="html", schedule=self._schedule
                 )
                 ext = _first_id(sent)
-                self._store.mark_done(publication_id, self.channel, external_id=ext)
+                await self._store.mark_done(publication_id, self.channel, external_id=ext)
                 return ChannelResult(
                     self.channel,
                     ResultStatus.DONE,
@@ -176,7 +176,7 @@ class TelegramAdapter:
                     **extra,
                 )
                 ext = _first_id(sent)
-                self._store.mark_done(publication_id, self.channel, external_id=ext)
+                await self._store.mark_done(publication_id, self.channel, external_id=ext)
                 return ChannelResult(
                     self.channel,
                     ResultStatus.DONE,
@@ -200,8 +200,8 @@ class TelegramAdapter:
 
             # Шаг 1 — медиа с короткой подписью-заголовком. Чекпоинт переживает
             # падение шага 2: на ретрае медиа не пересылается, id берём из стора.
-            if self._store.is_done(photo_pub, self.channel):
-                photo_id = self._store.get_external_id(photo_pub, self.channel)
+            if await self._store.is_done(photo_pub, self.channel):
+                photo_id = await self._store.get_external_id(photo_pub, self.channel)
             else:
                 extra = {"attributes": video_attrs} if video_attrs else {}
                 sent = await self._client.send_file(
@@ -213,7 +213,7 @@ class TelegramAdapter:
                     **extra,
                 )
                 photo_id = _first_id(sent)
-                self._store.mark_done(photo_pub, self.channel, external_id=photo_id)
+                await self._store.mark_done(photo_pub, self.channel, external_id=photo_id)
 
             # Шаг 2 — тело (без заголовка) отдельным сообщением, на то же время.
             await self._client.send_message(
@@ -221,7 +221,7 @@ class TelegramAdapter:
             )
 
             # Оба сообщения прошли → канал done. Квитанция — id фото (визуальный якорь).
-            self._store.mark_done(publication_id, self.channel, external_id=photo_id)
+            await self._store.mark_done(publication_id, self.channel, external_id=photo_id)
             return ChannelResult(
                 self.channel,
                 ResultStatus.DONE,

@@ -34,6 +34,7 @@ from crosspost.orchestrator.article_flow import (
     StepState,
     run_binding,
 )
+from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,9 @@ def _error_str(exc: Exception) -> str:
     """
     msg = str(exc).strip()
     if msg:
-        return msg
+        # Second line of defence: a signed /public-media/ token must never reach
+        # publications.error or the API response (adapter already redacts at source).
+        return redact_media_tokens(msg)
     try:
         if isinstance(exc, httpx.HTTPError) and getattr(exc, "request", None):
             from urllib.parse import urlparse
@@ -287,19 +290,22 @@ class PublishService:
 
         # (6) маппим квитанцию → статус
         status = _RESULT_MAP.get(result.status, PublicationStatus.FAILED)
+        # Second line of defence: redact any signed media token an adapter's error
+        # might carry before it reaches the DB or the API response.
+        safe_error = redact_media_tokens(result.error) if result.error else result.error
         await self._repo.set_status(
             publication_id,
             channel,
             status,
             target=target_id,
             external_id=result.external_id,
-            error=result.error,
+            error=safe_error,
         )
         return ChannelOutcome(
             channel,
             status.value,
             external_id=result.external_id,
-            error=result.error,
+            error=safe_error,
             url=result.url,
             target=target_id,
         )

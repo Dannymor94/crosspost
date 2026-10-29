@@ -222,9 +222,7 @@ async def test_preview_reports_google_drive_as_unsupported(client, factory):
                 "table",
                 (
                     "plan.csv",
-                    _csv(
-                        "файл,текст\nhttps://drive.google.com/file/d/ABC/view,Пост\n"
-                    ),
+                    _csv("файл,текст\nhttps://drive.google.com/file/d/ABC/view,Пост\n"),
                     "text/csv",
                 ),
             )
@@ -477,7 +475,9 @@ async def test_commit_weekly_interval_schedules_on_selected_days(client, factory
         )
     # пт 4 сен, пн 7 сен, пт 11 сен.
     assert [p.scheduled_at.isoformat() for p in posts] == [
-        "2026-09-04T12:00:00", "2026-09-07T12:00:00", "2026-09-11T12:00:00",
+        "2026-09-04T12:00:00",
+        "2026-09-07T12:00:00",
+        "2026-09-11T12:00:00",
     ]
 
 
@@ -881,3 +881,31 @@ async def test_settings_isolated_per_profile(client, factory):
     await client.put(f"/api/profiles/{pid_a}/import/settings", json={"media_folder": "/a"})
     resp = await client.get(f"/api/profiles/{pid_b}/import/settings")
     assert resp.json()["media_folder"] == ""
+
+
+async def test_commit_skips_rows_when_channel_requires_video(client, factory):
+    """Импорт плана отклоняет строку так же, как publish: instagram без видео → пропуск."""
+    pid = await _make_profile_with_live(factory, ["instagram"], name="com-ig-novideo")
+    csv = _csv("файл,текст\n01.jpg,Пост 1\n")
+    resp = await client.post(
+        f"/api/profiles/{pid}/import/commit",
+        files=[
+            ("table", ("plan.csv", csv, "text/csv")),
+            ("media", ("01.jpg", b"\xff\xd8\xff", "image/jpeg")),
+        ],
+        data={
+            "channels": json.dumps(["instagram"]),
+            "content_type": "post",
+            "start_date": "2026-09-01",
+            "times_csv": "10:00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["created"] == 0  # строка без видео не попала в план
+    # Тот же текст причины, что и в publish-гейте.
+    assert any("Прикрепите видео" in w["reason"] for w in body["warnings"]), body["warnings"]
+
+    async with factory() as s:
+        posts = await PublicationRepository(s, profile_id=pid).list_scheduled()
+    assert posts == []

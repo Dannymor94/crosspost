@@ -170,7 +170,7 @@ async def test_happy_path_container_upload_poll_publish(tmp_path):
     assert "access_token" not in publish_kw.get("json", {}), "token must be in header"
     assert publish_kw.get("headers", {}).get("Authorization") == f"Bearer {_TOKEN}"
 
-    assert store.is_done(pub, "instagram", target=_IG_USER)
+    assert await store.is_done(pub, "instagram", target=_IG_USER)
 
 
 # ── 2. Retry after container creation reuses the container ────────────────────
@@ -196,7 +196,7 @@ async def test_retry_after_container_reuses_it_no_second_container(tmp_path):
     assert r2.external_id == _MEDIA_ID
     assert http.create_calls == 1  # второй контейнер НЕ создан
     assert http.publish_calls == 1
-    assert store.is_done(pub, "instagram", target=_IG_USER)
+    assert await store.is_done(pub, "instagram", target=_IG_USER)
 
 
 # ── 3. Retry after publish already succeeded → done, no second publish ────────
@@ -247,7 +247,7 @@ async def test_container_error_deletes_checkpoint_so_retry_creates_fresh(tmp_pat
     assert r1.status is ResultStatus.FAILED
 
     ckpt = f"{pub}#container"
-    assert store.get_external_id(ckpt, "instagram", target=_IG_USER) is None, (
+    assert await store.get_external_id(ckpt, "instagram", target=_IG_USER) is None, (
         "#container checkpoint must be cleared after terminal ERROR"
     )
 
@@ -270,7 +270,7 @@ async def test_container_expired_deletes_checkpoint(tmp_path):
     assert r1.status is ResultStatus.FAILED
 
     ckpt = f"{pub}#container"
-    assert store.get_external_id(ckpt, "instagram", target=_IG_USER) is None, (
+    assert await store.get_external_id(ckpt, "instagram", target=_IG_USER) is None, (
         "#container checkpoint must be cleared after terminal EXPIRED"
     )
 
@@ -291,7 +291,7 @@ async def test_polling_timeout_keeps_checkpoint_not_deleted(tmp_path):
     assert r1.status is ResultStatus.FAILED
 
     ckpt = f"{pub}#container"
-    assert store.get_external_id(ckpt, "instagram", target=_IG_USER) == _CONTAINER, (
+    assert await store.get_external_id(ckpt, "instagram", target=_IG_USER) == _CONTAINER, (
         "#container checkpoint must survive a timeout (non-terminal failure)"
     )
 
@@ -323,9 +323,9 @@ async def test_polling_timeout_keeps_container(tmp_path):
 
     assert result.status is ResultStatus.FAILED
     assert "таймаут" in result.error.lower() or "timeout" in result.error.lower()
-    assert not store.is_done(pub, "instagram", target=_IG_USER)
+    assert not await store.is_done(pub, "instagram", target=_IG_USER)
     # контейнер сохранён под чекпоинтом — следующий ретрай его переиспользует
-    ckpt = store.get_external_id(f"{pub}#container", "instagram", target=_IG_USER)
+    ckpt = await store.get_external_id(f"{pub}#container", "instagram", target=_IG_USER)
     assert ckpt == _CONTAINER
     assert http.publish_calls == 0
 
@@ -516,6 +516,22 @@ async def test_logs_contain_no_full_token(tmp_path):
         )
 
 
+@pytest.mark.asyncio
+async def test_meta_error_echoing_video_url_is_redacted(tmp_path):
+    """Meta error that echoes the signed video_url → token redacted in ChannelResult.error."""
+    fake_token = "ABCDEFGH1234567890abcdefGHIJKLMNOP.sigpart"  # >8 chars after prefix
+    meta_msg = f"Unable to fetch video from {_PUBLIC_BASE}/public-media/{fake_token}"
+    http = FakeHTTP(create=_resp({"error": {"message": meta_msg, "code": 9004}}))
+    content = _reel(tmp_path)
+
+    result = await _adapter(http).publish(content, publication_id=new_publication_id())
+
+    assert result.status is ResultStatus.FAILED
+    assert result.error is not None
+    assert fake_token not in result.error, "full signed token leaked into ChannelResult.error"
+    assert "/public-media/ABCDEFGH…" in result.error  # truncated form kept
+
+
 # ── timeout handling ──────────────────────────────────────────────────────────
 
 
@@ -553,7 +569,7 @@ async def test_httpx_timeout_during_polling_gives_russian_message_and_keeps_chec
     # Container checkpoint is still present — retry can resume from it.
     # The adapter stores checkpoints with target=ig_user_id (self._target).
     container_ckpt = "pub-timeout" + "#container"
-    assert store.get_external_id(container_ckpt, "instagram", target=_IG_USER), (
+    assert await store.get_external_id(container_ckpt, "instagram", target=_IG_USER), (
         "container checkpoint must survive a polling timeout"
     )
 

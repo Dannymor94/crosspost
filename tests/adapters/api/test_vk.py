@@ -112,7 +112,7 @@ def fake_vkbottle_both_denied(monkeypatch) -> types.ModuleType:
 async def test_skips_when_already_published(
     store, publication_id, sample_post, fake_vk_api, fake_vkbottle
 ):
-    store.mark_done(publication_id, "vk", external_id="999")
+    await store.mark_done(publication_id, "vk", external_id="999")
     adapter = VKAdapter(fake_vk_api, target="-100", store=store)
 
     result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -144,7 +144,7 @@ async def test_publishes_via_wall_uploader(
     post_kwargs = fake_vk_api.wall.post.call_args.kwargs
     assert post_kwargs["owner_id"] == -100
     assert post_kwargs["attachments"] == "photo-100_555"
-    assert store.is_done(publication_id, "vk")
+    assert await store.is_done(publication_id, "vk")
 
 
 @pytest.mark.asyncio
@@ -173,7 +173,7 @@ async def test_falls_back_to_album_uploader_on_wall_denied(
 
     post_kwargs = fake_vk_api.wall.post.call_args.kwargs
     assert post_kwargs["attachments"] == "photo-100_999"
-    assert store.is_done(publication_id, "vk")
+    assert await store.is_done(publication_id, "vk")
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_raises_explicit_error_when_both_methods_denied(
 
     # wall.post не должен был вызываться — фото не загружено
     fake_vk_api.wall.post.assert_not_called()
-    assert not store.is_done(publication_id, "vk")
+    assert not await store.is_done(publication_id, "vk")
 
 
 @pytest.mark.asyncio
@@ -214,4 +214,4 @@ async def test_photo_upload_disabled_posts_text_only(
 
     post_kwargs = fake_vk_api.wall.post.call_args.kwargs
     assert "attachments" not in post_kwargs  # чистый текстовый пост
-    assert store.is_done(publication_id, "vk")
+    assert await store.is_done(publication_id, "vk")

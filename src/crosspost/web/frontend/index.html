@@ -1980,7 +1980,10 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
-    ch.expires_soon && h("div", { className: "expires-warning" }, "⚠ Токен истекает менее чем через 7 дней — переподключите канал"),
+    ch.expires_soon && h("div", { className: "expires-warning" },
+      ch.expires_at
+        ? `⚠ Токен действует примерно до ${ch.expires_at} — переподключите канал заранее`
+        : "⚠ Токен скоро истекает (примерно) — переподключите канал заранее"),
     // per-profile цели постинга (группы/каналы) — свои у каждого клиента.
     // Мастер заводит первую при подключении; здесь список можно расширять/править.
     ch.needs_target && h(TargetList, {
@@ -2370,6 +2373,9 @@ const OUTCOME_META = {
   needs_relogin: { cls: "warning", label: "Нужен ре-логин" },
 };
 
+// ADVISORY UX ONLY: lets the form grey out targets and show a video badge before upload.
+// The SERVER decides eligibility (content/media_kind.py detect_media_kind + the publish gate).
+// Keep this list identical to _VIDEO_EXTENSIONS in src/crosspost/content/media_kind.py.
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp", ".flv", ".wmv"]);
 function isVideoFile(f) { const n = (f && f.name || "").toLowerCase(); return VIDEO_EXTS.has(n.slice(n.lastIndexOf("."))); }
 function isVideoUrl(url) { const low = (url || "").toLowerCase().split("?")[0]; return VIDEO_EXTS.has(low.slice(low.lastIndexOf("."))); }
@@ -2407,13 +2413,15 @@ class TabBoundary extends Component {
 
 function MediaPicker({ file, onChange }) {
   const inputRef = useRef(null);
-  const objUrl = useRef(null);
+  // Object URL in state (not a ref): setting it triggers the re-render that shows
+  // the preview; revoke the old one on file change / unmount to avoid leaks.
+  const [url, setUrl] = useState(null);
 
-  // Revoke old object URL on file change or unmount to avoid memory leaks
   useEffect(() => {
-    if (objUrl.current) { URL.revokeObjectURL(objUrl.current); objUrl.current = null; }
-    if (file) objUrl.current = URL.createObjectURL(file);
-    return () => { if (objUrl.current) { URL.revokeObjectURL(objUrl.current); objUrl.current = null; } };
+    if (!file) { setUrl(null); return; }
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
   }, [file]);
 
   function pick(e) {
@@ -2423,7 +2431,6 @@ function MediaPicker({ file, onChange }) {
   }
   function remove() { onChange(null); }
 
-  const url = file && objUrl.current;
   const isVid = file && isVideoFile(file);
 
   return h("div", null,

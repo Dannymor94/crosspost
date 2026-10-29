@@ -104,7 +104,7 @@ class VKWallBrowserAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # 1) идемпотентность
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         async with open_page(
@@ -129,7 +129,9 @@ class VKWallBrowserAdapter:
 
             # 4) verify-before-retry: пост уже есть в ленте — не дублируем
             if await self._find_post(page, content.text):
-                self._store.mark_done(publication_id, self.channel, external_id="posted:recovered")
+                await self._store.mark_done(
+                    publication_id, self.channel, external_id="posted:recovered"
+                )
                 return ChannelResult(
                     self.channel, ResultStatus.DONE, external_id="posted:recovered", url=url
                 )
@@ -152,7 +154,7 @@ class VKWallBrowserAdapter:
             # 9) шаг 2: финальная публикация (TODO: уточнить селектор кнопки)
             external_id = await self._publish_step2(page, content.text)
 
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на стену сообщества (свежий пост сверху): переход из UI после отправки.
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
 

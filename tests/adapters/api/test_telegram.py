@@ -33,7 +33,7 @@ def _post(tmp_path: Path, text: str) -> CanonicalContent:
 async def test_skips_when_already_published(
     store, publication_id, sample_post, fake_telethon_client
 ):
-    store.mark_done(publication_id, "telegram", external_id="999")
+    await store.mark_done(publication_id, "telegram", external_id="999")
     adapter = TelegramAdapter(fake_telethon_client, target="@x", store=store)
 
     result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -53,7 +53,7 @@ async def test_publishes_and_returns_receipt(
     assert result.status is ResultStatus.DONE
     assert result.external_id == "12345"
     fake_telethon_client.send_file.assert_called_once()
-    assert store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id, "telegram")
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_text_only_uses_send_message_not_send_file(
     fake_telethon_client.send_file.assert_not_called()
     _, kwargs = fake_telethon_client.send_message.call_args
     assert kwargs["parse_mode"] == "html"
-    assert store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id, "telegram")
 
 
 @pytest.mark.asyncio
@@ -117,7 +117,7 @@ async def test_text_only_over_limit_fails(tmp_path, store, publication_id, fake_
     assert str(MESSAGE_LIMIT) in result.error
     fake_telethon_client.send_message.assert_not_called()
     fake_telethon_client.send_file.assert_not_called()
-    assert not store.is_done(publication_id, "telegram")
+    assert not await store.is_done(publication_id, "telegram")
 
 
 @pytest.mark.asyncio
@@ -131,7 +131,7 @@ async def test_publishes_album_and_returns_first_message_id(
     assert result.status is ResultStatus.DONE
     assert result.external_id == "100"
     fake_telethon_client_album.send_file.assert_called_once()
-    assert store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id, "telegram")
 
 
 # ── 1) parse_mode="html" передан в send_file ──────────────────────────────────
@@ -193,7 +193,7 @@ async def test_long_text_two_calls_photo_then_message(
     m_args, m_kwargs = fake_telethon_client.send_message.call_args
     assert long_text in m_args
     assert m_kwargs["parse_mode"] == "html"
-    assert store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id, "telegram")
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_body_over_message_limit_fails(tmp_path, store, publication_id, fa
     assert str(MESSAGE_LIMIT) in result.error
     fake_telethon_client.send_file.assert_not_called()
     fake_telethon_client.send_message.assert_not_called()
-    assert not store.is_done(publication_id, "telegram")
+    assert not await store.is_done(publication_id, "telegram")
 
 
 # ── 4) ошибка отправки → ChannelResult(FAILED), не исключение ─────────────────
@@ -251,7 +251,7 @@ async def test_rpc_error_returns_failed_not_raise(
 
     assert result.status is ResultStatus.FAILED
     assert result.error
-    assert not store.is_done(publication_id, "telegram")
+    assert not await store.is_done(publication_id, "telegram")
 
 
 @pytest.mark.asyncio
@@ -293,8 +293,8 @@ async def test_retry_after_message_failure_does_not_resend_photo(
     assert r1.status is ResultStatus.FAILED
     assert fake_telethon_client.send_file.call_count == 1
     # чекпоинт фото зафиксирован под вспомогательным ключом, реальный ключ — нет
-    assert store.is_done(publication_id + "#photo", "telegram")
-    assert not store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id + "#photo", "telegram")
+    assert not await store.is_done(publication_id, "telegram")
 
     # Ретрай тем же publication_id: фото НЕ пересылается, досылается только текст.
     r2 = await adapter.publish(content, publication_id=publication_id)
@@ -302,7 +302,7 @@ async def test_retry_after_message_failure_does_not_resend_photo(
     assert r2.external_id == "12345"
     assert fake_telethon_client.send_file.call_count == 1  # без повторной отправки фото
     assert fake_telethon_client.send_message.call_count == 2
-    assert store.is_done(publication_id, "telegram")
+    assert await store.is_done(publication_id, "telegram")
 
 
 # ── 6) текст с < > & не ломает разметку ──────────────────────────────────────
@@ -367,7 +367,7 @@ async def test_no_schedule_passes_none(tmp_path, store, publication_id, fake_tel
     await adapter.publish(content, publication_id=publication_id)
 
     _, kwargs = fake_telethon_client.send_file.call_args
-    assert kwargs["schedule"] is None       # обратная совместимость — немедленно
+    assert kwargs["schedule"] is None  # обратная совместимость — немедленно
 
 
 @pytest.mark.asyncio

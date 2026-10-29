@@ -86,7 +86,7 @@ async def test_video_idempotent_skip(tmp_path):
     store = _store()
     pub_id = _pub_id()
     client = _make_client()
-    store.mark_done(pub_id, "telegram", external_id="99")
+    await store.mark_done(pub_id, "telegram", external_id="99")
     content = _video_post(tmp_path)
 
     adapter = TelegramAdapter(client, target="@channel", store=store)

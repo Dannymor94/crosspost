@@ -50,7 +50,7 @@ class VKAdapter:
         *,
         publication_id: str,
     ) -> ChannelResult:
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         attachment: str | None = None
@@ -64,7 +64,7 @@ class VKAdapter:
         )
 
         external_id = str(posted.post_id)
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
 
         status = ResultStatus.DONE
         if not attachment and content.media_paths:

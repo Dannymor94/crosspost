@@ -68,7 +68,7 @@ def mock_http_error():
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_article, mock_http_ok):
     """Идемпотентность: (publication_id, channel) уже done → SKIPPED без HTTP-запроса."""
-    store.mark_done(publication_id, "telegraph", external_id=_PAGE_URL)
+    await store.mark_done(publication_id, "telegraph", external_id=_PAGE_URL)
     adapter = TelegraphAdapter(_TOKEN, store)
 
     result = await adapter.publish(sample_article, publication_id=publication_id)
@@ -88,7 +88,7 @@ async def test_publishes_article_and_returns_url(
 
     assert result.status is ResultStatus.DONE
     assert result.external_id == _PAGE_URL
-    assert store.is_done(publication_id, "telegraph")
+    assert await store.is_done(publication_id, "telegraph")
 
     call = mock_http_ok.post.call_args
     assert "api.telegra.ph/createPage" in call.args[0]
@@ -125,7 +125,7 @@ async def test_returns_failed_on_telegraph_api_error(
 
     assert result.status is ResultStatus.FAILED
     assert result.error == "ACCESS_TOKEN_INVALID"
-    assert not store.is_done(publication_id, "telegraph")
+    assert not await store.is_done(publication_id, "telegraph")
 
 
 @pytest.mark.asyncio

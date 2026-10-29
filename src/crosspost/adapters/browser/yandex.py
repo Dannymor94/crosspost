@@ -89,7 +89,7 @@ class YandexBrowserAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # 1) идемпотентность
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         async with open_page(
@@ -115,7 +115,7 @@ class YandexBrowserAdapter:
 
             # 4) verify-before-retry: карточка уже есть → не дублируем
             if await self._find_card(page, content.text):
-                self._store.mark_done(
+                await self._store.mark_done(
                     publication_id, self.channel, external_id="submitted:recovered"
                 )
                 return ChannelResult(
@@ -140,7 +140,7 @@ class YandexBrowserAdapter:
             # 8) VERIFY: ждём появления карточки с нашим текстом
             external_id = await self._wait_for_card(page, content.text)
 
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # SUBMITTED: пост ушёл на модерацию. Медиа можно чистить сразу.
         # url — кабинет «Публикации» Яндекс Бизнеса: там пост виден после модерации.
         return ChannelResult(self.channel, ResultStatus.SUBMITTED, external_id=external_id, url=url)

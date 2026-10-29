@@ -112,7 +112,7 @@ def _patch_logged_in(value: bool):
 async def test_skips_when_already_published(store, publication_id, sample_post):
     """is_done → SKIPPED, браузер не открывается."""
     adapter = _make_adapter(store)
-    store.mark_done(publication_id, "vk_wall", external_id="wall-123456_1")
+    await store.mark_done(publication_id, "vk_wall", external_id="wall-123456_1")
 
     with patch("crosspost.adapters.browser.vk_wall.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -132,7 +132,7 @@ async def test_needs_relogin_when_not_logged_in(store, publication_id, sample_po
 
     assert result.status is ResultStatus.NEEDS_RELOGIN
     assert "vk_wall" in result.error or "ВК" in result.error
-    assert not store.is_done(publication_id, "vk_wall")
+    assert not await store.is_done(publication_id, "vk_wall")
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_verify_before_retry_finds_existing_post(store, publication_id):
 
     assert result.status is ResultStatus.DONE
     assert result.external_id == "posted:recovered"
-    assert store.is_done(publication_id, "vk_wall")
+    assert await store.is_done(publication_id, "vk_wall")
     # до формы не дошли
     page.get_by_role.assert_not_called()
 
@@ -164,7 +164,7 @@ async def test_publishes_text_only(store, publication_id):
         result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.DONE
-    assert store.is_done(publication_id, "vk_wall")
+    assert await store.is_done(publication_id, "vk_wall")
 
     # открытие формы: «Создать» через get_by_role exact=True
     role_calls = page.get_by_role.call_args_list

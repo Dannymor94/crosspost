@@ -52,7 +52,7 @@ class VKBrowserAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # 1) идемпотентность — дедуп по внутреннему ключу
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         async with open_page(self.channel, headless=self._headless) as page:
@@ -63,7 +63,9 @@ class VKBrowserAdapter:
             #    не дублируем (закрываем окно «послали → упали до mark_done»).
             if await self._post_already_exists(page, content.text):
                 # нашли в DOM — помечаем done с квитанцией "posted" и выходим
-                self._store.mark_done(publication_id, self.channel, external_id="posted:recovered")
+                await self._store.mark_done(
+                    publication_id, self.channel, external_id="posted:recovered"
+                )
                 return ChannelResult(
                     self.channel, ResultStatus.DONE, external_id="posted:recovered"
                 )
@@ -81,7 +83,7 @@ class VKBrowserAdapter:
             # 6) отправить и дождаться публикации
             external_id = await self._submit_and_get_id(page, content.text)
 
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
 
     # ── внутренние методы ────────────────────────────────────────────────────

@@ -120,7 +120,7 @@ class TelegraphAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # 1) идемпотентность — дедуп по внутреннему ключу, не по external_id
-        if self._store.is_done(publication_id, self.channel):
+        if await self._store.is_done(publication_id, self.channel):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # 2) Telegraph поддерживает только статьи
@@ -183,7 +183,7 @@ class TelegraphAdapter:
 
         # 6) квитанция — полный URL страницы (для верификации / правки / удаления)
         external_id = payload["result"]["url"]
-        self._store.mark_done(publication_id, self.channel, external_id=external_id)
+        await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id)
 
 

@@ -151,7 +151,8 @@ async def test_expiry_stored_and_expires_soon_computed(repo, monkeypatch, sessio
         p = await repo.create_profile("iguser4")
         await repo.set_credential(p.id, "instagram", CredentialKind.API_TOKEN, _VALID_BLOB)
 
-        result = await validate_connection(repo, p.id, "instagram")
+        # persist_expiry=True: учётка только что сохранена (connect) → фиксируем срок.
+        result = await validate_connection(repo, p.id, "instagram", persist_expiry=True)
 
     state = result[0] if isinstance(result, tuple) else result
     assert state == ConnectionState.LIVE
@@ -178,6 +179,34 @@ async def test_expiry_stored_and_expires_soon_computed(repo, monkeypatch, sessio
     # A connection expiring in 5 days IS expires_soon
     near = datetime.now(UTC) + timedelta(days=5)
     assert is_expires_soon(near) is True
+
+
+@pytest.mark.asyncio
+async def test_revalidation_does_not_move_expiry(repo, monkeypatch, session):
+    """Plain re-validation (persist_expiry=False) must NOT reset the stored expiry."""
+    from crosspost.channels.connection_validator import validate_connection
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_resp_user = MagicMock()
+    mock_resp_user.json.return_value = {"id": "17841400000000000"}
+    mock_client.get = AsyncMock(return_value=mock_resp_user)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        p = await repo.create_profile("iguser5")
+        await repo.set_credential(p.id, "instagram", CredentialKind.API_TOKEN, _VALID_BLOB)
+
+        # First connect persists the expiry…
+        await validate_connection(repo, p.id, "instagram", persist_expiry=True)
+        first = (await repo.get_connection(p.id, "instagram")).expires_at
+        assert first is not None
+
+        # …a later re-check (no persist) leaves the stored expiry untouched.
+        await validate_connection(repo, p.id, "instagram")
+        second = (await repo.get_connection(p.id, "instagram")).expires_at
+
+    assert second == first, "re-validation must not move the stored expiry"
 
 
 # ── 5b. Validator uses graph.instagram.com (not graph.facebook.com) ──────────

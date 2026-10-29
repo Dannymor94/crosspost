@@ -32,7 +32,6 @@ import json
 import logging
 import math
 import os
-import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -41,6 +40,7 @@ import httpx
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
+from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +72,6 @@ _ERR_TUNNEL_FAILED = (
 )
 
 _LOCAL_HOSTNAMES = frozenset({"localhost", "localhost."})
-
-# Regex for truncating signed tokens in logs: /public-media/<8chars>…
-_TOKEN_IN_URL = re.compile(r"(/public-media/)([A-Za-z0-9_\-=.]{8})[A-Za-z0-9_\-=.]+")
 
 
 def _is_local_host(host: str) -> bool:
@@ -205,6 +202,9 @@ def _raise_for_api_error(payload: dict) -> None:
     if not err:
         return
     kind, msg = classify_api_error(err)
+    # Meta may echo the video_url (with its signed token) back in an error message;
+    # redact before it becomes the exception text that reaches the DB/response.
+    msg = redact_media_tokens(msg)
     if kind == "token_error":
         raise InstagramTokenError(msg)
     if kind == "region_block" and not os.environ.get("INSTAGRAM_PROXY_URL"):
@@ -243,7 +243,7 @@ class InstagramAdapter:
         publication_id: str,
     ) -> ChannelResult:
         # §1 идемпотентность: публикация уже прошла → не шлём ничего
-        if self._store.is_done(publication_id, self.channel, target=self._target):
+        if await self._store.is_done(publication_id, self.channel, target=self._target):
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Auto-tunnel: ensure localhost.run is reachable before creating the container.
@@ -276,7 +276,7 @@ class InstagramAdapter:
 
     async def _run(self, content, publication_id, client) -> ChannelResult:
         ckpt = publication_id + _CONTAINER_STEP
-        container_id = self._store.get_external_id(ckpt, self.channel, target=self._target)
+        container_id = await self._store.get_external_id(ckpt, self.channel, target=self._target)
 
         if not container_id:
             # Валидируем ДО создания контейнера (fail early, ничего на площадку не ушло).
@@ -291,7 +291,9 @@ class InstagramAdapter:
                     "(таймаут на шаге создания контейнера)"
                 ) from None
             # Чекпоинт ДО публикации: ретрай переиспользует этот контейнер.
-            self._store.mark_done(ckpt, self.channel, external_id=container_id, target=self._target)
+            await self._store.mark_done(
+                ckpt, self.channel, external_id=container_id, target=self._target
+            )
             status = None  # свежий контейнер — опрашиваем с нуля
         else:
             # Ретрай: дожимаем существующий контейнер с его текущего шага.
@@ -303,10 +305,10 @@ class InstagramAdapter:
                     "(таймаут на шаге проверки статуса контейнера)"
                 ) from None
             if status == _PUBLISHED:
-                self._store.mark_done(publication_id, self.channel, None, target=self._target)
+                await self._store.mark_done(publication_id, self.channel, None, target=self._target)
                 return ChannelResult(self.channel, ResultStatus.DONE)
             if status in _TERMINAL_FAIL:
-                self._store.clear_done(ckpt, self.channel, target=self._target)
+                await self._store.clear_done(ckpt, self.channel, target=self._target)
                 return ChannelResult(self.channel, ResultStatus.FAILED, error=detail)
 
         if status != _READY:
@@ -317,7 +319,7 @@ class InstagramAdapter:
                     "Meta не успела скачать или обработать видео (таймаут на шаге опроса статуса)"
                 ) from None
             if status in _TERMINAL_FAIL:
-                self._store.clear_done(ckpt, self.channel, target=self._target)
+                await self._store.clear_done(ckpt, self.channel, target=self._target)
                 return ChannelResult(self.channel, ResultStatus.FAILED, error=detail)
             if status != _READY:
                 # Таймаут обработки видео самой Meta (не httpx-таймаут): контейнер сохранён.
@@ -335,7 +337,7 @@ class InstagramAdapter:
                 "Meta не успела скачать или обработать видео "
                 "(таймаут на шаге публикации контейнера)"
             ) from None
-        self._store.mark_done(
+        await self._store.mark_done(
             publication_id, self.channel, external_id=media_id, target=self._target
         )
         return ChannelResult(
@@ -351,7 +353,7 @@ class InstagramAdapter:
         # Confirmed shape via live API probe 2026-10: JSON body + Authorization: Bearer.
         # Resumable upload (upload_type=resumable) is not available for Instagram Login tokens;
         # video_url is used instead (confirmed by live probe).
-        safe_url = _TOKEN_IN_URL.sub(r"\1\2…", video_url)
+        safe_url = redact_media_tokens(video_url)
         logger.debug("creating Reels container, video_url: %s", safe_url)
         resp = await client.post(
             f"{_GRAPH_HOST}/{self._ver}/{self._ig_user_id}/media",

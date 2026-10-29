@@ -111,7 +111,7 @@ def _patch_logged_in(value: bool):
 @pytest.mark.asyncio
 async def test_skips_when_already_published(store, publication_id, sample_post):
     adapter = _make_adapter(store)
-    store.mark_done(publication_id, "vk_channel", external_id="ch:1")
+    await store.mark_done(publication_id, "vk_channel", external_id="ch:1")
 
     with patch("crosspost.adapters.browser.vk_channel.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
@@ -129,7 +129,7 @@ async def test_needs_relogin_when_not_logged_in(store, publication_id, sample_po
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
     assert result.status is ResultStatus.NEEDS_RELOGIN
-    assert not store.is_done(publication_id, "vk_channel")
+    assert not await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,7 @@ async def test_publishes_text_only(store, publication_id):
         result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.DONE
-    assert store.is_done(publication_id, "vk_channel")
+    assert await store.is_done(publication_id, "vk_channel")
 
     # временная ссылка «открыть канал» — на сам канал мессенджера (id нормализован)
     assert result.url == "https://vk.ru/im/channels/-240033402?entrypoint=channel"
@@ -234,7 +234,7 @@ async def test_no_false_done_when_composer_not_cleared(store, publication_id, mo
         with pytest.raises(RuntimeError, match="не отправился"):
             await adapter.publish(content, publication_id=publication_id)
 
-    assert not store.is_done(publication_id, "vk_channel")
+    assert not await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio
@@ -252,7 +252,7 @@ async def test_photo_upload_stuck_raises_clear_error(store, publication_id, samp
 
     # клик по заблокированной кнопке НЕ делаем (иначе Playwright висит 30с):
     # локатор кнопки мог быть создан для wait, но click() по нему не вызывался.
-    assert not store.is_done(publication_id, "vk_channel")
+    assert not await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio

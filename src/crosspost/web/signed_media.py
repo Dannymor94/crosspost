@@ -18,7 +18,18 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
+
+# Signed /public-media/ tokens must never appear in full in logs, error messages,
+# responses or the DB. This is the single source of truth for the pattern and the
+# "first 8 chars + …" redaction format; all other modules reuse redact_media_tokens().
+_PUBLIC_MEDIA_TOKEN_RE = re.compile(r"(/public-media/)([A-Za-z0-9_\-=.]{8})[A-Za-z0-9_\-=.]+")
+
+
+def redact_media_tokens(text: str) -> str:
+    """Truncate any /public-media/<token> in text to its first 8 chars + …."""
+    return _PUBLIC_MEDIA_TOKEN_RE.sub(r"\1\2…", text)
 
 
 def _secret() -> bytes:

@@ -436,29 +436,40 @@ async def import_commit(
                         RowProblem(rrow.row_number, rrow.file, f"не удалось получить файл: {exc}")
                     )
 
-        # Per-channel video size gate: skip row if any channel can't handle the file.
-        _skip = False
+        # Video eligibility gate (тот же хелпер и тексты, что у publish):
+        # пропускаем строку, если хотя бы один выбранный канал не примет медиа
+        # (или требует видео, а его нет).
+        from crosspost.content.capabilities import video_ineligible_reason  # noqa: PLC0415
+        from crosspost.content.media_kind import MediaKind, detect_media_kind  # noqa: PLC0415
+
+        has_video = False
+        file_size = 0
         if saved_paths:
             from pathlib import Path  # noqa: PLC0415
 
+            has_video = detect_media_kind(saved_paths[0]) == MediaKind.VIDEO
             try:
                 file_size = Path(saved_paths[0]).stat().st_size
             except OSError:
                 file_size = 0
-            if file_size > 0:
-                for sel in selections_from_stored(channel_list):
-                    v_def = VALIDATORS.get(sel.channel)
-                    if v_def and v_def.max_video_bytes and file_size > v_def.max_video_bytes:
-                        commit_warnings.append(
-                            RowProblem(
-                                rrow.row_number,
-                                rrow.file,
-                                f"видео {file_size // (1024 * 1024)} МБ превышает лимит "
-                                f"канала {sel.channel} ({v_def.max_video_bytes // (1024 * 1024)} МБ) — строка пропущена",
-                            )
-                        )
-                        _skip = True
-                        break
+        _skip = False
+        for sel in selections_from_stored(channel_list):
+            v_def = VALIDATORS.get(sel.channel)
+            if v_def is None:
+                continue
+            reason = video_ineligible_reason(
+                sel.channel, v_def.max_video_bytes, has_video=has_video, video_bytes=file_size
+            )
+            if reason:
+                commit_warnings.append(
+                    RowProblem(
+                        rrow.row_number,
+                        rrow.file,
+                        f"{sel.channel}: {reason} — строка пропущена",
+                    )
+                )
+                _skip = True
+                break
         if _skip:
             continue
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -33,7 +32,8 @@ from pydantic import BaseModel
 
 from crosspost.channels.validators import VALIDATORS
 from crosspost.content.canonical import CanonicalContent, ContentType
-from crosspost.content.capabilities import VIDEO_CHANNELS, VIDEO_REQUIRED_CHANNELS, supports
+from crosspost.content.capabilities import supports, video_ineligible_reason
+from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, PublicationStatus
@@ -51,13 +51,11 @@ from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import SessionDep, require_profile_access
+from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
 # Alle routes under /api/profiles/{profile_id}/… — isolation gate covers entire router.
 router = APIRouter(tags=["publish"], dependencies=[Depends(require_profile_access)])
-
-# Redact signed media tokens from logged messages (same pattern as app.py/_REDACT_TOKEN_PAT).
-_REDACT_TOKEN_PAT = re.compile(r"(/public-media/)([A-Za-z0-9_\-=.]{8})[A-Za-z0-9_\-=.]+")
 
 
 def _make_http_client() -> httpx.AsyncClient:
@@ -277,12 +275,12 @@ def _target_reason(
     video_bytes: int = 0,
 ) -> str:
     """Причина неготовности единицы публикации (порядок приоритета важен)."""
-    if has_video and channel and channel not in VIDEO_CHANNELS:
-        return "Этот канал не принимает видео"
-    if has_video and video_bytes > 0 and v.max_video_bytes and video_bytes > v.max_video_bytes:
-        return f"Видео больше лимита канала ({v.max_video_bytes // (1024 * 1024)} МБ)"
-    if not has_video and channel and channel in VIDEO_REQUIRED_CHANNELS:
-        return "Прикрепите видео для публикации"
+    if channel:
+        vreason = video_ineligible_reason(
+            channel, v.max_video_bytes, has_video=has_video, video_bytes=video_bytes
+        )
+        if vreason:
+            return vreason
     if not supported:
         return f"Не поддерживает тип «{ctype.value}»"
     if not live:
@@ -305,6 +303,20 @@ def _upload_video_bytes(files) -> int:
         except Exception:  # noqa: BLE001
             pass
     return total
+
+
+def _has_video(files, image: str = "") -> bool:
+    """True if any attached media (uploaded file or URL/filename) is a video.
+
+    Server-side signal for the eligibility gate — не доверяем клиентскому has_video.
+    """
+    for f in files or []:
+        name = getattr(f, "filename", None)
+        if name and detect_media_kind(name) == MediaKind.VIDEO:
+            return True
+    if image and detect_media_kind(image.split("?")[0]) == MediaKind.VIDEO:
+        return True
+    return False
 
 
 def _ineligible_kind(eligible: bool, video_ok: bool, supported: bool) -> str:
@@ -437,16 +449,8 @@ async def publish_targets(
         state_str = str(state) if state is not None else "not_connected"
         supported = supports(ch, ctype)
         live = state == ConnectionState.LIVE
-        size_ok = (
-            not has_video
-            or video_bytes == 0
-            or v.max_video_bytes is None
-            or video_bytes <= v.max_video_bytes
-        )
-        video_ok = (
-            (not has_video or ch in VIDEO_CHANNELS)
-            and (has_video or ch not in VIDEO_REQUIRED_CHANNELS)
-            and size_ok
+        video_ok = not video_ineligible_reason(
+            ch, v.max_video_bytes, has_video=has_video, video_bytes=video_bytes
         )
 
         if not v.needs_target:
@@ -554,7 +558,13 @@ async def publish_now(
     # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
     _vbytes = _upload_video_bytes(media)
     await _reject_ineligible(
-        profile_repo, profile_id, selections, content_type, session=session, video_bytes=_vbytes
+        profile_repo,
+        profile_id,
+        selections,
+        content_type,
+        session=session,
+        has_video=_has_video(media, image),
+        video_bytes=_vbytes,
     )
 
     publication_id = new_publication_id()
@@ -592,7 +602,7 @@ async def publish_now(
         article_title=title or None,
         link_phrase=link_phrase or None,
     )
-    _cleanup_if_final(profile_id, publication_id, outcomes)
+    await _cleanup_if_final(session, profile_id, publication_id, outcomes)
     await _log_outcomes(LogRepository(session), profile_id, outcomes, publication_id)
     names = await _target_names(session, profile_id, [o.target for o in outcomes])
     return PublishResult(
@@ -659,9 +669,9 @@ async def publish_retry(
     if all(str(s.status) in _SUCCESS for s in all_now):
         media_store.cleanup_media(run.media_key)
         _RUNS.pop((profile_id, publication_id), None)
-        from crosspost.db.sqlite_store import sync_checkpoint_store  # noqa: PLC0415
+        from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
-        sync_checkpoint_store(profile_id).delete_checkpoints(publication_id)
+        await CheckpointStore(session, profile_id=profile_id).delete_checkpoints(publication_id)
     await _log_outcomes(LogRepository(session), profile_id, [outcome], publication_id)
     names = await _target_names(session, profile_id, [outcome.target])
     return _outcome_out(outcome, names)
@@ -707,7 +717,13 @@ async def schedule_post(
         raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
     _vbytes = _upload_video_bytes(media)
     await _reject_ineligible(
-        profile_repo, profile_id, selections, content_type, session=session, video_bytes=_vbytes
+        profile_repo,
+        profile_id,
+        selections,
+        content_type,
+        session=session,
+        has_video=_has_video(media, image),
+        video_bytes=_vbytes,
     )
 
     key = f"sched-{new_publication_id()}"
@@ -1064,7 +1080,7 @@ async def _log_outcomes(
         if getattr(o, "external_id", None):
             msg += f" ({o.external_id})"
         if getattr(o, "error", None):
-            safe_err = _REDACT_TOKEN_PAT.sub(r"\1\2…", o.error)
+            safe_err = redact_media_tokens(o.error)
             msg += f" — {safe_err}"
         await log_repo.add(
             profile_id,
@@ -1107,6 +1123,7 @@ async def _reject_ineligible(
     content_type: str,
     *,
     session,
+    has_video: bool = False,
     video_bytes: int = 0,
 ) -> None:
     """Отклонить, если среди выбранных единиц есть неlive/неподдерживающий/без цели.
@@ -1127,16 +1144,17 @@ async def _reject_ineligible(
         v = VALIDATORS.get(ch)
         if v is None or not v.enabled:
             raise HTTPException(status_code=422, detail=f"Канал '{ch}' недоступен")
+        # Видео-правило (тот же хелпер и тексты, что у GET /publish/targets).
+        vreason = video_ineligible_reason(
+            ch, v.max_video_bytes, has_video=has_video, video_bytes=video_bytes
+        )
+        if vreason:
+            raise HTTPException(status_code=422, detail=vreason)
         if not supports(ch, ctype):
             raise HTTPException(status_code=422, detail=f"'{ch}' не поддерживает {ctype.value}")
         if conns.get(ch) != ConnectionState.LIVE:
             raise HTTPException(
                 status_code=422, detail=f"'{ch}' не подключён — переподключите в настройках"
-            )
-        if video_bytes > 0 and v.max_video_bytes and video_bytes > v.max_video_bytes:
-            raise HTTPException(
-                status_code=422,
-                detail=f"'{ch}': видео больше лимита канала ({v.max_video_bytes // (1024 * 1024)} МБ)",
             )
         if not v.needs_target:
             continue
@@ -1175,14 +1193,14 @@ async def _save_media(files, key: str) -> list[str]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _cleanup_if_final(profile_id: int, publication_id: str, outcomes) -> None:
+async def _cleanup_if_final(session, profile_id: int, publication_id: str, outcomes) -> None:
     """Если все каналы завершились успешно — чистим медиа, снимок и чекпоинты."""
     if all(o.status in _SUCCESS for o in outcomes):
         media_store.cleanup_media(publication_id)
         _RUNS.pop((profile_id, publication_id), None)
-        from crosspost.db.sqlite_store import sync_checkpoint_store  # noqa: PLC0415
+        from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
-        sync_checkpoint_store(profile_id).delete_checkpoints(publication_id)
+        await CheckpointStore(session, profile_id=profile_id).delete_checkpoints(publication_id)
 
 
 def _parse_marker(value: str | None) -> datetime | None:
