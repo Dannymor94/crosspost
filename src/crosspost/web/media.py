@@ -12,7 +12,21 @@ import os
 import shutil
 from pathlib import Path
 
+from crosspost.content.media_kind import MediaKind, detect_media_kind
+
 logger = logging.getLogger(__name__)
+
+_IMAGE_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
+_CHUNK = 256 * 1024  # 256 KB read chunks
+
+
+def _video_max_bytes() -> int:
+    return int(os.environ.get("VIDEO_MAX_BYTES", str(500 * 1024 * 1024)))
+
+
+class MediaUploadError(ValueError):
+    """Uploaded file exceeds the allowed size cap."""
+
 
 _MEDIA_ROOT_DEFAULT = "runtime/media"
 
@@ -33,8 +47,26 @@ async def save_uploads(files, key: str) -> list[str]:
     for i, up in enumerate(files):
         name = Path(up.filename or f"file{i}").name  # только имя, без каталогов
         dest = target / f"{i:02d}_{name}"
-        data = await up.read()
-        dest.write_bytes(data)
+        is_video = detect_media_kind(name) == MediaKind.VIDEO
+        cap = _video_max_bytes() if is_video else _IMAGE_MAX_BYTES
+        label = "видео" if is_video else "изображения"
+        cap_mb = cap // (1024 * 1024)
+        # ponytail: SpooledTemporaryFile is sync; chunked copy avoids double-buffer
+        total = 0
+        up.file.seek(0)
+        with open(dest, "wb") as out:
+            while True:
+                chunk = up.file.read(_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > cap:
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    raise MediaUploadError(
+                        f"Размер {label} превышает допустимый лимит ({cap_mb} МБ)."
+                    )
+                out.write(chunk)
         paths.append(str(dest))
     return paths
 

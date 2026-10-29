@@ -41,7 +41,7 @@ CLAUDE.md `▶ СЕЙЧАС` **устарел** (говорит «Итераци
 | Слой | Что работает |
 |---|---|
 | Данные (0) | SQLite-схема, Fernet-vault, ProfileRepository (изоляция по `profile_id`), validate_connection |
-| Каналы | Telegram (API) ✅, Яндекс / ВК-стена / ВК-канал (браузер) ✅ — постят вживую |
+| Каналы | Telegram (API) ✅, Яндекс / ВК-стена / ВК-канал (браузер) ✅, Instagram Reels (API) ✅ — постят вживую |
 | UI подключений (итер.1) | профили, карточки каналов, интерактивный вход TG, браузер-логин, per-profile target |
 | Публикация (итер.2а) | экран публикации, поканальные статусы, ретрай одного канала, планировщик (сохранение) |
 | Авторизация | login+пароль → подписанная httponly-кука, роли admin/client, изоляция профилей |
@@ -50,8 +50,10 @@ CLAUDE.md `▶ СЕЙЧАС` **устарел** (говорит «Итераци
 `db/user_repo.py`, `routes/auth.py`, `routes/users.py`, `tests/auth/`. Учитывай при `git`.
 
 Каналы в capability-матрице, помеченные как реализованные адаптеры: `telegram`,
-`yandex`, `vk_wall`, `vk_channel`. Остальные (`whatsapp`, `instagram`, `dzen`,
-`youtube`, `telegraph`, `vk` API) — в матрице/реестре есть, адаптеров нет.
+`yandex`, `vk_wall`, `vk_channel`, `instagram`. Instagram Reels работает сквозь:
+требует ненулевого `INSTAGRAM_PUBLIC_BASE_URL` (публичный сервер или туннель) и
+выход не с российского IP. Остальные (`whatsapp`, `dzen`, `youtube`,
+`telegraph`, `vk` API) — в матрице/реестре есть, адаптеров нет.
 
 ---
 

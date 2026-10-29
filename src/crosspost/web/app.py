@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,9 +27,11 @@ from crosspost.web.routes import (
     errors,
     import_plan,
     profiles,
+    public_media,
     publish,
     settings,
     tg_login,
+    tunnel_health,
     users,
 )
 
@@ -37,10 +40,27 @@ logger = logging.getLogger(__name__)
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 
+_REDACT_TOKEN_PAT = re.compile(r"(/public-media/)([A-Za-z0-9_\-=.]{8})[A-Za-z0-9_\-=.]+")
+
+
+class _RedactPublicMediaFilter(logging.Filter):
+    """Truncate signed tokens in uvicorn access logs: /public-media/<8chars>…"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.args = tuple(
+                _REDACT_TOKEN_PAT.sub(r"\1\2…", a) if isinstance(a, str) else a
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+            )
+        record.msg = _REDACT_TOKEN_PAT.sub(r"\1\2…", str(record.msg))
+        return True
+
+
 def _ensure_app_logging() -> None:
     """Показывать INFO/WARNING логи crosspost (uvicorn их по умолчанию не выводит).
 
     Нужно для диагностики (напр. telegram send_code type=…, ошибки исполнителя).
+    Также редактирует uvicorn.access: подписанные токены в /public-media/ усекаются.
     """
     log = logging.getLogger("crosspost")
     if not log.handlers:
@@ -50,11 +70,30 @@ def _ensure_app_logging() -> None:
         log.setLevel(logging.INFO)
         log.propagate = False
 
+    # Redact signed tokens from uvicorn access log (full token must not appear in logs).
+    access_log = logging.getLogger("uvicorn.access")
+    for f in access_log.filters:
+        if isinstance(f, _RedactPublicMediaFilter):
+            break
+    else:
+        access_log.addFilter(_RedactPublicMediaFilter())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    import secrets as _secrets
+
     load_config()  # инжектирует runtime/.env в os.environ до любых обращений к секретам
     _ensure_app_logging()
+    from crosspost.web.signed_media import _secret as _check_media_secret  # noqa: PLC0415
+
+    _check_media_secret()  # fail fast if MEDIA_URL_SECRET is missing
+
+    # Tunnel nonce: random per-process value, returned by /tunnel-health.
+    from crosspost.tunnel import state as _tunnel_state  # noqa: PLC0415
+
+    _tunnel_state.set_nonce(_secrets.token_hex(16))
+    _tunnel_state.set_public_base_url(os.environ.get("INSTAGRAM_PUBLIC_BASE_URL", ""))
     engine = await create_engine_and_tables(get_db_url())
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)
@@ -93,6 +132,8 @@ def create_app() -> FastAPI:
     app.include_router(import_plan.router)
     app.include_router(settings.router)
     app.include_router(errors.router)
+    app.include_router(public_media.router)
+    app.include_router(tunnel_health.router)
 
     # Serve frontend SPA — must be after API routes
     if _FRONTEND_DIR.exists():

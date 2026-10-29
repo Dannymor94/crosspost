@@ -2232,3 +2232,250 @@ async def test_publish_isolation_between_profiles(client, factory):
     # Профиль B не видит статусы публикации A.
     other = await client.get(f"/api/profiles/{pb}/publish/{pub_id}")
     assert other.json() == []
+
+
+# ── Video: size cap ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_video_upload_exceeds_cap(client, factory, monkeypatch):
+    """Upload oversized video → 422 with size error."""
+    monkeypatch.setenv("VIDEO_MAX_BYTES", "100")  # tiny cap
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    large_video = b"x" * 200  # exceeds 100-byte cap
+    with _patch_adapters({"telegram": _MockAdapter("telegram")}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram"])},
+            files=[("media", ("clip.mp4", large_video, "video/mp4"))],
+        )
+    assert r.status_code == 422
+    detail = r.json()["detail"].lower()
+    assert "размер" in detail or "превышает" in detail
+
+
+# ── Video: targets endpoint ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_targets_non_video_channel_ineligible_when_has_video(client, factory):
+    """GET targets?has_video=true → non-video channel ineligible with 'видео' reason."""
+    pid = await _make_profile_with_live(factory, ["telegram", "yandex"])
+    r = await client.get(f"/api/profiles/{pid}/publish/targets?has_video=true&content_type=post")
+    assert r.status_code == 200
+    items = r.json()
+    yandex = [t for t in items if t["channel"] == "yandex"]
+    assert yandex, "yandex must appear in targets"
+    assert not yandex[0]["eligible"]
+    assert "видео" in yandex[0]["reason"].lower()
+    tg = [t for t in items if t["channel"] == "telegram"]
+    assert tg and tg[0]["eligible"], "telegram must be eligible with video"
+
+
+@pytest.mark.asyncio
+async def test_targets_instagram_ineligible_without_video(client, factory):
+    """GET targets?has_video=false → instagram ineligible with 'нужно видео'."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    r = await client.get(f"/api/profiles/{pid}/publish/targets?has_video=false&content_type=post")
+    assert r.status_code == 200
+    items = r.json()
+    ig = [t for t in items if t["channel"] == "instagram"]
+    assert ig, "instagram must appear in targets"
+    assert not ig[0]["eligible"]
+    assert "видео" in ig[0]["reason"].lower()
+
+
+# ── Instagram post capability ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_instagram_eligible_with_video_post(client, factory):
+    """GET targets?has_video=true&content_type=post → instagram eligible."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    r = await client.get(f"/api/profiles/{pid}/publish/targets?has_video=true&content_type=post")
+    assert r.status_code == 200
+    ig = [t for t in r.json() if t["channel"] == "instagram"]
+    assert ig, "instagram must appear in targets"
+    assert ig[0]["eligible"], f"instagram must be eligible with video post, got: {ig[0]}"
+
+
+@pytest.mark.asyncio
+async def test_instagram_ineligible_post_without_video_kind_content(client, factory):
+    """GET targets?has_video=false&content_type=post → instagram ineligible, kind=content."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    r = await client.get(f"/api/profiles/{pid}/publish/targets?has_video=false&content_type=post")
+    ig = [t for t in r.json() if t["channel"] == "instagram"]
+    assert ig and not ig[0]["eligible"]
+    assert ig[0]["ineligible_kind"] == "content"
+    assert "видео" in ig[0]["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_instagram_ineligible_for_article(client, factory):
+    """GET targets?content_type=article → instagram ineligible (no article support)."""
+    pid = await _make_profile_with_live(factory, ["instagram"])
+    r = await client.get(f"/api/profiles/{pid}/publish/targets?content_type=article")
+    ig = [t for t in r.json() if t["channel"] == "instagram"]
+    assert ig and not ig[0]["eligible"]
+    # Should be a content-kind ineligibility, not connection.
+    assert ig[0]["ineligible_kind"] == "content"
+
+
+def test_instagram_supports_post_content_type():
+    """After fix: instagram must support 'post' content type (plan import uses this)."""
+    from crosspost.content.canonical import ContentType
+    from crosspost.content.capabilities import supports
+
+    assert supports("instagram", ContentType.POST), (
+        "instagram must support T.POST so video posts from import plan are eligible"
+    )
+
+
+# ── logging of publish-now outcomes ──────────────────────────────────────────
+
+
+async def test_publish_now_failure_creates_log_row(client, factory, monkeypatch):
+    """A failed publish-now must write an ERROR row to the logs table."""
+    from crosspost.db.log_repo import LogRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+
+    with _patch_adapters(
+        {
+            "telegram": _MockAdapter(
+                "telegram",
+                result=ChannelResult("telegram", ResultStatus.FAILED, error="simulated failure"),
+            )
+        }
+    ):
+        monkeypatch.setenv("MEDIA_URL_SECRET", "test-secret-pub")
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "hi", "channels": '["telegram"]'},
+        )
+    assert resp.status_code == 200
+    outcomes = resp.json()["outcomes"]
+    assert outcomes[0]["status"] == "failed"
+
+    async with factory() as s:
+        logs = await LogRepository(s).list_for_profile(pid)
+    error_logs = [lg for lg in logs if lg.level == "ERROR" and lg.channel == "telegram"]
+    assert error_logs, "failed publish-now must create an ERROR log row"
+    assert "simulated failure" in error_logs[0].message
+
+
+async def test_publish_now_log_message_no_full_token(client, factory, monkeypatch, tmp_path):
+    """Error message in logs must not contain a full /public-media/ signed token."""
+    from crosspost.db.log_repo import LogRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+
+    fake_token = "A" * 60  # simulate a full token in the error message
+    fake_error = f"Meta error fetching /public-media/{fake_token}"
+
+    with _patch_adapters(
+        {
+            "telegram": _MockAdapter(
+                "telegram", result=ChannelResult("telegram", ResultStatus.FAILED, error=fake_error)
+            )
+        }
+    ):
+        monkeypatch.setenv("MEDIA_URL_SECRET", "test-secret-pub")
+        await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "hi", "channels": '["telegram"]'},
+        )
+
+    async with factory() as s:
+        logs = await LogRepository(s).list_for_profile(pid)
+    for lg in logs:
+        assert fake_token not in lg.message, f"full token found in log message: {lg.message!r}"
+
+
+# ── video size limit tests ────────────────────────────────────────────────────
+
+
+async def test_instagram_oversized_video_ineligible_telegram_still_eligible(
+    client, factory, monkeypatch
+):
+    """Video larger than Instagram's limit → Instagram ineligible; Telegram eligible if under its limit."""
+    from dataclasses import replace
+
+    import crosspost.channels.validators as validators_mod
+
+    # Make a very small Instagram limit so a tiny upload triggers it,
+    # while Telegram's limit stays large enough.
+    tiny_ig = replace(validators_mod.VALIDATORS["instagram"], max_video_bytes=1)  # 1 byte
+    monkeypatch.setitem(validators_mod.VALIDATORS, "instagram", tiny_ig)
+
+    pid = await _make_profile_with_live(factory, ["instagram", "telegram"])
+    # 2-byte video file → over Instagram's 1-byte limit, under Telegram's limit
+    video_bytes = 2
+
+    resp = await client.get(
+        f"/api/profiles/{pid}/publish/targets"
+        f"?content_type=reel&has_video=true&video_bytes={video_bytes}"
+    )
+    assert resp.status_code == 200
+    targets = {t["channel"]: t for t in resp.json()}
+
+    ig = targets.get("instagram")
+    assert ig is not None
+    assert ig["eligible"] is False
+    assert "лимита" in ig.get("reason", ""), f"expected size reason, got: {ig.get('reason')!r}"
+
+    tg_targets = [t for ch, t in targets.items() if ch == "telegram"]
+    assert tg_targets, "telegram should appear in targets"
+    # Telegram's limit is 2000 MiB; 2 bytes is well within it.
+    assert all(t["eligible"] for t in tg_targets), "telegram must be eligible for small video"
+
+
+async def test_schedule_post_rejects_video_over_channel_limit(client, factory, monkeypatch):
+    """Scheduling a post with a video over Instagram's limit → 422."""
+    from dataclasses import replace
+    from io import BytesIO
+
+    import crosspost.channels.validators as validators_mod
+
+    tiny_ig = replace(validators_mod.VALIDATORS["instagram"], max_video_bytes=1)  # 1 byte
+    monkeypatch.setitem(validators_mod.VALIDATORS, "instagram", tiny_ig)
+    pid = await _make_profile_with_live(factory, ["instagram"])
+
+    # Upload a 2-byte video file (over the 1-byte limit)
+    resp = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "content_type": "reel",
+            "text": "test",
+            "channels": '["instagram"]',
+            "scheduled_at": "2099-01-01T12:00:00",
+        },
+        files=[("media", ("clip.mp4", BytesIO(b"\x00\x00"), "video/mp4"))],
+    )
+    assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+    assert "лимита" in resp.text or "лимит" in resp.text, (
+        f"expected size reason in response: {resp.text}"
+    )
+
+
+async def test_adapter_size_check_uses_declared_value(tmp_path, monkeypatch):
+    """The adapter's _validate_reel_file reads max_video_bytes from the channel declaration."""
+    from dataclasses import replace
+
+    import crosspost.channels.validators as validators_mod
+    from crosspost.adapters.api.instagram import _validate_reel_file
+
+    # Set declared limit to 5 bytes
+    tiny_ig = replace(validators_mod.VALIDATORS["instagram"], max_video_bytes=5)
+    monkeypatch.setitem(validators_mod.VALIDATORS, "instagram", tiny_ig)
+
+    ok_file = tmp_path / "ok.mp4"
+    ok_file.write_bytes(b"\x00" * 5)  # exactly at limit — should pass
+    assert _validate_reel_file(ok_file) == 5
+
+    big_file = tmp_path / "big.mp4"
+    big_file.write_bytes(b"\x00" * 6)  # over declared limit — should fail
+    import pytest
+
+    with pytest.raises(Exception, match="МБ|limit|превыша"):
+        _validate_reel_file(big_file)

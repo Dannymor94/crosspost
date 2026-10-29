@@ -327,8 +327,11 @@ async def import_preview(
 
     rows = _parse_table_or_422(data, filename, mapping=mapping)
     rule = _parse_rule_or_422(
-        start_date, times_csv,
-        interval=interval, interval_n=interval_n, weekdays_csv=weekdays_csv,
+        start_date,
+        times_csv,
+        interval=interval,
+        interval_n=interval_n,
+        weekdays_csv=weekdays_csv,
     )
     folder = await settings.get_media_folder()
     report = build_plan(rows, file_list, rule, folder_configured=bool(folder))
@@ -393,8 +396,11 @@ async def import_commit(
         media_by_basename.setdefault(_basename_lower(f.filename or ""), f)
 
     rule = _parse_rule_or_422(
-        start_date, times_csv,
-        interval=interval, interval_n=interval_n, weekdays_csv=weekdays_csv,
+        start_date,
+        times_csv,
+        interval=interval,
+        interval_n=interval_n,
+        weekdays_csv=weekdays_csv,
     )
     folder = await settings.get_media_folder()
     report = build_plan(rows, available_names, rule, folder_configured=bool(folder))
@@ -429,6 +435,32 @@ async def import_commit(
                     commit_warnings.append(
                         RowProblem(rrow.row_number, rrow.file, f"не удалось получить файл: {exc}")
                     )
+
+        # Per-channel video size gate: skip row if any channel can't handle the file.
+        _skip = False
+        if saved_paths:
+            from pathlib import Path  # noqa: PLC0415
+
+            try:
+                file_size = Path(saved_paths[0]).stat().st_size
+            except OSError:
+                file_size = 0
+            if file_size > 0:
+                for sel in selections_from_stored(channel_list):
+                    v_def = VALIDATORS.get(sel.channel)
+                    if v_def and v_def.max_video_bytes and file_size > v_def.max_video_bytes:
+                        commit_warnings.append(
+                            RowProblem(
+                                rrow.row_number,
+                                rrow.file,
+                                f"видео {file_size // (1024 * 1024)} МБ превышает лимит "
+                                f"канала {sel.channel} ({v_def.max_video_bytes // (1024 * 1024)} МБ) — строка пропущена",
+                            )
+                        )
+                        _skip = True
+                        break
+        if _skip:
+            continue
 
         await pub_repo.create_scheduled(
             content_type=content_type,

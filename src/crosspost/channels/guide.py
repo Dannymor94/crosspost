@@ -628,6 +628,94 @@ VK_CHANNEL_GUIDE = ChannelGuide(
 )
 
 
+# ── Instagram (Reels, API-тир) ────────────────────────────────────────────────
+
+INSTAGRAM_GUIDE = ChannelGuide(
+    intro=(
+        "Подключим Instagram Reels. Нужны ID вашего бизнес-аккаунта и токен доступа — "
+        "оба берутся в Meta Business Suite или Graph API Explorer."
+    ),
+    blocks=(
+        GuideBlock(
+            field="access_token",
+            label="Как получить токен?",
+            steps=(
+                "Откройте Graph API Explorer по кнопке ниже и войдите через Facebook.",
+                "Выберите своё приложение, нажмите «Generate Access Token».",
+                "Скопируйте строку токена целиком.",
+            ),
+            link="https://developers.facebook.com/tools/explorer/",
+            link_label="открыть Graph API Explorer →",
+        ),
+        GuideBlock(
+            field="ig_user_id",
+            label="Где найти ID аккаунта Instagram?",
+            steps=(
+                "Откройте Meta Business Suite → выберите вашу страницу.",
+                "Перейдите: Настройки страницы → Instagram.",
+                "Скопируйте «Идентификатор аккаунта Instagram» — длинное число.",
+            ),
+        ),
+    ),
+    errors=(
+        ErrorHint(
+            "Токен не принимается",
+            "Убедитесь, что вы скопировали токен целиком. "
+            "Токены Instagram действуют около 60 дней — если прошло больше, получите новый.",
+        ),
+        ErrorHint(
+            "Нет разрешения instagram_business_content_publish",
+            "Токен создан без нужного разрешения. Пересоздайте токен в Graph API Explorer "
+            "и убедитесь, что «instagram_business_content_publish» включено в список разрешений.",
+        ),
+        ErrorHint(
+            "Сервис недоступен",
+            "Проверьте интернет-соединение. Если проблема повторяется, попробуйте через несколько "
+            "минут — сервис Meta может быть временно недоступен.",
+        ),
+    ),
+    steps=(
+        WizardStep(
+            key="credentials",
+            kind="simple_connect",
+            title="Введите данные Instagram",
+            body=(
+                "Для публикации Reels нужен долгосрочный токен доступа и числовой ID "
+                "вашего бизнес-аккаунта Instagram. Оба значения берутся в Meta Business Suite "
+                "или Graph API Explorer."
+            ),
+            landmark=(
+                "Токен — длинная строка букв и цифр (обычно 100–200 символов). "
+                "ID аккаунта — длинное число из настроек страницы."
+            ),
+            link="https://developers.facebook.com/tools/explorer/",
+            link_label="Открыть Graph API Explorer",
+            fields=(
+                WizardField(
+                    name="ig_user_id",
+                    label="ID бизнес-аккаунта",
+                    placeholder="17841400000000000",
+                    hint="Числовой идентификатор из настроек страницы → Instagram.",
+                    pattern=r"^\d+$",
+                    invalid_message="ID аккаунта — только цифры.",
+                    normalize="digits",
+                ),
+                WizardField(
+                    name="access_token",
+                    label="Токен доступа",
+                    secret=True,
+                    placeholder="IGA… или EAA…",
+                    hint="Долгосрочный токен (Long-Lived Token). Действует ~60 дней.",
+                    pattern=r"^\S{10,}$",
+                    invalid_message="Токен не должен быть пустым.",
+                    normalize="trim",
+                ),
+            ),
+        ),
+    ),
+)
+
+
 # ── Декларация поля цели (мультицели) ──────────────────────────────────────────
 
 

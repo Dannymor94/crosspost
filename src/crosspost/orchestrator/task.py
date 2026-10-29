@@ -41,6 +41,15 @@ class IdempotencyStore(Protocol):
     def mark_done(
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None: ...
+    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+        """Remove an entry so the next attempt treats it as fresh (not done).
+
+        Used to discard a dead checkpoint (e.g. an Instagram container that reached
+        terminal ERROR/EXPIRED) so the next retry creates a new one instead of
+        re-reading the dead container id.
+        """
+        ...
+
     def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
         """Квитанция по ключу (publication_id, channel, target), либо None.
 
@@ -67,6 +76,9 @@ class InMemoryIdempotencyStore:
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None:
         self._done[(publication_id, channel, target)] = external_id
+
+    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+        self._done.pop((publication_id, channel, target), None)
 
     def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:
         return self._done.get((publication_id, channel, target))
@@ -110,6 +122,10 @@ class JSONIdempotencyStore:
         self, publication_id: str, channel: str, external_id: str | None, *, target: str = ""
     ) -> None:
         self._done[(publication_id, channel, target)] = external_id
+        self._flush()
+
+    def clear_done(self, publication_id: str, channel: str, *, target: str = "") -> None:
+        self._done.pop((publication_id, channel, target), None)
         self._flush()
 
     def get_external_id(self, publication_id: str, channel: str, *, target: str = "") -> str | None:

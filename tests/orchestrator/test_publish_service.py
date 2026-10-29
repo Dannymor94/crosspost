@@ -416,3 +416,23 @@ async def test_string_channel_still_works_as_targetless_selection(session):
     assert log == [("telegram", "")]
     assert outcomes[0].target == ""
     assert outcomes[0].status == "done"
+
+
+# ── error message quality ─────────────────────────────────────────────────────
+
+
+async def test_empty_exc_str_stored_as_type_name(session):
+    """An exception whose str() is empty → stored error names the exception type."""
+
+    class _BlankError(Exception):
+        def __str__(self):
+            return ""
+
+    svc = PublishService(
+        _repo(session), _factory({"telegram": _MockAdapter("telegram", raises=_BlankError())})
+    )
+    outcomes = await svc.publish(_post(), ["telegram"], publication_id="p_blank")
+
+    assert outcomes[0].status == "failed"
+    assert outcomes[0].error, "error must be non-empty"
+    assert "_BlankError" in outcomes[0].error

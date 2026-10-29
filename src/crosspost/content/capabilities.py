@@ -11,7 +11,10 @@ from crosspost.content.canonical import ContentType as T
 
 # Channels that can receive video posts (mp4/mov/etc.).
 # Only channels with an implemented video-sending adapter are listed.
-VIDEO_CHANNELS: frozenset[str] = frozenset({"telegram"})
+VIDEO_CHANNELS: frozenset[str] = frozenset({"telegram", "instagram"})
+
+# Channels that REQUIRE video — cannot post without a video attachment.
+VIDEO_REQUIRED_CHANNELS: frozenset[str] = frozenset({"instagram"})
 
 CAPABILITIES: dict[str, set[T]] = {
     # API-тир
@@ -19,9 +22,12 @@ CAPABILITIES: dict[str, set[T]] = {
     "vk": {T.POST, T.ARTICLE, T.REEL, T.STORY},
     "youtube": {T.REEL},
     "telegraph": {T.ARTICLE},
+    # Instagram (API-тир, Content Publishing API).
+    # T.POST: video post → adapter publishes as Reel internally; VIDEO_REQUIRED_CHANNELS
+    # ensures no-video posts are rejected at the eligibility gate, not here.
+    "instagram": {T.POST, T.REEL},
     # браузерный тир
     "whatsapp": {T.POST, T.STORY},
-    "instagram": {T.POST, T.REEL, T.STORY},
     "dzen": {T.ARTICLE, T.POST},
     "yandex": {T.POST},
     "vk_wall": {T.POST},

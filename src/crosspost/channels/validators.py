@@ -15,10 +15,12 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from crosspost.channels.guide import (
+    INSTAGRAM_GUIDE,
     TELEGRAM_GUIDE,
     TELEGRAPH_GUIDE,
     VK_CHANNEL_GUIDE,
@@ -30,9 +32,24 @@ from crosspost.db.models import CredentialKind
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class ValidatorResult:
+    """Структурированный результат валидации (для каналов, возвращающих больше чем bool).
+
+    alive=True → подключение живое; expires_at → срок действия токена (если известен).
+    alive=False → ошибка; error — человеческое сообщение; error_field — поле формы ('' = общая).
+    """
+
+    alive: bool
+    error: str = ""
+    error_field: str = ""
+    expires_at: datetime | None = field(default=None)
+
+
 # Тип валидирующей функции: принимает credential (plaintext или None для browser)
-# и возвращает True если соединение живое.
-ValidatorFn = Callable[[str | None], Coroutine[Any, Any, bool]]
+# и возвращает True/False или ValidatorResult (для богатых ошибок/expiry).
+ValidatorFn = Callable[[str | None], Coroutine[Any, Any, "bool | ValidatorResult"]]
 
 # Нормализатор цели: сырой ввод пользователя → чистое значение (screen_name/id).
 # Бросает ValueError с человеческим сообщением, если ввод не распознан (верификация).
@@ -135,8 +152,17 @@ class ChannelValidatorDef:
     target_label: str = ""  # подпись поля цели в UI
     target_hint: str = ""  # подсказка «что вводить»
     target_normalizer: TargetNormalizer | None = None  # сырой ввод → чистое значение
+    # ── Лимиты контента ─────────────────────────────────────────────────────────
+    # Per-channel video file size limit in bytes; None = no declared limit.
+    # Instagram: 300 MB (Meta IG User Media ref, 2026-10).
+    # Telegram: 2000 MiB (Telethon/MTProto path; Bot API is 50 MB but we use Telethon).
+    max_video_bytes: int | None = None
     # ── Инструкция подключения (декларация, не хардкод в UI) ───────────────────
     guide: ChannelGuide | None = None  # пошаговая инструкция для клиента-нетехнаря
+    # ── Per-channel outbound proxy ─────────────────────────────────────────────
+    # env var holding proxy URL for this channel's HTTP client (e.g. "INSTAGRAM_PROXY_URL").
+    # Empty string = direct connection. Never affects other channels.
+    proxy_env_var: str = ""
 
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
@@ -201,6 +227,90 @@ async def _validate_telegraph(token: str | None) -> bool:
     except Exception as exc:
         logger.debug("telegraph validate failed: %s", exc)
         return False
+
+
+_ERR_PROXY_DOWN = (
+    "Прокси для Instagram недоступен (INSTAGRAM_PROXY_URL). Проверьте, что VPN-клиент запущен."
+)
+
+
+async def _validate_instagram(blob: str | None) -> ValidatorResult:
+    """Instagram Graph API: проверяем токен и собираем срок действия.
+
+    Учётка — JSON {access_token, ig_user_id}. Токен НИКОГДА не логируем.
+    Возвращает ValidatorResult с диагностикой ошибки (поле + сообщение) и expiry.
+    """
+    if not blob:
+        return ValidatorResult(alive=False, error="Учётные данные не заданы.", error_field="")
+    try:
+        import os
+
+        import httpx
+
+        from crosspost.adapters.api.instagram import (
+            _GRAPH_HOST,
+            _REGION_HINT,
+            DEFAULT_GRAPH_VERSION,
+            classify_api_error,
+            parse_instagram_blob,
+        )
+
+        token, ig_user_id = parse_instagram_blob(blob)
+        ver = os.environ.get("INSTAGRAM_GRAPH_VERSION", DEFAULT_GRAPH_VERSION)
+        proxy_url = os.environ.get("INSTAGRAM_PROXY_URL", "")
+
+        client_kwargs: dict = {"timeout": 10}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            try:
+                resp = await client.get(
+                    f"{_GRAPH_HOST}/{ver}/{ig_user_id}",
+                    params={"fields": "id"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            except httpx.ProxyError:
+                return ValidatorResult(alive=False, error=_ERR_PROXY_DOWN, error_field="")
+            except httpx.ConnectError:
+                if proxy_url:
+                    return ValidatorResult(alive=False, error=_ERR_PROXY_DOWN, error_field="")
+                return ValidatorResult(
+                    alive=False,
+                    error="Сервис graph.instagram.com недоступен. Проверьте соединение.",
+                    error_field="",
+                )
+            except httpx.TimeoutException:
+                return ValidatorResult(
+                    alive=False,
+                    error="Время ожидания ответа истекло (graph.instagram.com).",
+                    error_field="",
+                )
+
+            data = resp.json()
+            if "error" in data:
+                kind, msg = classify_api_error(data["error"])
+                if kind == "token_error":
+                    return ValidatorResult(
+                        alive=False,
+                        error="Токен недействителен или истёк. Получите новый токен в Meta Business Suite.",
+                        error_field="access_token",
+                    )
+                if kind == "region_block" and not proxy_url:
+                    msg = f"{msg} {_REGION_HINT}"
+                return ValidatorResult(alive=False, error=msg, error_field="access_token")
+
+            # ponytail: Instagram Login long-lived tokens always expire in 60 days
+            # (5_184_000 s per Meta docs). debug_token requires app secret we don't
+            # collect, so expiry is computed locally from issue time.
+            expires_at = datetime.now(UTC) + timedelta(seconds=5_184_000)
+            return ValidatorResult(alive=True, expires_at=expires_at)
+
+    except Exception as exc:
+        logger.debug("instagram validate failed: %s", type(exc).__name__)
+        return ValidatorResult(
+            alive=False, error="Внутренняя ошибка при проверке подключения.", error_field=""
+        )
 
 
 async def _validate_vk_api(token: str | None) -> bool:
@@ -298,6 +408,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_label="Канал назначения",
         target_hint="@username канала или ссылка t.me/… (вы должны быть админом)",
         target_normalizer=normalize_telegram_target,
+        max_video_bytes=2000 * 1024 * 1024,  # 2000 MiB — Telethon/MTProto limit
         guide=TELEGRAM_GUIDE,
     ),
     "vk": ChannelValidatorDef(
@@ -306,6 +417,17 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         fn=_validate_vk_api,
         title="ВКонтакте (API)",
         enabled=False,  # VK блокирует токен сообщества; ждёт user-токена — см. PRD_BACKLOG
+    ),
+    "instagram": ChannelValidatorDef(
+        kind="api",
+        credential_kind=CredentialKind.API_TOKEN,  # blob {access_token, ig_user_id}
+        fn=_validate_instagram,
+        title="Instagram (Reels)",
+        enabled=True,
+        max_video_bytes=300 * 1024 * 1024,  # 300 MB — Meta IG User Media ref
+        guide=INSTAGRAM_GUIDE,
+        proxy_env_var="INSTAGRAM_PROXY_URL",
+        # needs_target=False: цель (ig_user_id) — часть учётки, а не отдельный таргет.
     ),
     "yandex": ChannelValidatorDef(
         kind="browser",

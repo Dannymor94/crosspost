@@ -35,7 +35,12 @@ def _migrate_sqlite(conn) -> None:
       • ix_scheduled_report — составной индекс джойна журнала.
       • publications.target — измерение цели в идемпотентности (мультицели):
         SQLite не ALTER-ит UNIQUE, поэтому таблица ПЕРЕСТРАивается (см. ниже).
+      • connections.expires_at — срок действия токена (Instagram и др.).
     Все операции idempotent (guard по table_info / IF NOT EXISTS)."""
+    conn_cols = {c["name"] for c in sa.inspect(conn).get_columns("connections")}
+    if "expires_at" not in conn_cols:
+        conn.exec_driver_sql("ALTER TABLE connections ADD COLUMN expires_at DATETIME")
+
     cols = {c["name"] for c in sa.inspect(conn).get_columns("scheduled_posts")}
     if "published_at" not in cols:
         conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN published_at DATETIME")

@@ -19,6 +19,8 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
+import httpx
+
 from crosspost.adapters.base import ChannelAdapter, ResultStatus
 from crosspost.content.article_link import DEFAULT_LINK_PHRASE, LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent
@@ -37,6 +39,28 @@ logger = logging.getLogger(__name__)
 
 # Статусы, которые считаем успехом канала (для single-shot step связки статьи).
 _SUCCESS_STATUSES = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
+
+
+def _error_str(exc: Exception) -> str:
+    """Non-empty error string for any exception.
+
+    Falls back to the type name when str(exc) is blank.
+    For httpx errors that have a request attached, appends the hostname so the
+    operator knows which endpoint timed out (no tokens, no query string).
+    """
+    msg = str(exc).strip()
+    if msg:
+        return msg
+    try:
+        if isinstance(exc, httpx.HTTPError) and getattr(exc, "request", None):
+            from urllib.parse import urlparse
+
+            host = urlparse(str(exc.request.url)).hostname or ""
+            if host:
+                return f"{type(exc).__name__} → {host}"
+    except Exception:  # noqa: BLE001
+        pass
+    return type(exc).__name__
 
 
 @dataclass(frozen=True)
@@ -213,16 +237,20 @@ class PublishService:
         try:
             adapter = await self._factory(channel, target_id)
         except Exception as exc:  # noqa: BLE001 — падение сборки не рушит другие единицы
-            logger.warning("adapter build failed %s/%s: %s", channel, target_id, exc)
+            err = _error_str(exc)
+            logger.warning("adapter build failed %s/%s: %s", channel, target_id, err)
             await self._repo.set_status(
                 publication_id,
                 channel,
                 PublicationStatus.FAILED,
                 target=target_id,
-                error=f"сборка канала: {exc}",
+                error=f"сборка канала: {err}",
             )
             return ChannelOutcome(
-                channel, PublicationStatus.FAILED.value, error=str(exc), target=target_id
+                channel,
+                PublicationStatus.FAILED.value,
+                error=f"сборка канала: {err}",
+                target=target_id,
             )
 
         if adapter is None:
@@ -242,16 +270,17 @@ class PublishService:
         try:
             result = await adapter.publish(content, publication_id=publication_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("publish failed %s/%s: %s", channel, target_id, exc)
+            err = _error_str(exc)
+            logger.warning("publish failed %s/%s: %s", channel, target_id, err)
             await self._repo.set_status(
-                publication_id, channel, PublicationStatus.FAILED, target=target_id, error=str(exc)
+                publication_id, channel, PublicationStatus.FAILED, target=target_id, error=err
             )
             # Браузерный шов мог приложить скриншот к исключению (диагностика).
             shot = getattr(exc, "screenshot_path", None)
             return ChannelOutcome(
                 channel,
                 PublicationStatus.FAILED.value,
-                error=str(exc),
+                error=err,
                 screenshot_path=shot,
                 target=target_id,
             )

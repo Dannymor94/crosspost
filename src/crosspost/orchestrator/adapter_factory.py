@@ -13,15 +13,17 @@ browser    — per-profile storage_state (сессия) + per-profile ЦЕЛЬ �
 from __future__ import annotations
 
 import logging
+import os
 
 from crosspost.adapters.base import ChannelAdapter
 from crosspost.channels.telegram_login import parse_credential_blob
 from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.config import browser_headless
+from crosspost.db.engine import get_db_url
 from crosspost.db.models import CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
+from crosspost.db.sqlite_store import SyncSQLiteIdempotencyStore
 from crosspost.db.target_repo import ChannelTargetRepository
-from crosspost.orchestrator.task import InMemoryIdempotencyStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,8 @@ async def build_profile_adapter(
     if validator is None or not validator.enabled:
         return None
 
-    store = store or InMemoryIdempotencyStore()
+    if store is None:
+        store = SyncSQLiteIdempotencyStore(_db_path_from_url(get_db_url()), profile_id=profile_id)
     session_key = validator.session_channel or channel
     cred = await repo.get_credential(profile_id, session_key, validator.credential_kind)
     if not cred:
@@ -62,6 +65,32 @@ async def build_profile_adapter(
 
         return TelegraphAdapter(cred, store)  # cred — raw access_token, цель не нужна
 
+    if channel == "instagram":
+        # cred — JSON-блоб {access_token, ig_user_id}; цель (ig_user_id) внутри учётки.
+        from crosspost.adapters.api.instagram import (  # noqa: PLC0415
+            DEFAULT_GRAPH_VERSION,
+            InstagramAdapter,
+            InstagramError,
+            parse_instagram_blob,
+        )
+
+        try:
+            token, ig_user_id = parse_instagram_blob(cred)
+        except InstagramError as exc:
+            logger.warning("instagram: %s", exc)
+            return None  # неполная учётка → сервис отдаст needs_relogin
+        interval = float(os.environ.get("INSTAGRAM_POLL_SECONDS", "30"))
+        timeout = float(os.environ.get("INSTAGRAM_POLL_TIMEOUT_SECONDS", "300"))
+        ver = os.environ.get("INSTAGRAM_GRAPH_VERSION") or DEFAULT_GRAPH_VERSION
+        return InstagramAdapter(
+            token,
+            ig_user_id,
+            store,
+            graph_version=ver,
+            poll_interval_seconds=interval,
+            poll_timeout_seconds=timeout,
+        )
+
     # per-profile ЦЕЛЬ постинга: своя у каждого профиля (изоляция клиентов).
     target = ""
     if validator.needs_target:
@@ -74,6 +103,15 @@ async def build_profile_adapter(
         target = normalize_target(channel, target)
 
     return _build_browser(channel, cred, store, target)
+
+
+def _db_path_from_url(url: str) -> str:
+    """Strip SQLAlchemy async driver prefix to get a plain filesystem path.
+
+    "sqlite+aiosqlite:///relative/path.db"  -> "relative/path.db"
+    "sqlite+aiosqlite:////abs/path.db"      -> "/abs/path.db"
+    """
+    return url.removeprefix("sqlite+aiosqlite:///")
 
 
 async def _resolve_target(

@@ -314,6 +314,9 @@ body {
 .status-row {
   display: flex; align-items: center; gap: 8px;
 }
+.expires-warning {
+  font-size: 11.5px; color: var(--amber); margin-top: 4px;
+}
 .status-label {
   font-size: 12px;
   font-family: var(--font-mono);
@@ -559,7 +562,7 @@ body {
 .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .view-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ── Photo picker ────────────────────────────────────────────────────────── */
+/* ── Photo / media picker ─────────────────────────────────────────────────── */
 .photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .photo-thumb {
   position: relative; width: 84px; height: 84px;
@@ -583,6 +586,11 @@ body {
 }
 .photo-add:hover { border-color: var(--accent); color: var(--text-1); }
 .photo-add-plus { font-size: 20px; line-height: 1; }
+.photo-video-preview { display: flex; flex-direction: column; gap: 6px; }
+.media-video-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 6px; }
+.media-video-filename { font-size: 11px; color: var(--text-2); font-family: var(--font-mono); word-break: break-all; }
+.media-progress { height: 4px; background: var(--accent-dim); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.media-progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width .15s; }
 
 /* ── Target toggles ──────────────────────────────────────────────────────── */
 .target-grid {
@@ -599,6 +607,9 @@ body {
 .target:hover:not(.disabled) { border-color: var(--border-f); }
 .target.on { border-color: var(--accent); background: var(--accent-dim); }
 .target.disabled { opacity: .5; cursor: not-allowed; }
+.target.content-gap { cursor: default; border-color: var(--amber-bg); }
+.target.content-gap:hover { border-color: var(--amber); }
+.target.content-gap .target-reason { color: var(--amber); }
 .target:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .target-icon {
   width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
@@ -783,6 +794,9 @@ body {
 .sched-media-none { font-size: 13px; color: var(--text-3); }
 .sched-media-input-row { display: flex; flex-direction: column; gap: 4px; }
 .sched-media-toggle { font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; align-self: flex-start; }
+.tab-error { padding: 24px; background: var(--error-bg); border: 1px solid var(--error); border-radius: var(--radius-lg); margin-top: 16px; }
+.tab-error-title { font-weight: 600; color: var(--error); margin-bottom: 8px; }
+.tab-error-msg { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); white-space: pre-wrap; word-break: break-all; margin-top: 4px; }
 
 /* ── Media URL input (publish form alternative to file picker) ─────────────── */
 .media-url-divider { font-size: 12px; color: var(--text-3); margin: 6px 0 2px; }
@@ -1144,8 +1158,8 @@ body {
 
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
-const { createElement: h, useState, useEffect, useCallback, useRef } =
-  await import("https://esm.sh/react@18");
+const React = await import("https://esm.sh/react@18");
+const { createElement: h, useState, useEffect, useCallback, useRef, useMemo, Component } = React;
 const { createRoot } = await import("https://esm.sh/react-dom@18/client");
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -1453,12 +1467,13 @@ function validateField(f, raw) {
   return { norm, valid: true, message: "" };
 }
 
-function WizardFieldInput({ f, value, onChange }) {
+function WizardFieldInput({ f, value, onChange, serverError }) {
   const [touched, setTouched] = useState(false);
   const v = value ?? "";
   const { valid, message } = validateField(f, v);
-  const showError = touched && v.trim() && !valid && message;
-  const showOk = touched && valid;
+  const showError = serverError || (touched && v.trim() && !valid && message);
+  const errorMsg = serverError || message;
+  const showOk = !serverError && touched && valid;
 
   function commitNormalized() {
     const norm = normalizeField(f.normalize || "trim", v);
@@ -1491,7 +1506,7 @@ function WizardFieldInput({ f, value, onChange }) {
         onClick: paste, title: "Вставить из буфера обмена",
       }, "Вставить"),
     ),
-    showError && h("p", { className: "wf-msg" }, message),
+    showError && h("p", { className: "wf-msg" }, errorMsg),
     f.hint && !showError && h("p", { className: "form-hint" }, f.hint),
   );
 }
@@ -1537,6 +1552,7 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
   const [values, setValues] = useState({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});  // per-field server errors
   const [done, setDone] = useState(false);
   const [doneInfo, setDoneInfo] = useState(null);  // доп. инфо после telegraph_create
   const [browserOpened, setBrowserOpened] = useState(false);
@@ -1614,8 +1630,12 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
         const fd = {};
         (current.fields || []).forEach((f) => { fd[f.name] = (values[f.name] || "").trim(); });
         const r = await api.post(`${pbase}/channels/${channel}/connect`, { fields: fd });
-        if (r.state === "live") setDone(true);
-        else setErr("Данные сохранены, но проверка не прошла. Проверьте значение и попробуйте снова.");
+        if (r.state === "live") { setFieldErrors({}); setDone(true); }
+        else {
+          setFieldErrors(r.field_errors || {});
+          const hasFieldErr = r.field_errors && Object.keys(r.field_errors).length > 0;
+          if (!hasFieldErr) setErr("Данные сохранены, но проверка не прошла. Проверьте значение и попробуйте снова.");
+        }
       } else if (k === "browser_open") {
         await api.post(`${pbase}/channels/${channel}/browser-login/begin`);
         setBrowserOpened(true);
@@ -1712,7 +1732,8 @@ function ConnectWizard({ channel, profileId, guide, title, onClose, onDone }) {
       "Нашли нужные значения? Вернитесь сюда и вставьте их ниже."),
 
     (current.fields || []).map((f) => h(WizardFieldInput, {
-      key: f.name, f, value: values[f.name], onChange: setVal,
+      key: f.name, f, value: values[f.name], onChange: (n, v) => { setVal(n, v); setFieldErrors((fe) => { const c = {...fe}; delete c[n]; return c; }); },
+      serverError: fieldErrors[f.name] || null,
     })),
 
     err && h(Alert, { type: "error" }, err),
@@ -1959,6 +1980,7 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
+    ch.expires_soon && h("div", { className: "expires-warning" }, "⚠ Токен истекает менее чем через 7 дней — переподключите канал"),
     // per-profile цели постинга (группы/каналы) — свои у каждого клиента.
     // Мастер заводит первую при подключении; здесь список можно расширять/править.
     ch.needs_target && h(TargetList, {
@@ -2348,6 +2370,11 @@ const OUTCOME_META = {
   needs_relogin: { cls: "warning", label: "Нужен ре-логин" },
 };
 
+const VIDEO_EXTS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp", ".flv", ".wmv"]);
+function isVideoFile(f) { const n = (f && f.name || "").toLowerCase(); return VIDEO_EXTS.has(n.slice(n.lastIndexOf("."))); }
+function isVideoUrl(url) { const low = (url || "").toLowerCase().split("?")[0]; return VIDEO_EXTS.has(low.slice(low.lastIndexOf("."))); }
+function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1)+" МБ" : b > 1024 ? (b/1024).toFixed(0)+" КБ" : b+" Б"; }
+
 // Единица публикации = (channel, target_id). Ключ для Set выбранных и для сверки
 // итогов; ␟ — разделитель (в channel/id не встречается). target_id="" — таргетлесс.
 const selKey = (channel, targetId) => `${channel}␟${targetId || ""}`;
@@ -2366,31 +2393,101 @@ function schedChannelsLabel(channels) {
   return Object.entries(counts).map(([ch, n]) => (n > 1 ? `${ch} ×${n}` : ch)).join(" · ");
 }
 
-function PhotoPicker({ files, onChange }) {
-  const inputRef = useRef(null);
-  const previews = files.map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
-
-  function add(e) {
-    const picked = Array.from(e.target.files || []);
-    onChange([...files, ...picked]);
-    e.target.value = "";  // позволить выбрать тот же файл снова
+class TabBoundary extends Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(e) { return { err: e }; }
+  render() {
+    if (this.state.err) return h("div", { className: "tab-error" },
+      h("p", { className: "tab-error-title" }, "Ошибка в этом разделе"),
+      h("pre", { className: "tab-error-msg" }, this.state.err.message),
+    );
+    return this.props.children;
   }
-  function remove(i) { onChange(files.filter((_, idx) => idx !== i)); }
+}
+
+function MediaPicker({ file, onChange }) {
+  const inputRef = useRef(null);
+  const objUrl = useRef(null);
+
+  // Revoke old object URL on file change or unmount to avoid memory leaks
+  useEffect(() => {
+    if (objUrl.current) { URL.revokeObjectURL(objUrl.current); objUrl.current = null; }
+    if (file) objUrl.current = URL.createObjectURL(file);
+    return () => { if (objUrl.current) { URL.revokeObjectURL(objUrl.current); objUrl.current = null; } };
+  }, [file]);
+
+  function pick(e) {
+    const f = (e.target.files || [])[0];
+    if (f) onChange(f);
+    e.target.value = "";
+  }
+  function remove() { onChange(null); }
+
+  const url = file && objUrl.current;
+  const isVid = file && isVideoFile(file);
 
   return h("div", null,
     h("div", { className: "photo-grid" },
-      previews.map((p, i) => h("div", { key: i, className: "photo-thumb" },
-        h("img", { src: p.url, alt: p.name }),
-        h("button", { type: "button", className: "photo-remove", onClick: () => remove(i), "aria-label": "Убрать" }, "×"),
-      )),
-      h("button", { type: "button", className: "photo-add", onClick: () => inputRef.current?.click() },
+      file && url && h("div", { className: "photo-thumb", style: isVid ? { width: "auto", height: "auto", maxWidth: "100%" } : {} },
+        isVid
+          ? h("div", { className: "photo-video-preview" },
+              h("video", { src: url, muted: true, controls: true, style: { maxWidth: "100%", maxHeight: "120px", borderRadius: "var(--radius)", display: "block" } }),
+              h("span", { className: "media-video-filename" }, file.name, " · ", fmtBytes(file.size)),
+            )
+          : h("img", { src: url, alt: file.name }),
+        h("button", { type: "button", className: "photo-remove", onClick: remove, "aria-label": "Убрать" }, "×"),
+      ),
+      !file && h("button", { type: "button", className: "photo-add", onClick: () => inputRef.current?.click() },
         h("span", { className: "photo-add-plus" }, "+"),
-        h("span", null, "Фото"),
+        h("span", null, "Фото или видео"),
+      ),
+      file && h("button", { type: "button", className: "photo-add", onClick: () => inputRef.current?.click(), style: { fontSize: "10px" } },
+        h("span", { className: "photo-add-plus" }, "↺"),
+        h("span", null, "Заменить"),
       ),
     ),
     h("input", {
-      ref: inputRef, type: "file", accept: "image/*", multiple: true,
-      style: { display: "none" }, onChange: add,
+      ref: inputRef, type: "file",
+      accept: "image/*,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/x-m4v",
+      style: { display: "none" }, onChange: pick,
+    }),
+  );
+}
+
+// Multi-file picker for import plan: images + video, thumbnails, per-file remove.
+function PlanMediaPicker({ files, onChange }) {
+  const inputRef = useRef(null);
+  // useMemo creates object URLs only when files array changes; effect cleans up old ones.
+  const urls = useMemo(() => files.map(f => isVideoFile(f) ? null : URL.createObjectURL(f)), [files]);
+  useEffect(() => () => urls.forEach(u => u && URL.revokeObjectURL(u)), [urls]);
+
+  function add(e) {
+    const picked = Array.from(e.target.files || []);
+    const names = new Set(files.map(f => f.name));
+    onChange([...files, ...picked.filter(f => !names.has(f.name))]);
+    e.target.value = "";
+  }
+  function remove(i) { onChange(files.filter((_, j) => j !== i)); }
+
+  return h("div", null,
+    files.length > 0 && h("div", { className: "photo-grid" },
+      files.map((f, i) =>
+        h("div", { key: f.name, className: "photo-thumb" },
+          isVideoFile(f)
+            ? h("div", { style: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px", background: "var(--bg-input)" } }, "🎬")
+            : h("img", { src: urls[i], alt: f.name }),
+          h("button", { type: "button", className: "photo-remove", onClick: () => remove(i), "aria-label": "Убрать" }, "×"),
+        )
+      ),
+    ),
+    h("button", { type: "button", className: "photo-add", onClick: () => inputRef.current?.click() },
+      h("span", { className: "photo-add-plus" }, "+"),
+      h("span", null, "Добавить файлы"),
+    ),
+    h("input", {
+      ref: inputRef, type: "file",
+      accept: "image/*,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/x-m4v",
+      multiple: true, style: { display: "none" }, onChange: add,
     }),
   );
 }
@@ -2398,11 +2495,13 @@ function PhotoPicker({ files, onChange }) {
 function TargetToggle({ t, checked, onToggle }) {
   const icon = CHANNEL_ICONS[t.channel] ?? t.channel.slice(0, 2).toUpperCase();
   const disabled = !t.eligible;
+  const contentGap = disabled && t.ineligible_kind === "content";
+  const connBroken = disabled && !contentGap;
   // Подпись под именем: имя цели (мультицели) либо просто id канала (таргетлесс).
   const sub = t.target_name || t.channel;
   return h("button", {
     type: "button",
-    className: `target ${checked ? "on" : ""} ${disabled ? "disabled" : ""}`,
+    className: `target ${checked ? "on" : ""} ${connBroken ? "disabled" : ""} ${contentGap ? "content-gap" : ""}`,
     onClick: disabled ? undefined : () => onToggle(t),
     disabled,
     title: disabled ? t.reason : "",
@@ -2415,7 +2514,9 @@ function TargetToggle({ t, checked, onToggle }) {
         ? h("span", { className: "target-reason" }, t.reason)
         : h("span", { className: "target-id mono" }, sub),
     ),
-    h("span", { className: `target-check ${checked ? "on" : ""}` }, checked ? "✓" : ""),
+    h("span", { className: `target-check ${checked ? "on" : ""}` },
+      checked ? "✓" : contentGap ? "!" : "",
+    ),
   );
 }
 
@@ -2564,11 +2665,12 @@ function PublishView({ profile }) {
   const [articleText, setArticleText] = useState("");
   const [titleErr, setTitleErr] = useState("");
   const [linkPhrase, setLinkPhrase] = useState("");
-  const [files, setFiles] = useState([]);
+  const [mediaFile, setMediaFile] = useState(null);   // single File | null
   const [mediaUrl, setMediaUrl] = useState("");        // URL/disk/filename alternative
-  const [mediaThumb, setMediaThumb] = useState(null);  // {data_uri, filename} | null
+  const [mediaThumb, setMediaThumb] = useState(null);  // {data_uri, filename, isVideo?} | null
   const [mediaErr, setMediaErr] = useState("");
   const mediaDebounceRef = useRef(null);
+  const [uploadProgress, setUploadProgress] = useState(null); // 0-100 | null
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [outcomes, setOutcomes] = useState(null);
@@ -2582,15 +2684,18 @@ function PublishView({ profile }) {
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
 
-  const loadTargets = useCallback(async () => {
+  const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
+
+  const loadTargets = useCallback(async (hv) => {
+    const videoFlag = hv != null ? hv : ((mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl));
     try {
-      const t = await api.get(`${base}/publish/targets?content_type=${contentType}`);
+      const t = await api.get(`${base}/publish/targets?content_type=${contentType}&has_video=${videoFlag ? "true" : "false"}`);
       setTargets(t);
       // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
       setSelected((prev) => new Set([...prev].filter((k) =>
         t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-  }, [base, contentType]);
+  }, [base, contentType, mediaFile, mediaUrl]);
 
   const loadScheduled = useCallback(async () => {
     try { setScheduled(await api.get(`${base}/scheduled`)); } catch (_) {}
@@ -2661,9 +2766,11 @@ function PublishView({ profile }) {
     });
   }
 
-  function onFilesChange(newFiles) {
-    setFiles(newFiles);
-    if (newFiles.length > 0) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
+  function onMediaFileChange(f) {
+    setMediaFile(f);
+    if (f) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
+    // reload targets with updated video flag
+    loadTargets(f ? isVideoFile(f) : false);
   }
 
   function onMediaUrlChange(url) {
@@ -2671,8 +2778,16 @@ function PublishView({ profile }) {
     setMediaThumb(null);
     setMediaErr("");
     clearTimeout(mediaDebounceRef.current);
-    if (url.trim()) setFiles([]);  // mutually exclusive
-    if (!url.trim()) return;
+    if (url.trim()) setMediaFile(null);  // mutually exclusive
+    if (!url.trim()) { loadTargets(false); return; }
+    const isVid = isVideoUrl(url.trim());
+    loadTargets(isVid);
+    if (isVid) {
+      // video URL: skip 1MB preview download, just show badge
+      const fname = url.trim().split("/").filter(Boolean).pop() || url.trim();
+      setMediaThumb({ filename: fname, isVideo: true });
+      return;
+    }
     mediaDebounceRef.current = setTimeout(async () => {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
@@ -2696,16 +2811,16 @@ function PublishView({ profile }) {
     fd.append("channels", JSON.stringify([...selected].map(parseSelKey)));
     if (contentType === "post") {
       if (mediaUrl.trim()) fd.append("image", mediaUrl.trim());
-      else files.forEach((f) => fd.append("media", f));
+      else if (mediaFile) fd.append("media", mediaFile);
     }
     Object.entries(extra || {}).forEach(([k, v]) => fd.append(k, v));
     return fd;
   }
 
-  // Пост: есть текст ИЛИ фото (файл или URL). Статья: есть заголовок И тело.
+  // Пост: есть текст ИЛИ фото/видео (файл или URL). Статья: есть заголовок И тело.
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
-    : text.trim().length > 0 || files.length > 0 || mediaUrl.trim().length > 0;
+    : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
   const canSend = selected.size > 0 && hasContent && !busy;
 
   function validateArticle() {
@@ -2715,16 +2830,39 @@ function PublishView({ profile }) {
     return true;
   }
 
+  function postFormWithProgress(url, fd) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
+      };
+      xhr.onload = () => {
+        setUploadProgress(null);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); } catch { resolve(null); }
+        } else {
+          let msg = `HTTP ${xhr.status}`;
+          try { msg = JSON.parse(xhr.responseText).detail || msg; } catch { /* noop */ }
+          reject(new Error(msg));
+        }
+      };
+      xhr.onerror = () => { setUploadProgress(null); reject(new Error("Ошибка сети")); };
+      xhr.send(fd);
+    });
+  }
+
   async function publishNow() {
     if (!validateArticle()) return;
-    setBusy(true); setAlert(null); setOutcomes(null);
+    setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
-      const res = await api.postForm(`${base}/publish`, buildForm());
+      const res = await postFormWithProgress(`${base}/publish`, buildForm());
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setUploadProgress(null); }
   }
 
   async function retry(o) {
@@ -2741,16 +2879,16 @@ function PublishView({ profile }) {
 
   async function doSchedule(whenLocal) {
     if (!validateArticle()) { setShowSchedule(false); return; }
-    setShowSchedule(false); setBusy(true); setAlert(null);
+    setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await api.postForm(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
+      await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setFiles([]); setOutcomes(null); setTitleErr("");
+      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
       setMediaUrl(""); setMediaThumb(null); setMediaErr("");
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setUploadProgress(null); }
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
@@ -2782,25 +2920,30 @@ function PublishView({ profile }) {
           style: { resize: "vertical", fontFamily: "var(--font-ui)" },
         }),
         h("div", { className: "mt-2" },
-          h(PhotoPicker, { files, onChange: onFilesChange }),
+          h(MediaPicker, { file: mediaFile, onChange: onMediaFileChange }),
           h("p", { className: "media-url-divider" }, "или по ссылке:"),
           h("div", { className: "sched-media-input-row" },
             h("input", {
               className: "form-input mono", type: "text", value: mediaUrl,
-              placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg",
+              placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg (или .mp4)",
               onChange: (e) => onMediaUrlChange(e.target.value),
               style: { fontFamily: "var(--font-mono)", fontSize: "13px" },
             }),
             h("p", { className: "form-hint" },
-              "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Google Drive не поддерживается."),
+              "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Видео: .mp4, .mov и др. Предпросмотр не скачивается."),
           ),
           mediaErr && h("div", { className: "outcome-err", style: { fontSize: "12px", marginTop: "4px" } }, mediaErr),
           mediaThumb && h("div", { className: "sched-media-cur", style: { marginTop: "6px" } },
-            h("img", {
-              className: "sched-media-thumb", src: mediaThumb.data_uri, alt: mediaThumb.filename,
-              onError: (e) => { e.target.style.display = "none"; },
-            }),
+            mediaThumb.isVideo
+              ? h("span", { className: "media-video-badge" }, "🎬 видео")
+              : h("img", {
+                  className: "sched-media-thumb", src: mediaThumb.data_uri, alt: mediaThumb.filename,
+                  onError: (e) => { e.target.style.display = "none"; },
+                }),
             h("span", { className: "sched-media-filename" }, mediaThumb.filename),
+          ),
+          uploadProgress != null && h("div", { className: "media-progress" },
+            h("div", { className: "media-progress-bar", style: { width: `${uploadProgress}%` } }),
           ),
         ),
       ),
@@ -3135,27 +3278,29 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
       // URL превью — аутентифицированный маршрут; клиент не называет путь.
       currentMediaPath
         ? h("div", { className: "sched-media-cur" },
-            h("img", {
-              className: "sched-media-thumb",
-              // ?v= — cache-bust по имени файла: меняется при замене медиа (новый sched-key).
-              src: `${base}/scheduled/${post.id}/media/0?v=${encodeURIComponent(mediaFilename(currentMediaPath))}`,
-              alt: mediaFilename(currentMediaPath),
-              onError: (e) => { e.target.style.display = "none"; },
-            }),
+            isVideoUrl(mediaFilename(currentMediaPath))
+              ? h("span", { className: "media-video-badge" }, "🎬 видео")
+              : h("img", {
+                  className: "sched-media-thumb",
+                  // ?v= — cache-bust по имени файла: меняется при замене медиа (новый sched-key).
+                  src: `${base}/scheduled/${post.id}/media/0?v=${encodeURIComponent(mediaFilename(currentMediaPath))}`,
+                  alt: mediaFilename(currentMediaPath),
+                  onError: (e) => { e.target.style.display = "none"; },
+                }),
             h("span", { className: "sched-media-filename" }, mediaFilename(currentMediaPath)),
           )
         : h("span", { className: "sched-media-none" }, "Медиа не прикреплено"),
       // Блок замены раскрывается по кнопке.
       h("button", { className: "sched-media-toggle", style: { marginTop: "6px" },
         onClick: () => { setShowImageInput((v) => !v); setImageInput(""); setFieldErr((e) => ({ ...e, image: undefined })); } },
-        showImageInput ? "Отмена замены" : currentMediaPath ? "Заменить картинку" : "Прикрепить картинку"),
+        showImageInput ? "Отмена замены" : currentMediaPath ? "Заменить медиа" : "Прикрепить медиа"),
       showImageInput && h("div", { className: "sched-media-input-row", style: { marginTop: "6px" } },
         h("input", { className: "form-input mono", type: "text", value: imageInput,
-          placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg",
+          placeholder: "https://… · диск.яндекс.рф/… · имя_файла.jpg (или .mp4)",
           onChange: (e) => setImageInput(e.target.value),
           style: { fontFamily: "var(--font-mono)", fontSize: "13px" } }),
         h("p", { className: "form-hint" },
-          "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Google Drive не поддерживается."),
+          "Прямая http-ссылка, публичная ссылка Яндекс.Диска или имя файла из папки источника. Видео: .mp4, .mov и др. Google Drive не поддерживается."),
       ),
       fieldErr.image && h("div", { className: "outcome-err" }, fieldErr.image),
     ),
@@ -3623,7 +3768,7 @@ function ImportView({ profile }) {
 
   // Сводки завершённых шагов.
   const tableSummary = table ? table.name : sheetUrl.trim() ? "Google Таблица" : null;
-  const imagesSummary = images.length > 0 ? `${images.length} картин${images.length === 1 ? "ка" : images.length < 5 ? "ки" : "ок"}` : folder.trim() ? "папка на сервере" : null;
+  const imagesSummary = images.length > 0 ? `${images.length} файл${images.length === 1 ? "" : images.length < 5 ? "а" : "ов"}` : folder.trim() ? "папка на сервере" : null;
   const intervalLabel = {
     daily: "каждый день",
     every_n_days: `через ${intervalN} дн.`,
@@ -3670,25 +3815,25 @@ function ImportView({ profile }) {
       ),
     ),
 
-    h(ImportStep, { num: 2, title: "Картинки", summary: imagesSummary, done: true },
+    h(ImportStep, { num: 2, title: "Медиафайлы", summary: imagesSummary, done: true },
       h("div", { className: "flex-gap", style: { alignItems: "center", flexWrap: "wrap", gap: "8px", marginBottom: "10px" } },
         h("label", { className: "btn btn-ghost btn-sm", style: { cursor: "pointer", margin: 0 } },
-          "📁 Выбрать папку с картинками",
+          "📁 Выбрать папку",
           h("input", {
-            type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true,
+            type: "file", accept: "image/*,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/x-m4v", multiple: true,
             webkitdirectory: "", style: { display: "none" },
             onChange: (e) => {
-              const files = [...e.target.files].filter(f => /\.(jpe?g|png|webp)$/i.test(f.name));
-              setImages(prev => { const names = new Set(prev.map(f => f.name)); return [...prev, ...files.filter(f => !names.has(f.name))]; });
+              const picked = Array.from(e.target.files || []);
+              setImages(prev => { const names = new Set(prev.map(f => f.name)); return [...prev, ...picked.filter(f => !names.has(f.name))]; });
               e.target.value = "";
             },
           }),
         ),
         images.length > 0 && h("span", { className: "form-hint", style: { margin: 0 } },
-          `${images.length} картин${images.length === 1 ? "ка" : images.length < 5 ? "ки" : "ок"} выбрано`),
+          `${images.length} файл${images.length === 1 ? "" : images.length < 5 ? "а" : "ов"} выбрано`),
         images.length > 0 && h("button", { className: "btn btn-ghost btn-sm", style: { color: "var(--text-3)" }, onClick: () => setImages([]) }, "Очистить"),
       ),
-      h(PhotoPicker, { files: images, onChange: setImages }),
+      h(PlanMediaPicker, { files: images, onChange: setImages }),
       h("p", { className: "form-hint mt-2" },
         "Файлы связываются со строками по имени. В колонке «файл» работают: прямая http-ссылка, публичная ссылка Яндекс.Диска."),
       h("div", { style: { marginTop: "12px" } },
@@ -4023,15 +4168,15 @@ function App() {
   const mainBody = loadingProfiles
     ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
     : (isAdmin && consoleOpen)
-      ? h(ErrorConsole, { key: "console", profiles, onGoToProfile: goToProfile })
+      ? h(TabBoundary, { key: "console" }, h(ErrorConsole, { key: "console", profiles, onGoToProfile: goToProfile }))
       : active
       ? h("div", null,
           h(ViewTabs, { view, onChange: setView }),
           view === "publish"
-            ? h(PublishView, { key: `pub-${active.id}`, profile: active })
+            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active }))
             : view === "import"
-              ? h(ImportView, { key: `imp-${active.id}`, profile: active })
-              : h(ChannelsView, { key: active.id, profile: active, focusChannel }),
+              ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
+              : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel })),
         )
       : (isAdmin ? h(NoProfileView) : h(NoAccessView));
 

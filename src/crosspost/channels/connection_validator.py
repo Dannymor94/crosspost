@@ -10,12 +10,23 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 
-from crosspost.channels.validators import VALIDATORS
+from crosspost.channels.validators import VALIDATORS, ValidatorResult
 from crosspost.db.models import ConnectionState, Log
 from crosspost.db.profile_repo import ProfileRepository
 
 logger = logging.getLogger(__name__)
+
+_EXPIRES_SOON_DAYS = 7
+
+
+def is_expires_soon(expires_at: datetime) -> bool:
+    """True если токен истекает менее чем через EXPIRES_SOON_DAYS дней."""
+    now = datetime.now(UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return (expires_at - now) < timedelta(days=_EXPIRES_SOON_DAYS)
 
 
 async def validate_connection(
@@ -50,15 +61,23 @@ async def validate_connection(
     credential = await repo.get_credential(profile_id, session_key, validator.credential_kind)
 
     try:
-        alive = await validator.fn(credential)
+        raw = await validator.fn(credential)
     except Exception as exc:
         logger.warning("validate_connection %s/%s exception: %s", profile_id, channel, exc)
         await _log(repo, profile_id, channel, "ERROR", f"Исключение при валидации: {exc}")
         return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
 
+    # Coerce bool | ValidatorResult → (alive, expires_at)
+    if isinstance(raw, ValidatorResult):
+        alive = raw.alive
+        expires_at = raw.expires_at
+    else:
+        alive = bool(raw)
+        expires_at = None
+
     if alive:
         await _log(repo, profile_id, channel, "INFO", "Подключение активно")
-        return await _write(repo, profile_id, channel, ConnectionState.LIVE)
+        return await _write(repo, profile_id, channel, ConnectionState.LIVE, expires_at=expires_at)
     else:
         await _log(repo, profile_id, channel, "WARNING", "Подключение требует ре-логина")
         return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
@@ -69,8 +88,10 @@ async def _write(
     profile_id: int,
     channel: str,
     state: ConnectionState,
+    *,
+    expires_at=None,
 ) -> ConnectionState:
-    await repo.upsert_connection(profile_id, channel, state)
+    await repo.upsert_connection(profile_id, channel, state, expires_at=expires_at)
     return state
 
 

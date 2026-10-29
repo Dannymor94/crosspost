@@ -1,4 +1,4 @@
-.PHONY: install install-mvp test lint mvp smoke up run
+.PHONY: install install-mvp test lint mvp smoke up run tunnel tunnel-stop
 
 # Быстрая установка для MVP: только ядро + dev. Без playwright/celery/postgres.
 install-mvp:
@@ -29,3 +29,14 @@ up:
 	docker compose up -d
 run:
 	uvicorn crosspost.web.app:app --reload
+
+# Start localhost.run SSH tunnel, update INSTAGRAM_PUBLIC_BASE_URL in runtime/.env.
+# Stop with: make tunnel-stop
+tunnel:
+	bash scripts/tunnel.sh
+
+tunnel-stop:
+	@if [ -f /tmp/crosspost-tunnel.pid ] && kill -0 "$$(cat /tmp/crosspost-tunnel.pid)" 2>/dev/null; then \
+	  kill "$$(cat /tmp/crosspost-tunnel.pid)" && echo "Tunnel stopped." || true; \
+	else echo "No tunnel running."; fi; \
+	rm -f /tmp/crosspost-tunnel.pid

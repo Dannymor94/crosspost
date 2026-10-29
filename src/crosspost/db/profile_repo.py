@@ -88,15 +88,24 @@ class ProfileRepository:
         return result.scalar_one_or_none()
 
     async def upsert_connection(
-        self, profile_id: int, channel: str, state: ConnectionState
+        self,
+        profile_id: int,
+        channel: str,
+        state: ConnectionState,
+        *,
+        expires_at=None,
     ) -> Connection:
         """Создать или обновить состояние подключения (profile_id × channel)."""
+        values = {"profile_id": profile_id, "channel": channel, "state": state}
+        update = {"state": state, "expires_at": expires_at}
+        if expires_at is not None:
+            values["expires_at"] = expires_at
         stmt = (
             sqlite_insert(Connection)
-            .values(profile_id=profile_id, channel=channel, state=state)
+            .values(**values)
             .on_conflict_do_update(
                 index_elements=["profile_id", "channel"],
-                set_={"state": state},
+                set_=update,
             )
         )
         await self._s.execute(stmt)

@@ -9,9 +9,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from crosspost.channels.connection_validator import validate_connection
+from crosspost.channels.connection_validator import is_expires_soon, validate_connection
 from crosspost.channels.guide import target_value_field
-from crosspost.channels.validators import VALIDATORS, normalize_target
+from crosspost.channels.validators import VALIDATORS, ValidatorResult, normalize_target
 from crosspost.db.models import ConnectionState, CredentialKind
 from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.db.vault import get_vault
@@ -78,6 +78,12 @@ CHANNEL_FIELDS: dict[str, list[dict]] = {
 _FIELD_TO_CREDENTIAL: dict[str, dict[str, CredentialKind]] = {
     "vk": {"token": CredentialKind.API_TOKEN},
     "telegraph": {"token": CredentialKind.API_TOKEN},
+}
+
+# Instagram хранит учётку как один JSON-блоб из нескольких полей.
+# Поля: ig_user_id + access_token → собираем в {"ig_user_id":…, "access_token":…}.
+_BLOB_CHANNELS: dict[str, tuple[str, ...]] = {
+    "instagram": ("ig_user_id", "access_token"),
 }
 
 
@@ -226,6 +232,7 @@ class ChannelStatusOut(BaseModel):
     target: str = ""  # текущая per-profile цель (не секрет — адрес группы/орг)
     target_field: WizardFieldOut | None = None  # декларация поля цели (для формы мультицелей)
     guide: ChannelGuideOut | None = None  # инструкция подключения (из декларации)
+    expires_soon: bool = False  # True → токен истекает менее чем через 7 дней
 
 
 class TargetBody(BaseModel):
@@ -284,6 +291,7 @@ class TelegraphCreateOut(BaseModel):
 class ValidationResult(BaseModel):
     state: str
     message: str
+    field_errors: dict[str, str] = {}
 
 
 # ── Registry endpoint ─────────────────────────────────────────────────────────
@@ -338,14 +346,18 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
         raise HTTPException(status_code=404, detail="Profile not found")
 
     connections = await repo.get_connections(profile_id)
-    conn_map = {c.channel: c.state for c in connections}
+    conn_map = {c.channel: c for c in connections}
 
     result = []
     for ch, v in VALIDATORS.items():
         if not v.enabled:
             continue
-        state = conn_map.get(ch)
-        state_str = str(state) if state is not None else "not_connected"
+        conn = conn_map.get(ch)
+        state_str = str(conn.state) if conn is not None else "not_connected"
+
+        expires_soon = False
+        if conn is not None and getattr(conn, "expires_at", None) is not None:
+            expires_soon = is_expires_soon(conn.expires_at)
 
         cred = await repo.get_credential(profile_id, ch, v.credential_kind)
         has_cred = cred is not None
@@ -369,6 +381,7 @@ async def list_channel_statuses(profile_id: int, repo: RepoDep) -> list[ChannelS
                 target=target,
                 target_field=_target_field_out(v.guide),
                 guide=_guide_out(v.guide),
+                expires_soon=expires_soon,
             )
         )
     return result
@@ -554,25 +567,54 @@ async def connect_channel(
             detail="Interactive channels use the /telegram/login/* flow, not /connect",
         )
 
-    field_map = _FIELD_TO_CREDENTIAL.get(channel, {})
-    if not field_map:
-        raise HTTPException(status_code=422, detail=f"No field mapping defined for '{channel}'")
+    blob_fields = _BLOB_CHANNELS.get(channel)
+    if blob_fields:
+        # Multi-field blob channel (e.g. instagram): assemble JSON from individual fields.
+        data: dict[str, str] = {}
+        for fname in blob_fields:
+            val = body.fields.get(fname)
+            if not val:
+                raise HTTPException(
+                    status_code=422, detail=f"Missing field '{fname}' for channel '{channel}'"
+                )
+            data[fname] = val
+        await repo.set_credential(profile_id, channel, CredentialKind.API_TOKEN, json.dumps(data))
+    else:
+        field_map = _FIELD_TO_CREDENTIAL.get(channel, {})
+        if not field_map:
+            raise HTTPException(status_code=422, detail=f"No field mapping defined for '{channel}'")
+        for field_name, cred_kind in field_map.items():
+            value = body.fields.get(field_name)
+            if not value:
+                raise HTTPException(
+                    status_code=422, detail=f"Missing field '{field_name}' for channel '{channel}'"
+                )
+            await repo.set_credential(profile_id, channel, cred_kind, value)
 
-    for field_name, cred_kind in field_map.items():
-        value = body.fields.get(field_name)
-        if not value:
-            raise HTTPException(
-                status_code=422, detail=f"Missing field '{field_name}' for channel '{channel}'"
-            )
-        await repo.set_credential(profile_id, channel, cred_kind, value)
-
+    # Validate; collect field-level errors from ValidatorResult when available.
     state = await validate_connection(repo, profile_id, channel)
+    field_errors: dict[str, str] = {}
+    if state != ConnectionState.LIVE:
+        # Re-run validator to get structured error (idempotent: credential already saved).
+        vdef = VALIDATORS[channel]
+        session_key = vdef.session_channel or channel
+        cred = await repo.get_credential(profile_id, session_key, vdef.credential_kind)
+        try:
+            raw = await vdef.fn(cred)
+        except Exception:
+            raw = None
+        if isinstance(raw, ValidatorResult):
+            if raw.error_field:
+                field_errors[raw.error_field] = raw.error
+            elif raw.error:
+                field_errors[""] = raw.error
+
     msg = (
         "Connected and validated"
         if state == ConnectionState.LIVE
         else "Saved but validation failed"
     )
-    return ValidationResult(state=str(state), message=msg)
+    return ValidationResult(state=str(state), message=msg, field_errors=field_errors)
 
 
 @router.post(

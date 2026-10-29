@@ -202,6 +202,7 @@ class ScheduledExecutor:
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
             self._cleanup_media(post.media_paths)
+            self._cleanup_checkpoints(post.profile_id, pubid)
 
     def _ceiling_step(
         self,
@@ -361,3 +362,9 @@ class ScheduledExecutor:
         keys = {Path(p).parent.name for p in (media_paths or [])}
         for key in keys:
             media_store.cleanup_media(key)
+
+    def _cleanup_checkpoints(self, profile_id: int, publication_id: str) -> None:
+        """Удалить чекпоинты шагов после финализации (все каналы терминальны)."""
+        from crosspost.db.sqlite_store import sync_checkpoint_store  # noqa: PLC0415
+
+        sync_checkpoint_store(profile_id).delete_checkpoints(publication_id)
