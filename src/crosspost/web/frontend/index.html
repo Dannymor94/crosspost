@@ -1164,6 +1164,75 @@ body {
 .profile-row { display: flex; align-items: stretch; }
 .profile-row .profile-item { flex: 1; }
 .user-badge { font-size: 10px; color: var(--text-3); padding: 0 8px; display: flex; align-items: center; }
+
+/* ── Telegram chat picker ─────────────────────────────────────────────────── */
+.modal-wide { max-width: 540px; }
+.tg-pick-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.tg-pick-search { flex: 1; }
+.tg-pick-updated { font-size: 11px; color: var(--text-3); margin-bottom: 4px; }
+.tg-pick-body { max-height: 340px; overflow-y: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.tg-pick-section { display: flex; flex-direction: column; gap: 3px; }
+.tg-pick-section-label {
+  font-size: 10px; font-family: var(--font-mono); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-3);
+  padding: 8px 0 3px;
+}
+.tg-pick-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--radius);
+  background: var(--bg-card); border: 1px solid var(--border);
+  cursor: pointer; user-select: none;
+  transition: border-color .1s, background .1s;
+}
+.tg-pick-item:not(.disabled):hover { border-color: var(--border-f); background: var(--bg-card-h); }
+.tg-pick-item.sel { border-color: var(--accent); background: var(--accent-dim); }
+.tg-pick-item.disabled { opacity: .5; cursor: not-allowed; }
+.tg-pick-check {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 4px;
+  border: 1px solid var(--border-f); display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #fff; font-weight: 700;
+}
+.tg-pick-check.on { background: var(--accent); border-color: var(--accent); }
+.tg-pick-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-pick-reason { font-size: 11px; color: var(--text-3); flex-shrink: 0; white-space: nowrap; }
+.tg-pick-forum-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: var(--radius);
+  background: var(--bg-card); border: 1px solid var(--border);
+  cursor: pointer; user-select: none;
+  transition: border-color .1s, background .1s;
+}
+.tg-pick-forum-header:hover { border-color: var(--border-f); background: var(--bg-card-h); }
+.tg-pick-forum-header.open { border-color: var(--border-f); }
+.tg-pick-forum-chevron { font-size: 11px; color: var(--text-3); flex-shrink: 0; transition: transform .12s; }
+.tg-pick-forum-header.open .tg-pick-forum-chevron { transform: rotate(90deg); }
+.tg-pick-topics { padding-left: 18px; display: flex; flex-direction: column; gap: 3px; margin-top: 3px; }
+.tg-pick-loading-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-3); padding: 4px 0; }
+.tg-pick-empty-row { font-size: 12px; color: var(--text-3); padding: 4px 0; text-align: center; }
+.tg-pick-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+@media (max-width: 640px) { .tg-pick-body { max-height: 260px; } }
+.tg-groups { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.tg-group { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.tg-group-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-card); cursor: pointer; user-select: none; font-weight: 500; font-size: 13px; }
+.tg-group-header:hover { background: var(--bg-card-h); }
+.tg-group-header input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); flex-shrink: 0; }
+.tg-group-items { display: flex; flex-direction: column; }
+.tg-group-items .target { border-radius: 0; border-top: 1px solid var(--border); border-left: none; border-right: none; border-bottom: none; }
+/* ── Platform sections ────────────────────────────────────────────────────── */
+.plat-sections { display: flex; flex-direction: column; gap: 14px; margin-bottom: 10px; }
+.plat-section { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.plat-header { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: var(--bg-card); cursor: pointer; user-select: none; font-weight: 600; font-size: 13px; color: var(--text-1); }
+.plat-header:hover { background: var(--bg-card-h); }
+.plat-header input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); flex-shrink: 0; }
+.plat-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.plat-body .target-grid { margin-bottom: 0; }
+.plat-body .tg-groups { margin-bottom: 0; }
+.plat-disconnected { border: 1px dashed var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.plat-disconnected-head { width: 100%; text-align: left; background: none; border: none; cursor: pointer; padding: 9px 14px; font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 6px; font: inherit; }
+.plat-disconnected-head:hover { background: var(--surface-2); }
+.plat-disconnected-caret { font-size: 10px; margin-left: auto; }
+.plat-disconnected-cards { padding: 0 10px 10px; }
+@media (max-width: 600px) { .plat-sections { gap: 10px; } }
 </style>
 </head>
 <body>
@@ -1324,7 +1393,7 @@ function Alert({ type, children, onDismiss }) {
   );
 }
 
-function Modal({ title, onClose, children }) {
+function Modal({ title, onClose, children, wide }) {
   // close on Escape
   useEffect(() => {
     const handler = (e) => { if (e.key === "Escape") onClose(); };
@@ -1333,7 +1402,7 @@ function Modal({ title, onClose, children }) {
   }, [onClose]);
 
   return h("div", { className: "modal-backdrop", onClick: (e) => { if (e.target === e.currentTarget) onClose(); } },
-    h("div", { className: "modal", role: "dialog", "aria-modal": true, "aria-label": title },
+    h("div", { className: `modal${wide ? " modal-wide" : ""}`, role: "dialog", "aria-modal": true, "aria-label": title },
       h("div", { className: "modal-header" },
         h("h2", { className: "modal-title" }, title),
         h("button", { className: "modal-close", onClick: onClose, "aria-label": "Закрыть" }, "×"),
@@ -1834,6 +1903,9 @@ function TargetRow({ channel, profileId, item, field, onChanged }) {
         spellCheck: false, autoComplete: "off", onChange: (e) => setValue(e.target.value),
       }),
     ),
+    item.topic_id && item.topic_title
+      ? h("p", { className: "form-hint" }, `Ветка: ${item.topic_title}`)
+      : null,
     h("div", { style: { display: "flex", justifyContent: "flex-end" } },
       h("button", {
         className: "btn btn-ghost btn-sm", onClick: save,
@@ -1846,7 +1918,7 @@ function TargetRow({ channel, profileId, item, field, onChanged }) {
 
 // Список целей канала: CRUD поверх /channels/{channel}/targets. Поля значения —
 // из декларации канала (target_field). onChanged дёргает обновление карточек/публикации.
-function TargetList({ channel, profileId, label, hint, field, guide, onChanged }) {
+function TargetList({ channel, profileId, label, hint, field, guide, onChanged, onPickerOpen }) {
   const base = `/api/profiles/${profileId}/channels/${channel}/targets`;
   const [items, setItems] = useState(null);
   const [err, setErr] = useState(null);
@@ -1854,6 +1926,9 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
   const [newValue, setNewValue] = useState("");
   const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkErr, setLinkErr] = useState(null);
+  const [linkBusy, setLinkBusy] = useState(false);
 
   const load = useCallback(async () => {
     try { setItems(await api.get(base)); setErr(null); }
@@ -1874,8 +1949,25 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
     finally { setAdding(false); }
   }
 
+  async function addFromLink(url) {
+    setLinkErr(null); setLinkBusy(true);
+    try {
+      await api.post(`${base}/from-link`, { url });
+      setLinkUrl(""); setShowAdd(false);
+      refresh();
+    } catch (ex) { setLinkErr(ex.message); }
+    finally { setLinkBusy(false); }
+  }
+
   return h("div", { className: "target-editor" },
-    h("label", { className: "form-label" }, label || "Цели публикации"),
+    h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+      h("label", { className: "form-label", style: { margin: 0 } }, label || "Цели публикации"),
+      onPickerOpen && h("button", {
+        className: "btn btn-ghost btn-sm",
+        onClick: onPickerOpen,
+        style: { marginLeft: "auto" },
+      }, "Найти чаты"),
+    ),
     items === null
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю цели…"))
       : items.length === 0
@@ -1890,6 +1982,27 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
     showAdd && h("div", { className: "tgt-add" },
       h("p", { className: "tgt-add-hint" },
         "Можно добавить несколько целей — публикация пойдёт в каждую под одной учётной записью.",
+      ),
+      channel === "telegram" && h("div", { className: "tgt-field" },
+        h("label", { className: "tgt-field-label" }, "Вставьте ссылку из Telegram"),
+        h("input", {
+          className: "form-input mono", value: linkUrl,
+          placeholder: "https://t.me/…",
+          disabled: linkBusy,
+          onChange: (e) => setLinkUrl(e.target.value),
+          onPaste: (e) => {
+            const text = (e.clipboardData?.getData("text") || "").trim();
+            if (!text) return;
+            e.preventDefault();
+            setLinkUrl(text);
+            addFromLink(text);
+          },
+        }),
+        h("p", { className: "form-hint" },
+          "Откройте нужную ветку или канал в Telegram → правый клик по любому сообщению → Копировать ссылку",
+        ),
+        linkBusy && h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Добавляю…")),
+        linkErr && h("p", { className: "form-hint", style: { color: "var(--error)" } }, linkErr),
       ),
       h("div", { className: "tgt-field" },
         h("label", { className: "tgt-field-label" }, "Название цели"),
@@ -1917,6 +2030,208 @@ function TargetList({ channel, profileId, label, hint, field, guide, onChanged }
   );
 }
 
+// ── Telegram chat picker panel ─────────────────────────────────────────────
+
+function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
+  const base = `/api/profiles/${profileId}/channels/telegram`;
+  const [dialogs, setDialogs] = useState(null);
+  const [fetchedAt, setFetchedAt] = useState(null);
+  const [floodSecs, setFloodSecs] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [existingTargets, setExistingTargets] = useState([]);
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState(new Set());
+  const [topicsCache, setTopicsCache] = useState({});
+  const [selected, setSelected] = useState(new Set());
+  const [adding, setAdding] = useState(false);
+  const [addErr, setAddErr] = useState(null);
+
+  async function loadDialogs(refresh) {
+    setRefreshing(true); setFloodSecs(null);
+    try {
+      const r = await fetch(`${base}/dialogs${refresh ? "?refresh=1" : ""}`);
+      if (r.status === 429) {
+        const b = await r.json(); const d = b.detail || b;
+        setFloodSecs(d.retry_after);
+        if (d.items?.length) setDialogs(d.items);
+      } else if (r.ok) {
+        const b = await r.json();
+        setDialogs(b.items); setFetchedAt(b.fetched_at);
+      }
+    } catch {} finally { setLoading(false); setRefreshing(false); }
+  }
+
+  useEffect(() => {
+    loadDialogs(false);
+    fetch(`${base}/targets`).then(r => r.ok ? r.json() : []).then(setExistingTargets).catch(() => {});
+  }, []);
+
+  async function expandForum(tv) {
+    const willOpen = !expanded.has(tv);
+    setExpanded(prev => { const s = new Set(prev); willOpen ? s.add(tv) : s.delete(tv); return s; });
+    if (!willOpen || topicsCache[tv]) return;
+    setTopicsCache(prev => ({ ...prev, [tv]: { loading: true, items: null } }));
+    try {
+      const r = await fetch(`${base}/dialogs/${encodeURIComponent(tv)}/topics`);
+      if (r.ok) {
+        const b = await r.json();
+        setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: b.items } }));
+      } else if (r.status === 429) {
+        const d = (await r.json()).detail || {};
+        setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: d.items || [], flood: d.retry_after } }));
+      } else {
+        setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: [] } }));
+      }
+    } catch { setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: [] } })); }
+  }
+
+  function tKey(tv, tid) { return `${tv}::${tid ?? ""}`; }
+  function isExisting(tv, tid) {
+    return existingTargets.some(t => t.value === tv && (t.topic_id ?? null) === (tid ?? null));
+  }
+  function toggle(tv, tid) {
+    const k = tKey(tv, tid);
+    setSelected(prev => { const s = new Set(prev); s.has(k) ? s.delete(k) : s.add(k); return s; });
+  }
+
+  async function addTargets() {
+    if (!dialogs) return;
+    const payload = [];
+    for (const k of selected) {
+      const sep = k.indexOf("::");
+      const tv = k.slice(0, sep);
+      const tidStr = k.slice(sep + 2);
+      const tid = tidStr ? Number(tidStr) : null;
+      const d = dialogs.find(x => x.target_value === tv);
+      if (!d) continue;
+      let name = d.title;
+      if (tid !== null) {
+        const t = (topicsCache[tv]?.items || []).find(x => x.topic_id === tid);
+        if (t) name = `${d.title} → ${t.title}`;
+      }
+      payload.push({ target_value: tv, access_hash: d.access_hash, topic_id: tid, name });
+    }
+    if (!payload.length) return;
+    setAdding(true); setAddErr(null);
+    try {
+      const result = await api.post(`${base}/targets/bulk`, payload);
+      onTargetsAdded(result.filter(r => r.created).length);
+    } catch (ex) { setAddErr(ex.message); }
+    finally { setAdding(false); }
+  }
+
+  const q = search.toLowerCase();
+  const all = dialogs || [];
+  const vis = q ? all.filter(d => d.title.toLowerCase().includes(q)) : all;
+  const byChan = vis.filter(d => d.kind === "channel");
+  const byGroup = vis.filter(d => d.kind === "group");
+  const byForum = vis.filter(d => d.kind === "forum");
+
+  function renderItem(d, tid, label) {
+    const existing = isExisting(d.target_value, tid);
+    const canPost = tid === null ? d.can_post : true;
+    const disabled = existing || !canPost;
+    const k = tKey(d.target_value, tid);
+    const sel = selected.has(k);
+    const reason = existing ? "уже добавлено" : (!canPost ? (d.reason || "нет прав") : null);
+    return h("div", { key: k, className: `tg-pick-item${disabled ? " disabled" : ""}${sel ? " sel" : ""}`,
+        onClick: () => !disabled && toggle(d.target_value, tid) },
+      h("span", { className: `tg-pick-check${(sel || existing) ? " on" : ""}` }, (sel || existing) ? "✓" : ""),
+      h("span", { className: "tg-pick-name" }, label || d.title),
+      reason && h("span", { className: "tg-pick-reason" }, reason),
+    );
+  }
+
+  function renderForum(d) {
+    const isOpen = expanded.has(d.target_value);
+    const tc = topicsCache[d.target_value];
+    // General (topic_id null) first, then the rest in API order
+    const sortedTopics = tc?.items
+      ? [...tc.items].sort((a, b) => (a.topic_id === null ? -1 : b.topic_id === null ? 1 : 0))
+      : null;
+    return h("div", { key: d.target_value },
+      h("div", {
+        className: `tg-pick-forum-header${isOpen ? " open" : ""}`,
+        role: "button", tabIndex: 0,
+        onClick: () => expandForum(d.target_value),
+        onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") expandForum(d.target_value); },
+      },
+        h("span", { className: "tg-pick-name" }, d.title),
+        h("span", { className: "tg-pick-forum-chevron" }, "▸"),
+      ),
+      isOpen && h("div", { className: "tg-pick-topics" },
+        tc?.loading
+          ? h("div", { className: "tg-pick-loading-row" }, h(Spinner), " Загружаю…")
+          : !sortedTopics?.length
+            ? h("div", { className: "tg-pick-empty-row" }, "Нет тем")
+            : sortedTopics.map(t => {
+                const existing = isExisting(d.target_value, t.topic_id);
+                const disabled = existing || !t.can_post;
+                const k = tKey(d.target_value, t.topic_id);
+                const sel = selected.has(k);
+                const reason = existing ? "уже добавлено" : (!t.can_post ? (t.reason || "нет прав") : null);
+                const label = t.topic_id === null ? (t.title || "Общее") : t.title;
+                return h("div", { key: k, className: `tg-pick-item${disabled ? " disabled" : ""}${sel ? " sel" : ""}`,
+                    onClick: () => !disabled && toggle(d.target_value, t.topic_id) },
+                  h("span", { className: `tg-pick-check${(sel || existing) ? " on" : ""}` }, (sel || existing) ? "✓" : ""),
+                  h("span", { className: "tg-pick-name" }, label),
+                  reason && h("span", { className: "tg-pick-reason" }, reason),
+                );
+              }),
+        tc?.flood && h("p", { style: { fontSize: "12px", color: "var(--amber)", margin: "4px 0 0" } },
+          `Telegram просит подождать ${tc.flood} сек`),
+      ),
+    );
+  }
+
+  function section(title, items, renderFn) {
+    if (!items.length) return null;
+    return h("div", { className: "tg-pick-section" },
+      h("div", { className: "tg-pick-section-label" }, title),
+      items.map(renderFn),
+    );
+  }
+
+  const fetchedStr = fetchedAt
+    ? new Date(fetchedAt * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  return h(Modal, { title: "Найти чаты Telegram", onClose, wide: true },
+    h("div", { className: "tg-pick-toolbar" },
+      h("input", { className: "form-input tg-pick-search", placeholder: "Фильтр по названию…",
+        value: search, onChange: e => setSearch(e.target.value), autoFocus: true }),
+      h("button", { type: "button", className: "btn btn-ghost btn-sm",
+        onClick: () => loadDialogs(true), disabled: refreshing },
+        refreshing ? h(Spinner) : "Обновить"),
+    ),
+    fetchedStr && h("p", { className: "tg-pick-updated" }, `обновлено ${fetchedStr}`),
+    floodSecs && h("div", { className: "alert warning", style: { marginBottom: "4px" } },
+      h("span", { className: "alert-icon" }, "⚠"),
+      h("span", { className: "alert-body" }, `Telegram просит подождать ${floodSecs} сек`),
+    ),
+    loading
+      ? h("div", { className: "tg-pick-loading-row", style: { padding: "24px 0" } }, h(Spinner), " Загружаю диалоги…")
+      : h("div", { className: "tg-pick-body" },
+          section("Каналы", byChan, d => renderItem(d, null)),
+          section("Группы", byGroup, d => renderItem(d, null)),
+          byForum.length > 0 && h("div", { className: "tg-pick-section" },
+            h("div", { className: "tg-pick-section-label" }, "Форумы"),
+            byForum.map(d => renderForum(d)),
+          ),
+          !byChan.length && !byGroup.length && !byForum.length &&
+            h("div", { className: "tg-pick-empty-row" }, q ? "Ничего не найдено" : "Нет доступных чатов"),
+        ),
+    addErr && h("p", { className: "form-hint", style: { color: "var(--error)", marginTop: "8px" } }, addErr),
+    h("div", { className: "tg-pick-footer" },
+      h("button", { type: "button", className: "btn btn-ghost", onClick: onClose }, "Закрыть"),
+      h("button", { type: "button", className: "btn btn-primary", onClick: addTargets,
+        disabled: adding || !selected.size },
+        adding ? h(Spinner) : `Добавить как цели${selected.size ? ` (${selected.size})` : ""}`),
+    ),
+  );
+}
+
 // ── Channel card ───────────────────────────────────────────────────────────
 
 // Строим URL канала по target-значению (адрес/id) — для кнопки «Открыть канал».
@@ -1934,9 +2249,11 @@ function channelUrl(channel, target) {
   }
 }
 
-function ChannelCard({ ch, profileId, onRefresh, focus }) {
+function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
   const [validating, setValidating] = useState(false);
   const [wizard, setWizard] = useState(false);   // открыт мастер подключения
+  const [picker, setPicker] = useState(false);   // панель поиска чатов Telegram
+  const [targetListVersion, setTargetListVersion] = useState(0);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [msg, setMsg] = useState(null);
   const cardRef = useRef(null);
@@ -2000,10 +2317,14 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
     // per-profile цели постинга (группы/каналы) — свои у каждого клиента.
     // Мастер заводит первую при подключении; здесь список можно расширять/править.
     ch.needs_target && h(TargetList, {
+      key: targetListVersion,
       channel: ch.channel, profileId,
       label: ch.target_label ? `Цели: ${ch.target_label.toLowerCase()}` : "Цели публикации",
       hint: ch.target_hint, field: ch.target_field,
       guide: ch.guide, onChanged: onRefresh,
+      onPickerOpen: isAdmin && ch.channel === "telegram"
+        ? () => { setMsg(null); setPicker(true); }
+        : undefined,
     }),
     msg && h(Alert, { type: msg.type }, msg.text),
     h("div", { className: "card-actions" },
@@ -2042,12 +2363,21 @@ function ChannelCard({ ch, profileId, onRefresh, focus }) {
       onClose: () => setWizard(false),
       onDone: () => { setWizard(false); onRefresh(); },
     }),
+    picker && h(TelegramPickerPanel, {
+      profileId,
+      onClose: () => setPicker(false),
+      onTargetsAdded: (count) => {
+        setPicker(false);
+        setTargetListVersion(v => v + 1);
+        if (count > 0) setMsg({ type: "success", text: `Добавлено целей: ${count}` });
+      },
+    }),
   );
 }
 
 // ── Channels view ──────────────────────────────────────────────────────────
 
-function ChannelsView({ profile, focusChannel }) {
+function ChannelsView({ profile, focusChannel, isAdmin }) {
   const [channels, setChannels] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -2076,6 +2406,7 @@ function ChannelsView({ profile, focusChannel }) {
           channels?.map(ch => h(ChannelCard, {
             key: ch.channel,
             ch, profileId: profile.id,
+            isAdmin,
             onRefresh: load,
             focus: focusChannel === ch.channel,
           }))
@@ -2527,8 +2858,8 @@ function TargetToggle({ t, checked, onToggle }) {
   const disabled = !t.eligible;
   const contentGap = disabled && t.ineligible_kind === "content";
   const connBroken = disabled && !contentGap;
-  // Подпись под именем: имя цели (мультицели) либо просто id канала (таргетлесс).
-  const sub = t.target_name || t.channel;
+  // Subtitle: explicit target_name from caller; never fall back to channel id.
+  const sub = t.target_name || "";
   return h("button", {
     type: "button",
     className: `target ${checked ? "on" : ""} ${connBroken ? "disabled" : ""} ${contentGap ? "content-gap" : ""}`,
@@ -2547,6 +2878,155 @@ function TargetToggle({ t, checked, onToggle }) {
     h("span", { className: `target-check ${checked ? "on" : ""}` },
       checked ? "✓" : contentGap ? "!" : "",
     ),
+  );
+}
+
+function groupTelegramTargets(targets) {
+  const map = new Map();
+  for (const t of targets) {
+    if (t.channel !== "telegram") continue;
+    const nm = t.target_name || "";
+    const arrow = nm.indexOf(" → ");
+    const chat = arrow >= 0 ? nm.slice(0, arrow) : nm;
+    if (!map.has(chat)) map.set(chat, []);
+    map.get(chat).push(t);
+  }
+  const single = [];
+  const groups = [];
+  for (const [chat, ts] of map) {
+    if (ts.length === 1) single.push(ts[0]);
+    else groups.push({ chat, targets: ts });
+  }
+  return { single, groups };
+}
+
+function TelegramTargetGroup({ chat, targets, selected, onToggle, bulkToggle }) {
+  const eligible = targets.filter(t => t.eligible);
+  const checkedCount = eligible.filter(t => selected.has(selKey(t.channel, t.target_id))).length;
+  const allOn = eligible.length > 0 && checkedCount === eligible.length;
+  const someOn = checkedCount > 0 && !allOn;
+  const cbRef = useRef(null);
+  useEffect(() => { if (cbRef.current) cbRef.current.indeterminate = someOn; }, [someOn]);
+  return h("div", { className: "tg-group" },
+    h("label", { className: "tg-group-header" },
+      h("input", { type: "checkbox", ref: cbRef, checked: allOn,
+        disabled: eligible.length === 0,
+        onChange: () => bulkToggle(eligible, !allOn) }),
+      chat,
+    ),
+    h("div", { className: "tg-group-items" },
+      targets.map(t => {
+        const nm = t.target_name || "";
+        const arrow = nm.indexOf(" → ");
+        const label = arrow >= 0 ? nm.slice(arrow + 3) : "Общее";
+        return h(TargetToggle, {
+          key: selKey(t.channel, t.target_id),
+          t: { ...t, title: label, target_name: "" },
+          checked: selected.has(selKey(t.channel, t.target_id)),
+          onToggle,
+        });
+      }),
+    ),
+  );
+}
+
+function groupByPlatform(targets) {
+  const order = [];
+  const byPlatform = new Map();
+  for (const t of targets) {
+    const pid = t.platform || "__none__";
+    if (!t.platform) console.error("[crosspost] target missing platform:", t.channel, t.target_id);
+    if (!byPlatform.has(pid)) {
+      order.push(pid);
+      byPlatform.set(pid, { platform_title: t.platform_title || (pid === "__none__" ? "Без платформы" : pid), targets: [] });
+    }
+    byPlatform.get(pid).targets.push(t);
+  }
+  const sections = [], disconnected = [];
+  for (const pid of order) {
+    const { platform_title, targets: pts } = byPlatform.get(pid);
+    if (pts.every(t => t.state === "not_connected")) disconnected.push({ platform: pid, platform_title, targets: pts });
+    else sections.push({ platform: pid, platform_title, targets: pts });
+  }
+  return { sections, disconnected };
+}
+
+function PlatformSection({ platform, platform_title, targets, selected, onToggle, bulkToggle }) {
+  const eligible = targets.filter(t => t.eligible);
+  const checkedCount = eligible.filter(t => selected.has(selKey(t.channel, t.target_id))).length;
+  const allOn = eligible.length > 0 && checkedCount === eligible.length;
+  const someOn = checkedCount > 0 && !allOn;
+  const cbRef = useRef(null);
+  useEffect(() => { if (cbRef.current) cbRef.current.indeterminate = someOn; }, [someOn]);
+  let body;
+  if (platform === "telegram") {
+    const { single: tgSingle, groups: tgGroups } = groupTelegramTargets(targets);
+    body = [
+      tgGroups.length > 0 && h("div", { className: "tg-groups", key: "groups" },
+        tgGroups.map(g => h(TelegramTargetGroup, { key: g.chat, chat: g.chat, targets: g.targets, selected, onToggle, bulkToggle })),
+      ),
+      tgSingle.length > 0 && h("div", { className: "target-grid", key: "singles" },
+        tgSingle.map(t => {
+          const nm = t.target_name || "";
+          const arrow = nm.indexOf(" → ");
+          const label = arrow >= 0 ? nm.slice(arrow + 3) : nm;
+          const chatSub = arrow >= 0 ? nm.slice(0, arrow) : "";
+          return h(TargetToggle, { key: selKey(t.channel, t.target_id), t: { ...t, title: label || t.title, target_name: chatSub }, checked: selected.has(selKey(t.channel, t.target_id)), onToggle });
+        }),
+      ),
+    ];
+  } else {
+    body = h("div", { className: "target-grid" },
+      targets.map(t => h(TargetToggle, {
+        key: selKey(t.channel, t.target_id),
+        t: { ...t, title: t.short_label || t.target_name || t.title, target_name: "" },
+        checked: selected.has(selKey(t.channel, t.target_id)),
+        onToggle,
+      })),
+    );
+  }
+  return h("div", { className: "plat-section" },
+    h("label", { className: "plat-header" },
+      h("input", { type: "checkbox", ref: cbRef, checked: allOn, disabled: eligible.length === 0, onChange: () => bulkToggle(eligible, !allOn) }),
+      platform_title,
+    ),
+    h("div", { className: "plat-body" }, body),
+  );
+}
+
+function DisconnectedSection({ items }) {
+  const [open, setOpen] = useState(false);
+  const titles = items.map(i => i.platform_title).join(", ");
+  return h("div", { className: "plat-disconnected" },
+    h("button", { type: "button", className: "plat-disconnected-head", onClick: () => setOpen(o => !o) },
+      `Не подключено (${items.length}): ${titles}`,
+      h("span", { className: "plat-disconnected-caret" }, open ? "▲" : "▼"),
+    ),
+    open && h("div", { className: "plat-disconnected-cards" },
+      h("div", { className: "target-grid" },
+        items.flatMap(i => i.targets.map(t => h(TargetToggle, {
+          key: selKey(t.channel, t.target_id),
+          t,
+          checked: false,
+          onToggle: () => {},
+        }))),
+      ),
+    ),
+  );
+}
+
+function PlatformTargets({ targets, selected, onToggle, setSelected }) {
+  function bulkToggle(eligible, check) {
+    setSelected(prev => {
+      const s = new Set(prev);
+      for (const t of eligible) { check ? s.add(selKey(t.channel, t.target_id)) : s.delete(selKey(t.channel, t.target_id)); }
+      return s;
+    });
+  }
+  const { sections, disconnected } = groupByPlatform(targets);
+  return h("div", { className: "plat-sections" },
+    sections.map(s => h(PlatformSection, { key: s.platform, platform: s.platform, platform_title: s.platform_title, targets: s.targets, selected, onToggle, bulkToggle })),
+    disconnected.length > 0 && h(DisconnectedSection, { items: disconnected }),
   );
 }
 
@@ -3033,11 +3513,7 @@ function PublishView({ profile }) {
             contentType === "article"
               ? "Нет каналов, поддерживающих статьи. Для статей нужен Telegraph или Дзен."
               : "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
-        : h("div", { className: "target-grid" },
-            targets.map((t) => h(TargetToggle, {
-              key: selKey(t.channel, t.target_id), t,
-              checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
-            }))),
+        : h(PlatformTargets, { targets, selected, onToggle: toggle, setSelected }),
 
     // Действия
     h("div", { className: "publish-actions" },
@@ -3898,11 +4374,7 @@ function ImportView({ profile }) {
           : h("div", null,
               eligibleCount === 0 && h("div", { className: "empty-inline", style: { marginBottom: "10px" } },
                 "Каналы подключены, но у каждого не задана цель. Откройте вкладку «Каналы»."),
-              h("div", { className: "target-grid" },
-                targets.map((t) => h(TargetToggle, {
-                  key: selKey(t.channel, t.target_id), t,
-                  checked: selected.has(selKey(t.channel, t.target_id)), onToggle: toggle,
-                })))),
+              h(PlatformTargets, { targets, selected, onToggle: toggle, setSelected })),
     ),
 
     // Превью + commit actions.
@@ -4322,7 +4794,7 @@ function App() {
             ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active }))
             : view === "import"
               ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
-              : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel })),
+              : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),
         )
       : (isAdmin ? h(NoProfileView) : h(NoAccessView));
 

@@ -163,6 +163,12 @@ class ChannelValidatorDef:
     # env var holding proxy URL for this channel's HTTP client (e.g. "INSTAGRAM_PROXY_URL").
     # Empty string = direct connection. Never affects other channels.
     proxy_env_var: str = ""
+    # ── Platform grouping ──────────────────────────────────────────────────────
+    platform: str = ""  # platform id, e.g. "telegram", "vk", "instagram"
+    platform_title: str = ""  # human display, e.g. "ВКонтакте"
+    # Short card label used when the platform header is already shown.
+    # Empty = use target_name (for telegram) or title (for single-channel platforms).
+    short_label: str = ""
 
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
@@ -385,6 +391,9 @@ def _channel_from_url(url: str) -> str:
 # устойчивым маркером, снятым с ЖИВОЙ страницы (make smoke), тогда добавится
 # строгая позитивная DOM-проверка. Пустые = не участвуют (не ломают детекцию).
 
+# Platform display order for UI grouping.
+PLATFORM_ORDER: list[str] = ["telegram", "vk", "instagram", "dzen", "yandex", "telegraph"]
+
 VALIDATORS: dict[str, ChannelValidatorDef] = {
     "telegraph": ChannelValidatorDef(
         kind="api",
@@ -394,6 +403,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         enabled=True,
         interactive=False,
         guide=TELEGRAPH_GUIDE,
+        platform="telegraph",
+        platform_title="Telegraph",
+        short_label="Статьи",
     ),
     "telegram": ChannelValidatorDef(
         kind="api",
@@ -410,6 +422,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_normalizer=normalize_telegram_target,
         max_video_bytes=2000 * 1024 * 1024,  # 2000 MiB — Telethon/MTProto limit
         guide=TELEGRAM_GUIDE,
+        platform="telegram",
+        platform_title="Telegram",
+        short_label="",  # target_name used instead (per-target label)
     ),
     "vk": ChannelValidatorDef(
         kind="api",
@@ -417,6 +432,8 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         fn=_validate_vk_api,
         title="ВКонтакте (API)",
         enabled=False,  # VK блокирует токен сообщества; ждёт user-токена — см. PRD_BACKLOG
+        platform="vk",
+        platform_title="ВКонтакте",
     ),
     "instagram": ChannelValidatorDef(
         kind="api",
@@ -428,6 +445,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         guide=INSTAGRAM_GUIDE,
         proxy_env_var="INSTAGRAM_PROXY_URL",
         # needs_target=False: цель (ig_user_id) — часть учётки, а не отдельный таргет.
+        platform="instagram",
+        platform_title="Instagram",
+        short_label="Reels",
     ),
     "yandex": ChannelValidatorDef(
         kind="browser",
@@ -450,6 +470,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_hint="Из URL кабинета: yandex.ru/sprav/<ЭТОТ-ID>/…",
         target_normalizer=normalize_yandex_org,
         guide=YANDEX_GUIDE,
+        platform="yandex",
+        platform_title="Яндекс Бизнес",
+        short_label="Бизнес",
     ),
     "vk_wall": ChannelValidatorDef(
         kind="browser",
@@ -471,6 +494,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_hint="Вставьте адрес группы: vk.com/XXXX или полную ссылку — оставим только имя",
         target_normalizer=normalize_vk_screen_name,
         guide=VK_WALL_GUIDE,
+        platform="vk",
+        platform_title="ВКонтакте",
+        short_label="Стена",
     ),
     "vk_channel": ChannelValidatorDef(
         kind="browser",
@@ -494,6 +520,9 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         target_hint="Числовой id канала сообщества (напр. -240033402)",
         target_normalizer=normalize_vk_channel_id,
         guide=VK_CHANNEL_GUIDE,
+        platform="vk",
+        platform_title="ВКонтакте",
+        short_label="Канал",
     ),
 }
 

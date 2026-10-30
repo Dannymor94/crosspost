@@ -18,6 +18,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -188,6 +189,9 @@ class ChannelTarget(Base):
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     value_blob: Mapped[str] = mapped_column(Text, nullable=False)  # шифртекст (Fernet)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    topic_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    peer_access_hash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now()
     )

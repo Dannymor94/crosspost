@@ -172,6 +172,58 @@ async def test_live_channel_without_target_not_eligible(client, factory):
     assert r.status_code == 422
 
 
+async def test_targets_fields_and_order(client, factory):
+    """publish/targets: every target has non-empty platform/platform_title/short_label
+    (for non-telegram enabled), and the list is sorted by PLATFORM_ORDER.
+    Also prints a trimmed summary to stdout (visible with pytest -s).
+    """
+    from crosspost.channels.validators import PLATFORM_ORDER, VALIDATORS
+
+    live_channels = [ch for ch, v in VALIDATORS.items() if v.enabled]
+    pid = await _make_profile_with_live(factory, live_channels, name="fields-check")
+    resp = await client.get(f"/api/profiles/{pid}/publish/targets?content_type=post")
+    assert resp.status_code == 200
+    items = resp.json()
+
+    print(f"\n=== GET /publish/targets ({len(items)} items) ===")
+    for t in items:
+        print(
+            f"  {t['platform']:12} | {t['platform_title']:20} | {t['short_label']:10} | {t['channel']:12} | {t.get('target_name', '')[:30]}"
+        )
+
+    for t in items:
+        assert t["platform"], f"empty platform on channel={t['channel']}"
+        assert t["platform_title"], f"empty platform_title on channel={t['channel']}"
+        if t["channel"] != "telegram":
+            assert t["short_label"], f"empty short_label on non-telegram channel={t['channel']}"
+
+    platforms_seen: list[str] = []
+    for t in items:
+        p = t["platform"]
+        if not platforms_seen or platforms_seen[-1] != p:
+            platforms_seen.append(p)
+    order_map = {p: i for i, p in enumerate(PLATFORM_ORDER)}
+    ranks = [order_map.get(p, len(PLATFORM_ORDER)) for p in platforms_seen]
+    assert ranks == sorted(ranks), f"platforms not in PLATFORM_ORDER: {platforms_seen}"
+
+
+async def test_targets_sorted_by_platform_order(client, factory):
+    """Backward-compat alias kept for narrower coverage."""
+    from crosspost.channels.validators import PLATFORM_ORDER
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    resp = await client.get(f"/api/profiles/{pid}/publish/targets?content_type=post")
+    assert resp.status_code == 200
+    platforms_seen = []
+    for t in resp.json():
+        p = t["platform"]
+        if not platforms_seen or platforms_seen[-1] != p:
+            platforms_seen.append(p)
+    order_map = {p: i for i, p in enumerate(PLATFORM_ORDER)}
+    ranks = [order_map.get(p, len(PLATFORM_ORDER)) for p in platforms_seen]
+    assert ranks == sorted(ranks), f"Platforms not in PLATFORM_ORDER: {platforms_seen}"
+
+
 # ── Publish now ───────────────────────────────────────────────────────────────
 
 

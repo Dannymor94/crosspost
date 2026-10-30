@@ -30,7 +30,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from crosspost.channels.validators import VALIDATORS
+from crosspost.channels.validators import PLATFORM_ORDER, VALIDATORS
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.content.capabilities import supports, video_ineligible_reason
 from crosspost.content.media_kind import MediaKind, detect_media_kind
@@ -54,6 +54,7 @@ from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profi
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
+_PLATFORM_RANK: dict[str, int] = {p: i for i, p in enumerate(PLATFORM_ORDER)}
 # Alle routes under /api/profiles/{profile_id}/… — isolation gate covers entire router.
 router = APIRouter(tags=["publish"], dependencies=[Depends(require_profile_access)])
 
@@ -149,6 +150,9 @@ class TargetOut(BaseModel):
     # (telegraph) или канал без заведённых целей (плейсхолдер-ineligible).
     target_id: str = ""
     target_name: str = ""
+    platform: str = ""
+    platform_title: str = ""
+    short_label: str = ""
 
 
 class OutcomeOut(BaseModel):
@@ -476,6 +480,9 @@ async def publish_targets(
                         video_bytes=video_bytes,
                     ),
                     ineligible_kind=_ineligible_kind(elig, video_ok, supported),
+                    platform=v.platform,
+                    platform_title=v.platform_title,
+                    short_label=v.short_label,
                 )
             )
             continue
@@ -503,6 +510,9 @@ async def publish_targets(
                         video_bytes=video_bytes,
                     ),
                     ineligible_kind=_ineligible_kind(False, video_ok, supported),
+                    platform=v.platform,
+                    platform_title=v.platform_title,
+                    short_label=v.short_label,
                 )
             )
             continue
@@ -531,8 +541,12 @@ async def publish_targets(
                     ineligible_kind=ikind,
                     target_id=str(t.id),
                     target_name=t.name,
+                    platform=v.platform,
+                    platform_title=v.platform_title,
+                    short_label=v.short_label,
                 )
             )
+    out.sort(key=lambda t: (_PLATFORM_RANK.get(t.platform, len(PLATFORM_ORDER)), t.target_name))
     return out
 
 

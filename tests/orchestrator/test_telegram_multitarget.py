@@ -126,3 +126,19 @@ async def test_telegram_incomplete_blob_no_adapter(repo, fake_telethon):
     await repo.set_credential(p.id, "telegram", CredentialKind.API_TOKEN, bad)
 
     assert await build_profile_adapter(repo, p.id, "telegram") is None
+
+
+async def test_telegram_topic_and_non_topic_targets(repo, fake_telethon):
+    """Mixed targets: one with topic_id, one without — adapter reflects each correctly."""
+    pid = await _connect_telegram(repo, "@seed_channel")
+    trepo = ChannelTargetRepository(repo.session, vault=repo.vault, profile_id=pid)
+    plain = await trepo.add_target("telegram", "Канал", "@plain")
+    topic = await trepo.add_target("telegram", "Форум", "@forum")
+    await trepo.set_topic_id(topic.id, 285)
+
+    ad_plain = await build_profile_adapter(repo, pid, "telegram", str(plain.id))
+    ad_topic = await build_profile_adapter(repo, pid, "telegram", str(topic.id))
+
+    assert ad_plain is not None and ad_topic is not None
+    assert ad_plain._topic_id is None
+    assert ad_topic._topic_id == 285

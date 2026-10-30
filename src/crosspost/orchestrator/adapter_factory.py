@@ -56,8 +56,16 @@ async def build_profile_adapter(
     if channel == "telegram":
         # Цель расцеплена с сессией: явная цель из выбранной ChannelTarget, блоб —
         # только сид первой цели и фолбэк для legacy-вызова без target_id (Блок 6).
-        target = await _resolve_target(repo, profile_id, channel, target_id)
-        return await _build_telegram(cred, store, explicit_target=target)
+        target, topic_id, peer_access_hash = await _resolve_telegram_target(
+            repo, profile_id, target_id
+        )
+        return await _build_telegram(
+            cred,
+            store,
+            explicit_target=target,
+            topic_id=topic_id,
+            peer_access_hash=peer_access_hash,
+        )
 
     if channel == "telegraph":
         from crosspost.adapters.api.telegraph import TelegraphAdapter  # noqa: PLC0415
@@ -107,12 +115,7 @@ async def build_profile_adapter(
 async def _resolve_target(
     repo: ProfileRepository, profile_id: int, channel: str, target_id: str
 ) -> str:
-    """Значение цели (screen_name/org_id/…) по id, либо legacy-одиночная цель.
-
-    target_id задан → берём именно эту ChannelTarget (профиль-scoped). Пусто →
-    старое поведение: единственная CredentialKind.TARGET профиля. Так роуты, ещё
-    не переведённые на выбор целей (Блок 5), продолжают публиковать без поломок.
-    """
+    """Значение цели (screen_name/org_id/…) по id, либо legacy-одиночная цель."""
     if target_id:
         trepo = ChannelTargetRepository(repo.session, vault=repo.vault, profile_id=profile_id)
         try:
@@ -123,7 +126,35 @@ async def _resolve_target(
     return await repo.get_credential(profile_id, channel, CredentialKind.TARGET) or ""
 
 
-async def _build_telegram(cred: str, store, *, explicit_target: str = "") -> ChannelAdapter | None:
+async def _resolve_telegram_target(
+    repo: ProfileRepository, profile_id: int, target_id: str
+) -> tuple[str, int | None, int | None]:
+    """Resolve target value + topic_id + peer_access_hash for Telegram.
+
+    Returns (target_value, topic_id, peer_access_hash).
+    Legacy path (no target_id): topic_id=None, peer_access_hash=None.
+    """
+    if target_id:
+        trepo = ChannelTargetRepository(repo.session, vault=repo.vault, profile_id=profile_id)
+        try:
+            tgt = await trepo.get_target(int(target_id))
+        except (ValueError, TypeError):
+            return "", None, None
+        if tgt is None:
+            return "", None, None
+        return trepo.decrypt_value(tgt), tgt.topic_id, tgt.peer_access_hash
+    value = await repo.get_credential(profile_id, "telegram", CredentialKind.TARGET) or ""
+    return value, None, None
+
+
+async def _build_telegram(
+    cred: str,
+    store,
+    *,
+    explicit_target: str = "",
+    topic_id: int | None = None,
+    peer_access_hash: int | None = None,
+) -> ChannelAdapter | None:
     from telethon import TelegramClient  # noqa: PLC0415
     from telethon.sessions import StringSession  # noqa: PLC0415
 
@@ -141,7 +172,9 @@ async def _build_telegram(cred: str, store, *, explicit_target: str = "") -> Cha
 
     client = TelegramClient(StringSession(session), api_id, api_hash)
     await client.connect()  # сессия уже авторизована — без интерактива
-    return TelegramAdapter(client, target=target, store=store)
+    return TelegramAdapter(
+        client, target=target, store=store, topic_id=topic_id, peer_access_hash=peer_access_hash
+    )
 
 
 def _build_browser(channel: str, storage_state: str, store, target: str) -> ChannelAdapter | None:

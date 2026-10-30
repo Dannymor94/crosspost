@@ -98,6 +98,16 @@ class ChannelTargetRepository:
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0
 
+    async def set_topic_id(self, target_id: int, topic_id: int | None) -> bool:
+        """Set or clear Telegram forum topic id. True if target found."""
+        result = await self._s.execute(
+            sql_update(ChannelTarget)
+            .where(ChannelTarget.id == target_id, ChannelTarget.profile_id == self._pid)
+            .values(topic_id=topic_id)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
+
     async def delete_target(self, target_id: int) -> bool:
         """Удалить цель профиля. True если что-то удалено. Идемпотентно."""
         result = await self._s.execute(

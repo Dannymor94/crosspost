@@ -244,8 +244,10 @@ def test_rule_daily_default():
 def test_rule_every_n_days():
     # Через 3 дня: 1 → 4 → 7 сентября.
     rule = ScheduleRule(
-        start_date=date(2026, 9, 1), times=(time(9, 0),),
-        interval="every_n_days", interval_n=3,
+        start_date=date(2026, 9, 1),
+        times=(time(9, 0),),
+        interval="every_n_days",
+        interval_n=3,
     )
     assert rule.slot_datetime(0) == datetime(2026, 9, 1, 9, 0)
     assert rule.slot_datetime(1) == datetime(2026, 9, 4, 9, 0)
@@ -255,8 +257,10 @@ def test_rule_every_n_days():
 def test_rule_every_n_days_with_multiple_slots():
     # 2 слота в день, интервал 2 дня. День 0 = 1 сен (два слота), день 1 = 3 сен.
     rule = ScheduleRule(
-        start_date=date(2026, 9, 1), times=(time(9, 0), time(21, 0)),
-        interval="every_n_days", interval_n=2,
+        start_date=date(2026, 9, 1),
+        times=(time(9, 0), time(21, 0)),
+        interval="every_n_days",
+        interval_n=2,
     )
     assert rule.slot_datetime(0) == datetime(2026, 9, 1, 9, 0)
     assert rule.slot_datetime(1) == datetime(2026, 9, 1, 21, 0)
@@ -268,8 +272,10 @@ def test_rule_weekly_selected_weekdays():
     # 2026-09-01 — вторник (weekday=1). Дни: пн(0), ср(2), пт(4).
     # Первый подходящий день ≥ старта: ср 2 сен, затем пт 4 сен, пн 7 сен, ср 9 сен.
     rule = ScheduleRule(
-        start_date=date(2026, 9, 1), times=(time(12, 0),),
-        interval="weekly", weekdays=(0, 2, 4),
+        start_date=date(2026, 9, 1),
+        times=(time(12, 0),),
+        interval="weekly",
+        weekdays=(0, 2, 4),
     )
     assert rule.slot_datetime(0) == datetime(2026, 9, 2, 12, 0)
     assert rule.slot_datetime(1) == datetime(2026, 9, 4, 12, 0)
@@ -280,10 +286,12 @@ def test_rule_weekly_selected_weekdays():
 def test_rule_weekly_start_on_selected_day():
     # Старт в понедельник 2026-09-07 (weekday=0), дни пн+чт(3).
     rule = ScheduleRule(
-        start_date=date(2026, 9, 7), times=(time(8, 0),),
-        interval="weekly", weekdays=(0, 3),
+        start_date=date(2026, 9, 7),
+        times=(time(8, 0),),
+        interval="weekly",
+        weekdays=(0, 3),
     )
-    assert rule.slot_datetime(0) == datetime(2026, 9, 7, 8, 0)   # пн
+    assert rule.slot_datetime(0) == datetime(2026, 9, 7, 8, 0)  # пн
     assert rule.slot_datetime(1) == datetime(2026, 9, 10, 8, 0)  # чт
     assert rule.slot_datetime(2) == datetime(2026, 9, 14, 8, 0)  # следующий пн
 
@@ -291,7 +299,9 @@ def test_rule_weekly_start_on_selected_day():
 def test_rule_monthly():
     # Раз в месяц: 15 янв → 15 фев → 15 мар.
     rule = ScheduleRule(
-        start_date=date(2026, 1, 15), times=(time(10, 0),), interval="monthly",
+        start_date=date(2026, 1, 15),
+        times=(time(10, 0),),
+        interval="monthly",
     )
     assert rule.slot_datetime(0) == datetime(2026, 1, 15, 10, 0)
     assert rule.slot_datetime(1) == datetime(2026, 2, 15, 10, 0)
@@ -301,7 +311,9 @@ def test_rule_monthly():
 def test_rule_monthly_clamps_short_month():
     # 31 января + месяц → 28 февраля (2026 не високосный).
     rule = ScheduleRule(
-        start_date=date(2026, 1, 31), times=(time(10, 0),), interval="monthly",
+        start_date=date(2026, 1, 31),
+        times=(time(10, 0),),
+        interval="monthly",
     )
     assert rule.slot_datetime(1) == datetime(2026, 2, 28, 10, 0)
 
@@ -336,8 +348,10 @@ def test_build_plan_explicit_date_beats_interval_rule():
         _row(3, "3.jpg", "Третий"),
     ]
     rule = ScheduleRule(
-        start_date=date(2026, 9, 1), times=(time(9, 0),),
-        interval="every_n_days", interval_n=7,
+        start_date=date(2026, 9, 1),
+        times=(time(9, 0),),
+        interval="every_n_days",
+        interval_n=7,
     )
     report = build_plan(rows, ["1.jpg", "2.jpg", "3.jpg"], rule)
     by_row = {r.row_number: r for r in report.resolved}

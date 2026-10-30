@@ -29,6 +29,7 @@ from crosspost.web.routes import (
     public_media,
     publish,
     settings,
+    telegram_discovery,
     tg_login,
     tunnel_health,
     users,
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(profiles.router)
     app.include_router(channels.router)
+    app.include_router(telegram_discovery.router)
     app.include_router(tg_login.router)
     app.include_router(publish.router)
     app.include_router(import_plan.router)

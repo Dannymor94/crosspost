@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Any
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
 from crosspost.content.canonical import CanonicalContent
@@ -99,19 +100,38 @@ def _post_url(target: str, msg_id: str | None) -> str | None:
     return f"https://t.me/{name}/{msg_id}" if _USERNAME_RE.match(name) else None
 
 
+def _resolve_peer(target: str, peer_access_hash: int | None):
+    """Return InputPeerChannel for -100<id> targets when access_hash is known, else raw string."""
+    if peer_access_hash is not None and target.startswith("-100"):
+        try:
+            from telethon.tl import types as tl_types  # noqa: PLC0415
+
+            channel_id = int(target[4:])  # strip -100 prefix
+            return tl_types.InputPeerChannel(channel_id=channel_id, access_hash=peer_access_hash)
+        except Exception:  # noqa: BLE001
+            pass
+    return target
+
+
 class TelegramAdapter:
     channel = "telegram"
 
     def __init__(
-        self, client, target: str, store: IdempotencyStore, *, schedule: datetime | None = None
+        self,
+        client,
+        target: str,
+        store: IdempotencyStore,
+        *,
+        schedule: datetime | None = None,
+        topic_id: int | None = None,
+        peer_access_hash: int | None = None,
     ) -> None:
         self._client = client  # Telethon TelegramClient
         self._target = target  # канал назначения
         self._store = store
-        # None → отправить сразу; aware datetime → нативный отложенный пост Telegram
-        # (schedule= в Telethon). При двух сообщениях ОБА на одно время: фото создаётся
-        # первым → срабатывает первым (проверено), в ленте окажется над текстом.
         self._schedule = schedule
+        self._topic_id = topic_id
+        self._peer = _resolve_peer(target, peer_access_hash)
 
     async def publish(
         self,
@@ -152,8 +172,11 @@ class TelegramAdapter:
                         error=f"текст длиннее {MESSAGE_LIMIT} симв.: одного сообщения мало, "
                         "чанкинг не поддержан — сократите текст",
                     )
+                kw: dict = {}
+                if self._topic_id is not None:
+                    kw["reply_to"] = self._topic_id
                 sent = await self._client.send_message(
-                    self._target, text, parse_mode="html", schedule=self._schedule
+                    self._peer, text, parse_mode="html", schedule=self._schedule, **kw
                 )
                 ext = _first_id(sent)
                 await self._store.mark_done(publication_id, self.channel, external_id=ext)
@@ -162,13 +185,16 @@ class TelegramAdapter:
                     ResultStatus.DONE,
                     external_id=ext,
                     url=_post_url(self._target, ext),
+                    topic_id=self._topic_id,
                 )
 
             if caption_fits(text):
                 # ── режим «медиа + подпись»: один вызов ────────────────────────
-                extra = {"attributes": video_attrs} if video_attrs else {}
+                extra: dict[str, Any] = {"attributes": video_attrs} if video_attrs else {}
+                if self._topic_id is not None:
+                    extra["reply_to"] = self._topic_id
                 sent = await self._client.send_file(
-                    self._target,
+                    self._peer,
                     media,
                     caption=text,
                     parse_mode="html",
@@ -182,6 +208,7 @@ class TelegramAdapter:
                     ResultStatus.DONE,
                     external_id=ext,
                     url=_post_url(self._target, ext),
+                    topic_id=self._topic_id,
                 )
 
             # ── режим «медиа, затем текст следом»: два вызова ──────────────────
@@ -203,21 +230,26 @@ class TelegramAdapter:
             if await self._store.is_done(photo_pub, self.channel):
                 photo_id = await self._store.get_external_id(photo_pub, self.channel)
             else:
-                extra = {"attributes": video_attrs} if video_attrs else {}
+                extra2: dict[str, Any] = {"attributes": video_attrs} if video_attrs else {}
+                if self._topic_id is not None:
+                    extra2["reply_to"] = self._topic_id
                 sent = await self._client.send_file(
-                    self._target,
+                    self._peer,
                     media,
                     caption=caption,
                     parse_mode="html",
                     schedule=self._schedule,
-                    **extra,
+                    **extra2,
                 )
                 photo_id = _first_id(sent)
                 await self._store.mark_done(photo_pub, self.channel, external_id=photo_id)
 
             # Шаг 2 — тело (без заголовка) отдельным сообщением, на то же время.
+            kw2: dict = {}
+            if self._topic_id is not None:
+                kw2["reply_to"] = self._topic_id
             await self._client.send_message(
-                self._target, body, parse_mode="html", schedule=self._schedule
+                self._peer, body, parse_mode="html", schedule=self._schedule, **kw2
             )
 
             # Оба сообщения прошли → канал done. Квитанция — id фото (визуальный якорь).
@@ -227,6 +259,7 @@ class TelegramAdapter:
                 ResultStatus.DONE,
                 external_id=photo_id,
                 url=_post_url(self._target, photo_id),
+                topic_id=self._topic_id,
             )
 
         except FloodWaitError as e:

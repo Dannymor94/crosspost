@@ -48,12 +48,15 @@ def _migrate_sqlite(conn) -> None:
         conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN article_text TEXT")
     if "link_phrase" not in cols:
         conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN link_phrase VARCHAR(128)")
+    if "reject_reason" not in cols:
+        conn.exec_driver_sql("ALTER TABLE scheduled_posts ADD COLUMN reject_reason TEXT")
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_scheduled_report "
         "ON scheduled_posts (profile_id, status, published_at)"
     )
     _migrate_scheduled_status(conn)
     _migrate_publications_target(conn)
+    _migrate_channel_targets_topic(conn)
 
 
 def _migrate_scheduled_status(conn) -> None:
@@ -118,6 +121,17 @@ def _migrate_publications_target(conn) -> None:
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_publications_profile_id ON publications (profile_id)"
     )
+
+
+def _migrate_channel_targets_topic(conn) -> None:
+    """Add topic_id, topic_title, and peer_access_hash to channel_targets (idempotent)."""
+    ct_cols = {c["name"] for c in sa.inspect(conn).get_columns("channel_targets")}
+    if "topic_id" not in ct_cols:
+        conn.exec_driver_sql("ALTER TABLE channel_targets ADD COLUMN topic_id INTEGER")
+    if "topic_title" not in ct_cols:
+        conn.exec_driver_sql("ALTER TABLE channel_targets ADD COLUMN topic_title VARCHAR(255)")
+    if "peer_access_hash" not in ct_cols:
+        conn.exec_driver_sql("ALTER TABLE channel_targets ADD COLUMN peer_access_hash BIGINT")
 
 
 async def create_engine_and_tables(url: str | None = None) -> AsyncEngine:

@@ -65,3 +65,41 @@ def split_headline(text_html: str) -> tuple[str, str]:
 def exceeds_message_limit(text_html: str) -> bool:
     """Больше одного сообщения. Чанкинг не поддержан — вызывающий вернёт FAILED."""
     return visible_length(text_html) > MESSAGE_LIMIT
+
+
+# ── Link parser ───────────────────────────────────────────────────────────────
+
+_TG_LINK = re.compile(
+    r"(?:https?://)?t\.me/"
+    r"(?:"
+    r"c/(?P<num_id>\d+)/(?P<num_topic>\d+)(?:/\d+)?"  # t.me/c/<num>/<topic>[/<sub>]
+    r"|"
+    r"(?P<username>[A-Za-z0-9_]{3,})/(?P<user_topic>\d+)(?:/\d+)?"  # t.me/<user>/<topic>[/<sub>]
+    r")"
+    r"$"
+)
+
+
+def parse_telegram_link(url: str) -> tuple[str, int | None]:
+    """Parse a t.me link into (target_value, topic_id).
+
+    Returns:
+        (target_value, topic_id) — topic_id is None when the General topic (id=1).
+
+    Raises:
+        ValueError for unrecognised or non-t.me links.
+    """
+    url = url.strip()
+    m = _TG_LINK.match(url)
+    if not m:
+        raise ValueError(f"Не удалось разобрать ссылку Telegram: {url!r}")
+
+    if m.group("num_id"):
+        target = f"-100{m.group('num_id')}"
+        raw_topic = int(m.group("num_topic"))
+    else:
+        target = f"@{m.group('username')}"
+        raw_topic = int(m.group("user_topic"))
+
+    topic_id = None if raw_topic == 1 else raw_topic
+    return target, topic_id

@@ -40,6 +40,7 @@ class ChannelResult:
     external_id: str | None = None
     error: str | None = None
     url: str | None = None
+    topic_id: int | None = None
 
 
 @runtime_checkable

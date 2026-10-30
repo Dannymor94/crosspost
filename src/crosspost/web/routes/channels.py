@@ -7,7 +7,7 @@ import logging
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from crosspost.channels.connection_validator import is_expires_soon, validate_connection
 from crosspost.channels.guide import target_value_field
@@ -246,16 +246,34 @@ class ChannelTargetOut(BaseModel):
     id: int
     name: str
     value: str
+    topic_id: int | None = None
+    topic_title: str | None = None
 
 
 class TargetCreateBody(BaseModel):
     name: str
     value: str
+    topic_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_peer_access_hash(cls, data: dict) -> dict:
+        if isinstance(data, dict) and "peer_access_hash" in data:
+            raise ValueError("peer_access_hash is set by discovery only")
+        return data
 
 
 class TargetPatchBody(BaseModel):
     name: str | None = None
     value: str | None = None
+    topic_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_peer_access_hash(cls, data: dict) -> dict:
+        if isinstance(data, dict) and "peer_access_hash" in data:
+            raise ValueError("peer_access_hash is set by discovery only")
+        return data
 
 
 class ChannelRegistryItem(BaseModel):
@@ -462,7 +480,23 @@ def _target_out(trepo: ChannelTargetRepository, channel: str, target) -> Channel
         id=target.id,
         name=target.name,
         value=normalize_target(channel, trepo.decrypt_value(target)),
+        topic_id=target.topic_id,
+        topic_title=getattr(target, "topic_title", None),
     )
+
+
+def _coerce_topic_id(topic_id: int | None) -> int | None:
+    """Normalize topic_id: General topic (1) → None."""
+    if topic_id is None or topic_id == 1:
+        return None
+    return topic_id
+
+
+def _validate_topic_id(channel: str, topic_id: int | None) -> None:
+    if topic_id is not None and channel != "telegram":
+        raise HTTPException(
+            status_code=422, detail="topic_id поддерживается только для канала telegram"
+        )
 
 
 @router.get(
@@ -493,9 +527,16 @@ async def create_target(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Укажите название цели")
+    _validate_topic_id(channel, body.topic_id)
     value = _normalize_target_value(v, body.value)
     trepo = _target_repo(session, profile_id)
     target = await trepo.add_target(channel, name, value)
+    topic_id = _coerce_topic_id(body.topic_id)
+    if topic_id is not None:
+        await trepo.set_topic_id(target.id, topic_id)
+        refreshed = await trepo.get_target(target.id)
+        assert refreshed is not None
+        target = refreshed
     return _target_out(trepo, channel, target)
 
 
@@ -516,6 +557,7 @@ async def patch_target(
     trepo = _target_repo(session, profile_id)
     if await trepo.get_target(target_id) is None:
         raise HTTPException(status_code=404, detail="Цель не найдена")
+    _validate_topic_id(channel, body.topic_id)
     if body.name is not None:
         name = body.name.strip()
         if not name:
@@ -523,6 +565,8 @@ async def patch_target(
         await trepo.rename_target(target_id, name)
     if body.value is not None:
         await trepo.set_value(target_id, _normalize_target_value(v, body.value))
+    if "topic_id" in (body.model_fields_set or set()):
+        await trepo.set_topic_id(target_id, _coerce_topic_id(body.topic_id))
     target = await trepo.get_target(target_id)
     assert target is not None
     return _target_out(trepo, channel, target)
