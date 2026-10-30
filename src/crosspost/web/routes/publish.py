@@ -182,6 +182,7 @@ class ScheduledOut(BaseModel):
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
     media_paths: list[str] = []  # пути к файлам медиа (для показа в форме редактирования)
+    reject_reason: str | None = None
 
 
 class ScheduledReportOut(BaseModel):
@@ -1298,9 +1299,13 @@ async def approve_post(
     return _scheduled_out(post)
 
 
+class RejectBody(BaseModel):
+    reason: str = ""
+
+
 @router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/reject")
 async def reject_post(
-    profile_id: int, scheduled_id: int, session: SessionDep, _: AdminUser
+    profile_id: int, scheduled_id: int, body: RejectBody, session: SessionDep, _: AdminUser
 ) -> dict:
     """Отклонить пост на модерации: PENDING_APPROVAL → CANCELLED. Только admin."""
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -1311,7 +1316,7 @@ async def reject_post(
         raise HTTPException(status_code=404, detail="Пост не найден")
     media_paths = list(post.media_paths or [])
 
-    ok = await pub_repo.reject_pending(scheduled_id)
+    ok = await pub_repo.reject_pending(scheduled_id, body.reason)
     if not ok:
         raise HTTPException(status_code=409, detail="Пост не найден или уже не на проверке")
 
@@ -1334,4 +1339,5 @@ def _scheduled_out(post) -> ScheduledOut:
         status=str(post.status),
         has_article=bool(post.article_text),
         media_paths=list(post.media_paths or []),
+        reject_reason=post.reject_reason,
     )

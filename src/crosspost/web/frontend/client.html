@@ -289,6 +289,7 @@ textarea { resize: vertical; min-height: 110px; }
 .badge-blue { background: rgba(59,130,246,.15); color: var(--accent); }
 .badge-amber { background: rgba(245,158,11,.15); color: var(--warn); }
 .empty-state { color: var(--text-2); text-align: center; padding: 40px 0; }
+.cancel-reason { font-size: 14px; color: var(--error); margin-top: 4px; }
 
 /* ── Spinner ── */
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -611,6 +612,7 @@ function PostCard({ post, onCancel }) {
     <div class="post-card">
       <div class="post-meta">${fmtDate(post.scheduled_at)}</div>
       ${badge}
+      ${post.reject_reason && html`<div class="cancel-reason">Причина: ${post.reject_reason}</div>`}
       <div class="post-text">${post.text.slice(0, 80)}${post.text.length > 80 ? '…' : ''}</div>
       ${editing ? html`
         <div style="margin-bottom:10px">

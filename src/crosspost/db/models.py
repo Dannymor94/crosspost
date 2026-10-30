@@ -295,6 +295,7 @@ class ScheduledPost(Base):
     # Монотонный маркер: сортировка/курсор журнала и since-инкремент строятся на нём,
     # а не на scheduled_at (то — плановое время, при publish-now скачет в будущее).
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     profile: Mapped[Profile] = relationship("Profile")
 

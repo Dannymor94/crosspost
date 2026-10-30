@@ -1130,6 +1130,19 @@ body {
 }
 .role-badge.admin  { background: var(--accent-dim); color: var(--accent); }
 .role-badge.client { background: var(--bg-card); color: var(--text-2); border: 1px solid var(--border); }
+/* ── Moderation view ── */
+.mod-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.mod-badge { display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber-bg,#2d2000); color: var(--amber,#f59e0b);
+  border-radius: 999px; font-size: 11px; font-weight: 700; min-width: 20px; height: 20px; padding: 0 5px; }
+.mod-card { background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+.mod-card-meta { font-size: 13px; color: var(--text-2); margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+.mod-card-text { margin-bottom: 12px; white-space: pre-wrap; word-break: break-word; }
+.mod-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pending-count { display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber,#f59e0b); color: #000;
+  border-radius: 999px; font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 6px; }
 .topbar-profile-select {
   margin-right: auto;
   max-width: 200px;
@@ -2093,7 +2106,7 @@ function NoProfileView() {
 const SIDEBAR_DEFAULT_W = 260;
 const SIDEBAR_LS_KEY = "sidebar_w";
 
-function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConsole, consoleActive }) {
+function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConsole, consoleActive, onModeration, moderationActive, pendingCount }) {
   const navRef = useRef(null);
   const dragging = useRef(false);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -2157,6 +2170,16 @@ function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConso
     },
       h("span", { className: "profile-avatar" }, "⚠"),
       h("span", null, "Консоль ошибок"),
+    ),
+    h("button", {
+      className: `profile-item ${moderationActive ? "active" : ""}`,
+      onClick: onModeration,
+      "aria-current": moderationActive ? "page" : undefined,
+    },
+      h("span", { className: "profile-avatar" }, "✓"),
+      h("span", null, "На проверке",
+        pendingCount > 0 && h("span", { className: "pending-count" }, pendingCount),
+      ),
     ),
     h("p", { className: "sidebar-section-label" }, "Клиенты"),
     profiles.length === 0
@@ -4007,7 +4030,95 @@ function BrowserVisibilityToggle() {
   );
 }
 
-function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAdmin }) {
+function ModerationView({ profiles, onApproved, onRejected }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const all = await Promise.all(
+        profiles.map(p =>
+          api.get(`/api/profiles/${p.id}/scheduled/pending`)
+            .then(posts => posts.map(post => ({ post, profile: p })))
+            .catch(() => [])
+        )
+      );
+      setItems(all.flat().sort((a, b) => new Date(a.post.scheduled_at) - new Date(b.post.scheduled_at)));
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { load(); }, [profiles.length]);
+
+  async function approve(post, profile) {
+    setBusy(true);
+    try {
+      await api.post(`/api/profiles/${profile.id}/scheduled/${post.id}/approve`);
+      setItems(prev => prev.filter(x => x.post.id !== post.id));
+      onApproved?.();
+    } catch (e) { alert("Ошибка: " + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmReject() {
+    if (!rejectTarget) return;
+    setBusy(true);
+    try {
+      await api.post(`/api/profiles/${rejectTarget.profile.id}/scheduled/${rejectTarget.post.id}/reject`,
+        { reason: rejectReason });
+      setItems(prev => prev.filter(x => x.post.id !== rejectTarget.post.id));
+      setRejectTarget(null);
+      onRejected?.();
+    } catch (e) { alert("Ошибка: " + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  if (loading) return h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"));
+
+  return h("div", null,
+    h("div", { className: "mod-header" },
+      h("h2", { style: { fontSize: "18px", fontWeight: 600 } }, "На проверке"),
+      items.length > 0 && h("span", { className: "mod-badge" }, items.length),
+    ),
+    items.length === 0
+      ? h("p", { className: "text-3" }, "Нет постов, ожидающих одобрения.")
+      : items.map(({ post, profile }) =>
+          h("div", { key: post.id, className: "mod-card" },
+            h("div", { className: "mod-card-meta" },
+              h("span", null, profile.name),
+              h("span", null, new Date(post.scheduled_at).toLocaleString("ru")),
+              h("span", null, (post.channels || []).join(", ")),
+            ),
+            post.text && h("div", { className: "mod-card-text" }, post.text),
+            h("div", { className: "mod-card-actions" },
+              h("button", { className: "btn btn-primary btn-sm", disabled: busy,
+                onClick: () => approve(post, profile) }, "Одобрить"),
+              h("button", { className: "btn btn-ghost btn-sm", disabled: busy,
+                onClick: () => { setRejectTarget({ post, profile }); setRejectReason(""); } }, "Отклонить"),
+            ),
+          )
+        ),
+    rejectTarget && h(Modal, { title: "Отклонить пост", onClose: () => setRejectTarget(null) },
+      h("p", { style: { marginBottom: "12px", color: "var(--text-2)" } },
+        "Клиент увидит причину в «Мои публикации». Необязательно."),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label" }, "Причина (необязательно)"),
+        h("input", { className: "form-input", value: rejectReason,
+          placeholder: "Например: не соответствует теме канала",
+          onInput: e => setRejectReason(e.target.value) }),
+      ),
+      h("div", { style: { display: "flex", gap: "8px", marginTop: "16px" } },
+        h("button", { className: "btn btn-primary btn-sm", disabled: busy, onClick: confirmReject }, "Отклонить"),
+        h("button", { className: "btn btn-ghost btn-sm", onClick: () => setRejectTarget(null) }, "Отмена"),
+      ),
+    ),
+  );
+}
+
+function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAdmin, pendingCount }) {
   return h("div", { className: "topbar" },
     me.role === "client" && h("div", { className: "client-brand" }, "⊹ CROSSPOST"),
     isAdmin && profiles.length > 0 && h("select", {
@@ -4026,6 +4137,7 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
       h("span", { className: `role-badge ${me.role}` }, me.role === "admin" ? "Админ" : "Клиент"),
       h("span", { className: "user-name" }, me.login),
     ),
+    pendingCount > 0 && h("span", { className: "pending-count", title: "Постов на модерации" }, pendingCount),
     h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout }, "Выйти"),
   );
 }
@@ -4117,6 +4229,8 @@ function App() {
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
+  const [moderationOpen, setModerationOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
@@ -4140,6 +4254,22 @@ function App() {
 
   useEffect(() => { if (me) loadProfiles(); }, [me, loadProfiles]);
 
+  useEffect(() => {
+    if (!me || me.role !== "admin" || profiles.length === 0) return;
+    let cancelled = false;
+    async function fetchCount() {
+      try {
+        const counts = await Promise.all(
+          profiles.map(p => api.get(`/api/profiles/${p.id}/scheduled/pending`).then(r => r.length).catch(() => 0))
+        );
+        if (!cancelled) setPendingCount(counts.reduce((a, b) => a + b, 0));
+      } catch (_) {}
+    }
+    fetchCount();
+    const t = setInterval(fetchCount, 30000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [me, profiles.length]);
+
   async function logout() {
     try { await api.post("/api/auth/logout"); } catch (_) {}
     setMe(null); setProfiles([]); setActive(null);
@@ -4147,6 +4277,7 @@ function App() {
 
   if (me === undefined) return h("div", { className: "login-wrap" }, h(Spinner));
   if (me === null) return h(LoginView, { onSuccess: setMe });
+  if (me.role === "client") { window.location.replace("/client"); return null; }
 
   const isAdmin = me.role === "admin";
 
@@ -4157,6 +4288,7 @@ function App() {
 
   function selectProfile(p) {
     setConsoleOpen(false);
+    setModerationOpen(false);
     setFocusChannel(null);
     setActive(p);
     localStorage.setItem("crosspost_active_profile", String(p.id));
@@ -4167,6 +4299,7 @@ function App() {
     const p = profiles.find(x => x.id === pid);
     if (!p) return;
     setConsoleOpen(false);
+    setModerationOpen(false);
     setActive(p);
     setView("channels");
     setFocusChannel(channel || null);
@@ -4176,6 +4309,12 @@ function App() {
     ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
     : (isAdmin && consoleOpen)
       ? h(TabBoundary, { key: "console" }, h(ErrorConsole, { key: "console", profiles, onGoToProfile: goToProfile }))
+      : (isAdmin && moderationOpen)
+      ? h(TabBoundary, { key: "moderation" }, h(ModerationView, {
+          profiles,
+          onApproved: () => setPendingCount(c => Math.max(0, c - 1)),
+          onRejected: () => setPendingCount(c => Math.max(0, c - 1)),
+        }))
       : active
       ? h("div", null,
           h(ViewTabs, { view, onChange: setView }),
@@ -4191,17 +4330,21 @@ function App() {
     // Список клиентов слева — ТОЛЬКО у админа. Клиент идёт сразу в свой профиль.
     isAdmin && h(Sidebar, {
       profiles,
-      activeId: consoleOpen ? null : active?.id,
+      activeId: (consoleOpen || moderationOpen) ? null : active?.id,
       onSelect: selectProfile,
       onNew: () => setShowNewProfile(true),
       onNewClient: () => setShowNewClient(true),
-      onOpenConsole: () => setConsoleOpen(true),
+      onOpenConsole: () => { setConsoleOpen(true); setModerationOpen(false); },
       consoleActive: consoleOpen,
+      onModeration: () => { setModerationOpen(true); setConsoleOpen(false); },
+      moderationActive: moderationOpen,
+      pendingCount,
     }),
     h("main", { className: "main" },
       h(TopBar, {
         me, onLogout: logout,
         profiles, activeProfileId: active?.id, onSelectProfile: selectProfile, isAdmin,
+        pendingCount,
       }),
       mainBody,
     ),

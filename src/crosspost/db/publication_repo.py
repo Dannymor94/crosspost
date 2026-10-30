@@ -209,7 +209,7 @@ class PublicationRepository:
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0
 
-    async def reject_pending(self, scheduled_id: int) -> bool:
+    async def reject_pending(self, scheduled_id: int, reason: str = "") -> bool:
         """CAS: PENDING_APPROVAL → CANCELLED. Возвращает True если переход прошёл."""
         result = await self._s.execute(
             sql_update(ScheduledPost)
@@ -218,7 +218,7 @@ class PublicationRepository:
                 ScheduledPost.profile_id == self._pid,
                 ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
             )
-            .values(status=ScheduledPostStatus.CANCELLED)
+            .values(status=ScheduledPostStatus.CANCELLED, reject_reason=reason or None)
         )
         await self._s.commit()
         return getattr(result, "rowcount", 0) > 0

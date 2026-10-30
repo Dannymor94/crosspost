@@ -132,3 +132,12 @@ def test_admin_can_set_and_get_moderation(seeded_app):
     r2 = c.get("/api/profiles/1/settings/moderation")
     assert r2.status_code == 200
     assert r2.json()["enabled"] is True
+
+
+def test_reject_body_optional(seeded_app):
+    """Reject endpoint accepts empty body (reason defaults to '')."""
+    c = seeded_app
+    c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    # Post doesn't exist → 404/409, but no 422 (body parsing should succeed)
+    r = c.post("/api/profiles/1/scheduled/9999/reject", json={})
+    assert r.status_code in (404, 409)
