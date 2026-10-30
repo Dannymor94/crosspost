@@ -140,6 +140,13 @@ def create_app() -> FastAPI:
         async def serve_spa() -> FileResponse:
             return FileResponse(_FRONTEND_DIR / "index.html")
 
+        client_html = _FRONTEND_DIR / "client.html"
+        if client_html.exists():
+
+            @app.get("/client", include_in_schema=False)
+            async def serve_client_spa() -> FileResponse:
+                return FileResponse(client_html)
+
     return app
 
 

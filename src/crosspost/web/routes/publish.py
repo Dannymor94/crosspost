@@ -50,7 +50,7 @@ from crosspost.orchestrator.publish_service import (
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
-from crosspost.web.deps import SessionDep, require_profile_access
+from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -684,6 +684,7 @@ async def publish_retry(
 async def schedule_post(
     profile_id: int,
     session: SessionDep,
+    user: CurrentUser,
     scheduled_at: str = Form(...),
     content_type: str = Form("post"),
     text: str = Form(""),
@@ -741,6 +742,17 @@ async def schedule_post(
     content = _build_content(content_type, text, title, media_paths)
     _validate_or_422(content)
 
+    from crosspost.db.models import Role, ScheduledPostStatus
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    initial_status = ScheduledPostStatus.SCHEDULED
+    if user.role == Role.CLIENT:
+        moderation = await ProfileSettingsRepository(
+            session, profile_id=profile_id
+        ).get_client_moderation()
+        if moderation:
+            initial_status = ScheduledPostStatus.PENDING_APPROVAL
+
     post = await pub_repo.create_scheduled(
         content_type=content_type,
         text=text,
@@ -750,6 +762,7 @@ async def schedule_post(
         scheduled_at=when,
         article_text=article_text or None,
         link_phrase=link_phrase or None,
+        initial_status=initial_status,
     )
     return _scheduled_out(post)
 
@@ -1227,6 +1240,87 @@ def _overall_status(outcomes: list[OutcomeOut]) -> str:
     if ok == 0:
         return "failed"
     return "partial"
+
+
+# ── Модерация клиентских постов (только admin) ────────────────────────────────
+
+
+class ModerationSetting(BaseModel):
+    enabled: bool
+
+
+@router.get("/api/profiles/{profile_id}/settings/moderation", response_model=ModerationSetting)
+async def get_moderation(profile_id: int, session: SessionDep, _: AdminUser) -> ModerationSetting:
+    """Настройка режима модерации клиентских постов (только admin)."""
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    enabled = await ProfileSettingsRepository(
+        session, profile_id=profile_id
+    ).get_client_moderation()
+    return ModerationSetting(enabled=enabled)
+
+
+@router.put("/api/profiles/{profile_id}/settings/moderation", response_model=ModerationSetting)
+async def set_moderation(
+    profile_id: int, body: ModerationSetting, session: SessionDep, _: AdminUser
+) -> ModerationSetting:
+    """Задать режим модерации: enabled=true → клиентские посты сначала идут на проверку."""
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    await ProfileSettingsRepository(session, profile_id=profile_id).set_client_moderation(
+        body.enabled
+    )
+    return body
+
+
+@router.get("/api/profiles/{profile_id}/scheduled/pending", response_model=list[ScheduledOut])
+async def list_pending(profile_id: int, session: SessionDep, _: AdminUser) -> list[ScheduledOut]:
+    """Посты, ожидающие одобрения (PENDING_APPROVAL) — только admin."""
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    return [_scheduled_out(p) for p in await pub_repo.list_pending_approval()]
+
+
+@router.post(
+    "/api/profiles/{profile_id}/scheduled/{scheduled_id}/approve", response_model=ScheduledOut
+)
+async def approve_post(
+    profile_id: int, scheduled_id: int, session: SessionDep, _: AdminUser
+) -> ScheduledOut:
+    """Одобрить пост на модерации: PENDING_APPROVAL → SCHEDULED. Только admin."""
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    ok = await pub_repo.approve_pending(scheduled_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Пост не найден или уже не на проверке")
+    post = await pub_repo.get_scheduled(scheduled_id)
+    assert post is not None
+    return _scheduled_out(post)
+
+
+@router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/reject")
+async def reject_post(
+    profile_id: int, scheduled_id: int, session: SessionDep, _: AdminUser
+) -> dict:
+    """Отклонить пост на модерации: PENDING_APPROVAL → CANCELLED. Только admin."""
+    profile_repo, pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+
+    post = await pub_repo.get_scheduled(scheduled_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+    media_paths = list(post.media_paths or [])
+
+    ok = await pub_repo.reject_pending(scheduled_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Пост не найден или уже не на проверке")
+
+    # Чистим медиа отклонённого поста (каталог = родитель первого файла).
+    if media_paths:
+        parent = Path(media_paths[0]).parent
+        media_store.cleanup_media(parent.name)
+
+    return {"rejected": True}
 
 
 def _scheduled_out(post) -> ScheduledOut:

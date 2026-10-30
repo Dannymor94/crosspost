@@ -150,6 +150,7 @@ class PublicationRepository:
         scheduled_at: datetime,
         article_text: str | None = None,
         link_phrase: str | None = None,
+        initial_status: ScheduledPostStatus = ScheduledPostStatus.SCHEDULED,
     ) -> ScheduledPost:
         post = ScheduledPost(
             profile_id=self._pid,
@@ -161,6 +162,7 @@ class PublicationRepository:
             scheduled_at=scheduled_at,
             article_text=article_text,
             link_phrase=link_phrase,
+            status=initial_status,
         )
         self._s.add(post)
         await self._s.commit()
@@ -168,16 +170,58 @@ class PublicationRepository:
         return post
 
     async def list_scheduled(self) -> list[ScheduledPost]:
-        """Активные (не отменённые) запланированные посты профиля, по времени."""
+        """Активные запланированные посты профиля (SCHEDULED + PENDING_APPROVAL), по времени."""
         result = await self._s.execute(
             select(ScheduledPost)
             .where(
                 ScheduledPost.profile_id == self._pid,
-                ScheduledPost.status == ScheduledPostStatus.SCHEDULED,
+                ScheduledPost.status.in_(
+                    (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PENDING_APPROVAL)
+                ),
             )
             .order_by(ScheduledPost.scheduled_at)
         )
         return list(result.scalars().all())
+
+    async def list_pending_approval(self) -> list[ScheduledPost]:
+        """Посты, ожидающие одобрения администратора (PENDING_APPROVAL), по времени."""
+        result = await self._s.execute(
+            select(ScheduledPost)
+            .where(
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
+            )
+            .order_by(ScheduledPost.scheduled_at)
+        )
+        return list(result.scalars().all())
+
+    async def approve_pending(self, scheduled_id: int) -> bool:
+        """CAS: PENDING_APPROVAL → SCHEDULED. Возвращает True если переход прошёл."""
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
+            )
+            .values(status=ScheduledPostStatus.SCHEDULED)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
+
+    async def reject_pending(self, scheduled_id: int) -> bool:
+        """CAS: PENDING_APPROVAL → CANCELLED. Возвращает True если переход прошёл."""
+        result = await self._s.execute(
+            sql_update(ScheduledPost)
+            .where(
+                ScheduledPost.id == scheduled_id,
+                ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
+            )
+            .values(status=ScheduledPostStatus.CANCELLED)
+        )
+        await self._s.commit()
+        return getattr(result, "rowcount", 0) > 0
 
     async def list_executed(
         self,
@@ -276,7 +320,11 @@ class PublicationRepository:
         сбрасываем attempt_count по всем publication-строкам этого поста (перевзвод).
         Возвращает True если обновление прошло.
         """
-        _editable = (ScheduledPostStatus.SCHEDULED.value, ScheduledPostStatus.FAILED.value)
+        _editable = (
+            ScheduledPostStatus.SCHEDULED.value,
+            ScheduledPostStatus.FAILED.value,
+            ScheduledPostStatus.PENDING_APPROVAL.value,
+        )
         values: dict = {}
         if text is not None:
             values["text"] = text

@@ -18,6 +18,7 @@ from crosspost.db.models import ProfileSetting
 
 _KEY_COLUMN_MAPPING = "import_column_mapping"
 _KEY_MEDIA_FOLDER = "import_media_folder"
+_KEY_CLIENT_MODERATION = "client_moderation"
 
 
 class ProfileSettingsRepository:
@@ -72,3 +73,13 @@ class ProfileSettingsRepository:
 
     async def set_media_folder(self, path: str) -> None:
         await self.set(_KEY_MEDIA_FOLDER, {"path": path})
+
+    # ── Модерация клиентских постов ────────────────────────────────────────────
+
+    async def get_client_moderation(self) -> bool:
+        """True → клиентские посты сохраняются как PENDING_APPROVAL (на проверку)."""
+        value = await self.get(_KEY_CLIENT_MODERATION)
+        return bool(value.get("enabled", False)) if value else False
+
+    async def set_client_moderation(self, enabled: bool) -> None:
+        await self.set(_KEY_CLIENT_MODERATION, {"enabled": enabled})

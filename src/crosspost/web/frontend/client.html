@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Публикации</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #0f1117;
+  --bg-card: #1a1e27;
+  --bg-input: #131720;
+  --border: #252d3d;
+  --text-1: #e8edf5;
+  --text-2: #8a9bb5;
+  --accent: #3b82f6;
+  --accent-h: #2563eb;
+  --success: #22c55e;
+  --error: #f87171;
+  --warn: #f59e0b;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text-1);
+  font-size: 18px;
+  line-height: 1.55;
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+#root {
+  max-width: 640px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 0px));
+}
+
+/* ── Login ── */
+.login-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: 24px max(16px, env(safe-area-inset-left,0px));
+}
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 36px 28px;
+  width: 100%;
+  max-width: 400px;
+}
+.login-title { font-size: 24px; font-weight: 600; margin-bottom: 24px; }
+
+/* ── Tabs ── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 16px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+.tab-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 16px;
+  font-weight: 500;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  min-height: 48px;
+}
+.tab-btn.active {
+  color: var(--text-1);
+  background: var(--bg-card);
+}
+
+/* ── Form elements ── */
+.field { margin-bottom: 20px; }
+.label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+input[type="text"],
+input[type="password"],
+input[type="datetime-local"],
+textarea {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 18px;
+  padding: 14px 16px;
+  outline: none;
+  transition: border-color 0.15s;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 110px; }
+
+/* ── Buttons ── */
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 16px;
+  border-radius: 12px;
+  border: none;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 56px;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ghost {
+  background: none;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  font-size: 16px;
+  padding: 12px;
+  min-height: 48px;
+}
+.btn-danger-ghost {
+  background: none;
+  color: var(--error);
+  border: none;
+  font-size: 15px;
+  padding: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* ── Media drop area ── */
+.media-area {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.15s;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.media-area:hover, .media-area.drag { border-color: var(--accent); color: var(--accent); }
+.media-area input { display: none; }
+.media-preview {
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.media-preview img {
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  display: block;
+}
+.media-preview-name {
+  padding: 12px 16px;
+  font-size: 15px;
+  color: var(--text-2);
+}
+.media-remove {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--error);
+  font-size: 15px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-family: inherit;
+  padding: 4px 8px;
+  min-height: 44px;
+}
+
+/* ── Channels ── */
+.channel-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  min-height: 56px;
+  cursor: pointer;
+}
+.channel-item:last-child { border-bottom: none; }
+.channel-item input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.channel-name { font-size: 17px; }
+
+/* ── When pills ── */
+.when-pills { display: flex; gap: 10px; }
+.pill {
+  flex: 1;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: none;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 48px;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+.pill.active { border-color: var(--accent); background: rgba(59,130,246,.12); color: var(--accent); }
+
+/* ── Success card ── */
+.success-card {
+  background: var(--bg-card);
+  border: 1px solid var(--success);
+  border-radius: 16px;
+  padding: 36px 24px;
+  text-align: center;
+  margin-top: 20px;
+}
+.success-icon { font-size: 48px; margin-bottom: 12px; }
+.success-title { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+.success-sub { color: var(--text-2); margin-bottom: 24px; }
+
+/* ── Error msg ── */
+.error-msg {
+  color: var(--error);
+  font-size: 15px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: rgba(248,113,113,.1);
+  border-radius: 8px;
+}
+
+/* ── Post cards ── */
+.post-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.post-meta { font-size: 14px; color: var(--text-2); margin-bottom: 6px; }
+.post-text { font-size: 16px; margin-bottom: 10px; word-break: break-word; }
+.post-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.badge-blue { background: rgba(59,130,246,.15); color: var(--accent); }
+.badge-amber { background: rgba(245,158,11,.15); color: var(--warn); }
+.empty-state { color: var(--text-2); text-align: center; padding: 40px 0; }
+
+/* ── Spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 20px; height: 20px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* ── Header ── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 0;
+  margin-bottom: 4px;
+}
+.app-header-name { font-size: 15px; color: var(--text-2); }
+.logout-btn {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 8px;
+  min-height: 44px;
+}
+.logout-btn:hover { color: var(--text-1); }
+
+.section-title { font-size: 14px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; margin-top: 8px; }
+.video-warn { font-size: 14px; color: var(--text-2); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/preact@10.24.3/dist/preact.umd.js"></script>
+<script src="https://unpkg.com/preact@10.24.3/hooks/dist/hooks.umd.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+<script>
+const { useState, useEffect, useRef, useCallback } = preactHooks;
+const html = htm.bind(preact.h);
+
+// ── API helpers ────────────────────────────────────────────────────────────────
+const api = {
+  get: (url) => fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+  post: (url, body) => fetch(url, {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }),
+  postForm: (url, fd) => fetch(url, { method: 'POST', credentials: 'include', body: fd }),
+  del: (url) => fetch(url, { method: 'DELETE', credentials: 'include' }),
+  patch: (url, body) => fetch(url, {
+    method: 'PATCH', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }),
+};
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+}
+
+// ── Login ──────────────────────────────────────────────────────────────────────
+function LoginView({ onLogin }) {
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true); setErr('');
+    try {
+      const r = await api.post('/api/auth/login', { login, password });
+      if (r.status === 401) { setErr('Неверный логин или пароль'); return; }
+      if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
+      const user = await r.json();
+      if (user.role === 'admin') { window.location = '/'; return; }
+      onLogin(user);
+    } catch { setErr('Нет связи. Проверьте интернет.'); }
+    finally { setBusy(false); }
+  }
+
+  return html`
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-title">Войти</div>
+        <form onSubmit=${submit}>
+          <div class="field">
+            <label class="label">Логин</label>
+            <input type="text" value=${login} onInput=${e => setLogin(e.target.value)} autocomplete="username" autocapitalize="none" required />
+          </div>
+          <div class="field">
+            <label class="label">Пароль</label>
+            <input type="password" value=${password} onInput=${e => setPassword(e.target.value)} autocomplete="current-password" required />
+          </div>
+          ${err && html`<div class="error-msg">${err}</div>`}
+          <button type="submit" class="btn btn-primary" disabled=${busy}>
+            ${busy ? html`<span class="spinner"></span>` : null}
+            Войти
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+// ── Compose ────────────────────────────────────────────────────────────────────
+function ComposeView({ user }) {
+  const pid = user.profile_id;
+  const [mediaFile, setMediaFile] = useState(null);
+  const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
+  const [text, setText] = useState('');
+  const [targets, setTargets] = useState([]);
+  const [checked, setChecked] = useState({});
+  const [when, setWhen] = useState('now'); // 'now' | 'later'
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [success, setSuccess] = useState(null); // {msg, sub}
+  const submitting = useRef(false);
+  const fileInputRef = useRef();
+
+  const isVideo = mediaFile && mediaFile.type.startsWith('video/');
+
+  async function loadTargets(hasVid) {
+    if (!pid) return;
+    try {
+      const ts = await api.get(
+        `/api/profiles/${pid}/publish/targets?content_type=post&has_video=${hasVid ? 'true' : 'false'}`
+      );
+      setTargets(ts);
+      const init = {};
+      ts.forEach(t => {
+        const key = t.target_id ? `${t.channel}::${t.target_id}` : t.channel;
+        if (t.eligible) init[key] = true;
+      });
+      setChecked(init);
+    } catch { /* silent — show no channels */ }
+  }
+
+  useEffect(() => { loadTargets(isVideo); }, [pid, isVideo]);
+
+  function pickFile(f) {
+    if (!f) return;
+    setMediaFile(f);
+    if (f.type.startsWith('image/')) {
+      const r = new FileReader();
+      r.onload = e => setMediaPreview(e.target.result);
+      r.readAsDataURL(f);
+    } else {
+      setMediaPreview(null);
+    }
+  }
+
+  function clearMedia() { setMediaFile(null); setMediaPreview(null); }
+
+  function toggleChannel(key) {
+    setChecked(prev => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  const eligibleTargets = targets.filter(t => t.eligible);
+  const hiddenVideoCount = targets.filter(t => !t.eligible && t.ineligible_kind === 'content' && isVideo).length;
+
+  function buildChannelsList() {
+    return Object.entries(checked)
+      .filter(([, v]) => v)
+      .map(([key]) => {
+        const [channel, target_id] = key.split('::');
+        return target_id ? { channel, target_id } : channel;
+      });
+  }
+
+  async function submit() {
+    if (submitting.current || busy) return;
+    setErr('');
+    const channelsList = buildChannelsList();
+    if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
+    if (when === 'later' && !scheduledAt) { setErr('Укажите дату и время публикации'); return; }
+
+    submitting.current = true;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('content_type', 'post');
+      fd.append('text', text);
+      fd.append('channels', JSON.stringify(channelsList));
+      if (mediaFile) fd.append('media', mediaFile, mediaFile.name);
+
+      if (when === 'now') {
+        const r = await api.postForm(`/api/profiles/${pid}/publish`, fd);
+        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
+        setSuccess({ msg: 'Пост опубликован.', sub: '' });
+      } else {
+        fd.append('scheduled_at', new Date(scheduledAt).toISOString());
+        const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd);
+        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
+        const post = await r.json();
+        if (post.status === 'pending_approval') {
+          setSuccess({ msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' });
+        } else {
+          setSuccess({ msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' });
+        }
+      }
+    } catch { setErr('Нет связи. Попробуйте ещё раз.'); }
+    finally { setBusy(false); submitting.current = false; }
+  }
+
+  function reset() {
+    setMediaFile(null); setMediaPreview(null);
+    setText(''); setWhen('now'); setScheduledAt('');
+    setErr(''); setSuccess(null);
+  }
+
+  if (success) return html`
+    <div class="success-card">
+      <div class="success-icon">✓</div>
+      <div class="success-title">Готово! ${success.msg}</div>
+      ${success.sub && html`<div class="success-sub">${success.sub}</div>`}
+      <button class="btn btn-primary" onClick=${reset}>Новый пост</button>
+    </div>
+  `;
+
+  return html`
+    <div>
+      <div class="field">
+        <label class="label">Фото или видео</label>
+        ${!mediaFile ? html`
+          <div class="media-area" onClick=${() => fileInputRef.current.click()}>
+            <span style="font-size:32px">📎</span>
+            <span>Добавьте фото или видео</span>
+            <span style="font-size:14px; color:var(--text-2)">Нажмите, чтобы выбрать</span>
+            <input ref=${fileInputRef} type="file" accept="image/*,video/*" capture="environment"
+              onChange=${e => pickFile(e.target.files[0])} />
+          </div>
+        ` : html`
+          <div>
+            ${mediaPreview
+              ? html`<div class="media-preview"><img src=${mediaPreview} alt="" /></div>`
+              : html`<div class="media-preview"><div class="media-preview-name">🎬 ${mediaFile.name}</div></div>`
+            }
+            <button class="media-remove" onClick=${clearMedia}>Удалить</button>
+          </div>
+        `}
+      </div>
+
+      <div class="field">
+        <label class="label">Текст поста</label>
+        <textarea rows="4" placeholder="Напишите текст поста…"
+          value=${text} onInput=${e => setText(e.target.value)} />
+      </div>
+
+      ${eligibleTargets.length > 0 && html`
+        <div class="field">
+          <label class="label">Куда опубликовать</label>
+          <div>
+            ${eligibleTargets.map(t => {
+              const key = t.target_id ? `${t.channel}::${t.target_id}` : t.channel;
+              const label = t.target_name ? `${t.title} · ${t.target_name}` : t.title;
+              return html`
+                <label key=${key} class="channel-item" style="cursor:pointer">
+                  <input type="checkbox" checked=${!!checked[key]} onChange=${() => toggleChannel(key)} />
+                  <span class="channel-name">${label}</span>
+                </label>
+              `;
+            })}
+          </div>
+          ${hiddenVideoCount > 0 && html`
+            <p class="video-warn">Некоторые каналы недоступны для видео — мы их скрыли.</p>
+          `}
+        </div>
+      `}
+
+      <div class="field">
+        <label class="label">Когда</label>
+        <div class="when-pills">
+          <button class=${'pill' + (when === 'now' ? ' active' : '')} onClick=${() => setWhen('now')}>Сейчас</button>
+          <button class=${'pill' + (when === 'later' ? ' active' : '')} onClick=${() => setWhen('later')}>Выбрать дату и время</button>
+        </div>
+        ${when === 'later' && html`
+          <div style="margin-top:12px">
+            <input type="datetime-local" value=${scheduledAt} onInput=${e => setScheduledAt(e.target.value)} />
+          </div>
+        `}
+      </div>
+
+      ${err && html`<div class="error-msg">${err}</div>`}
+
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || eligibleTargets.length === 0}>
+        ${busy ? html`<span class="spinner"></span>` : null}
+        ${busy ? 'Отправляем…' : 'Отправить'}
+      </button>
+    </div>
+  `;
+}
+
+// ── My Posts ───────────────────────────────────────────────────────────────────
+function PostCard({ post, onCancel }) {
+  const [editing, setEditing] = useState(false);
+  const [newTime, setNewTime] = useState('');
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [err, setErr] = useState('');
+  const pid = post.profile_id; // not present in ScheduledOut — passed via closure
+
+  const badge = post.status === 'scheduled'
+    ? html`<span class="badge badge-blue">Запланировано</span>`
+    : post.status === 'pending_approval'
+    ? html`<span class="badge badge-amber">На проверке у администратора</span>`
+    : null;
+
+  return html`
+    <div class="post-card">
+      <div class="post-meta">${fmtDate(post.scheduled_at)}</div>
+      ${badge}
+      <div class="post-text">${post.text.slice(0, 80)}${post.text.length > 80 ? '…' : ''}</div>
+      ${editing ? html`
+        <div style="margin-bottom:10px">
+          <input type="datetime-local" value=${newTime} onInput=${e => setNewTime(e.target.value)}
+            style="width:100%; margin-bottom:8px" />
+          <div style="display:flex; gap:8px">
+            <button class="btn btn-primary" style="flex:1; font-size:15px; padding:10px"
+              onClick=${async () => {
+                if (!newTime) return;
+                try {
+                  const r = await api.patch(`/api/profiles/${post._pid}/scheduled/${post.id}`,
+                    { scheduled_at: new Date(newTime).toISOString() });
+                  if (r.ok) { onCancel(post.id, 'patched'); setEditing(false); }
+                  else setErr('Не удалось изменить время.');
+                } catch { setErr('Нет связи.'); }
+              }}>Сохранить</button>
+            <button class="btn btn-ghost" style="flex:1; font-size:15px; padding:10px"
+              onClick=${() => setEditing(false)}>Отмена</button>
+          </div>
+        </div>
+      ` : null}
+      ${err && html`<div class="error-msg" style="margin-bottom:8px">${err}</div>`}
+      <div class="post-actions">
+        ${!editing && html`
+          <button class="btn btn-ghost" style="flex:1; font-size:15px; padding:10px; min-height:44px"
+            onClick=${() => { setEditing(true); setNewTime(''); }}>
+            Изменить время
+          </button>
+        `}
+        ${!confirmCancel ? html`
+          <button class="btn-danger-ghost" onClick=${() => setConfirmCancel(true)}>Отменить</button>
+        ` : html`
+          <div style="display:flex; gap:8px; align-items:center; flex:1">
+            <span style="font-size:14px; color:var(--text-2)">Отменить публикацию?</span>
+            <button class="btn-danger-ghost" onClick=${async () => {
+              try {
+                const r = await api.del(`/api/profiles/${post._pid}/scheduled/${post.id}`);
+                if (r.ok) onCancel(post.id, 'deleted');
+                else setErr('Не удалось отменить — попробуйте позже.');
+              } catch { setErr('Нет связи.'); }
+              setConfirmCancel(false);
+            }}>Да</button>
+            <button class="btn-danger-ghost" style="color:var(--text-2)"
+              onClick=${() => setConfirmCancel(false)}>Нет</button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function PostsView({ user }) {
+  const pid = user.profile_id;
+  const [posts, setPosts] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await api.get(`/api/profiles/${pid}/scheduled`);
+      setPosts(data.map(p => ({ ...p, _pid: pid })));
+    } catch { setPosts([]); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { load(); }, [pid]);
+
+  function handleAction(id, action) {
+    if (action === 'deleted') {
+      setPosts(prev => prev.filter(p => p.id !== id));
+    } else {
+      load(); // re-fetch on patch
+    }
+  }
+
+  if (loading) return html`<div class="empty-state"><span class="spinner" style="margin:0 auto; display:block"></span></div>`;
+  if (!posts || posts.length === 0) return html`<div class="empty-state">Запланированных публикаций пока нет</div>`;
+
+  return html`
+    <div>
+      <div class="section-title">Ближайшие</div>
+      ${posts.map(p => html`<${PostCard} key=${p.id} post=${p} onCancel=${handleAction} />`)}
+    </div>
+  `;
+}
+
+// ── App ────────────────────────────────────────────────────────────────────────
+function App() {
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+  const [tab, setTab] = useState('compose');
+
+  useEffect(() => {
+    api.get('/api/auth/me')
+      .then(u => {
+        if (u.role === 'admin') { window.location = '/'; return; }
+        setUser(u);
+      })
+      .catch(() => {})
+      .finally(() => setChecking(false));
+  }, []);
+
+  async function logout() {
+    await api.post('/api/auth/logout', {});
+    setUser(null);
+  }
+
+  if (checking) return html`
+    <div style="display:flex; align-items:center; justify-content:center; min-height:100dvh">
+      <span class="spinner"></span>
+    </div>
+  `;
+
+  if (!user) return html`<${LoginView} onLogin=${setUser} />`;
+
+  return html`
+    <div class="app-wrap">
+      <div class="app-header">
+        <span class="app-header-name">${user.login}</span>
+        <button class="logout-btn" onClick=${logout}>Выйти</button>
+      </div>
+      <div class="tabs">
+        <button class=${'tab-btn' + (tab === 'compose' ? ' active' : '')} onClick=${() => setTab('compose')}>
+          Новый пост
+        </button>
+        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} onClick=${() => setTab('posts')}>
+          Мои публикации
+        </button>
+      </div>
+      ${tab === 'compose'
+        ? html`<${ComposeView} user=${user} />`
+        : html`<${PostsView} user=${user} />`
+      }
+    </div>
+  `;
+}
+
+preact.render(html`<${App} />`, document.getElementById('root'));
+</script>
+</body>
+</html>
