@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-03 (T-104)
+
+### `.env.example` соответствует коду (T-104)
+
+- `.env.example`: полностью переписан по реальным переменным (41 ключ); удалены устаревшие
+  `APP_ENV`, `REDIS_URL`, `STATE_DB_URL`, `VAULT_DIR`, `TELEGRAPH_ACCESS_TOKEN` и др.;
+  добавлены `SESSION_SECRET`, `DB_URL`, `SCHEDULER_*`, `IMPORT_*`, `INSTAGRAM_*`,
+  `TELEGRAM_API_*`, `VK_*`, `YANDEX_*`, `BROWSER_SESSION_COOLDOWN_SECONDS` и другие.
+- `tests/test_env_example.py`: новый тест — сканирует `src/` на обращения к `os.environ` /
+  `os.getenv` / `cfg[…]` и проверяет, что множество ключей совпадает с `.env.example`;
+  добавление новой переменной без записи в `.env.example` роняет тест.
+- Итог: 980 passed, 0 failed.
+
 ## 2026-11-03 (T-101)
 
 ### CI зелёный и равен DoD (T-101)

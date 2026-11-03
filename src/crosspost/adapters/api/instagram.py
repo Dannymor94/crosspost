@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 import httpx
 
 from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
+from crosspost.config import parse_bool
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
 from crosspost.web.signed_media import redact_media_tokens
@@ -247,7 +248,7 @@ class InstagramAdapter:
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Auto-tunnel: ensure localhost.run is reachable before creating the container.
-        if os.environ.get("INSTAGRAM_TUNNEL_AUTO"):
+        if parse_bool(os.environ.get("INSTAGRAM_TUNNEL_AUTO"), default=False):
             try:
                 from crosspost.tunnel.manager import ensure_tunnel  # noqa: PLC0415
 

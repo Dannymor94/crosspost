@@ -15,7 +15,7 @@ DEFAULT_ENV_PATH = Path("runtime/.env")
 _FALSY = {"false", "0", "no", "off", ""}
 
 
-def parse_bool(value: str, default: bool = True) -> bool:
+def parse_bool(value: str | None, default: bool = True) -> bool:
     """Разобрать строковое значение флага из .env в bool.
 
     "false"/"0"/"no"/"off"/"" → False.  Всё остальное → True.
