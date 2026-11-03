@@ -40,7 +40,7 @@ todo → in_progress → review → (changes → review)* → done
 5. Статус → `review`, PR по шаблону `.github/pull_request_template.md`.
 
 ### Шаг 3. Ревью (Codex)
-Codex проверяет PR по чек-листу (§3) и оставляет **один итоговый комментарий** в формате §4.
+Codex проверяет PR по чек-листу (§3) и публикует вердикт **в PR на GitHub** одним итоговым ревью в формате §4: `gh pr review <N> --approve|--request-changes --body-file review.md`. Если у Codex нет доступа на запись — владелец вставляет вердикт в PR комментарием без правок. Вердикта, которого нет в PR, для процесса не существует.
 
 ### Шаг 4. Доработка (Claude)
 Исправляет все `blocker` и `major` коммитами в ту же ветку. По каждому замечанию отвечает
@@ -130,4 +130,4 @@ VERDICT: APPROVE | REQUEST_CHANGES
 > Прочитай AGENTS.md и docs/STATUS.md. Выполни задачу T-NNN из docs/BACKLOG.md по процессу docs/WORKFLOW.md.
 
 **Codex (ревьюер):**
-> Прочитай AGENTS.md и docs/WORKFLOW.md §3–4. Сделай ревью PR #N по чек-листу и выдай вердикт в формате §4. Код не меняй.
+> Прочитай AGENTS.md и docs/WORKFLOW.md §3–4. Сделай ревью PR #N по чек-листу и выдай вердикт в формате §4. Код не меняй. Опубликуй вердикт в PR через gh pr review.
