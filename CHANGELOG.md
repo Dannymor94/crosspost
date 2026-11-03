@@ -2,12 +2,13 @@
 
 ## 2026-11-03 (T-102)
 
-### `load_config()` reads all env vars (T-102)
+### `load_config()` читает все переменные окружения (T-102)
 
-- Removed `_KNOWN_KEYS` whitelist; `load_config()` now merges all of `os.environ`
-  so any env-only key (e.g. `BROWSER_HEADLESS`, `SCHEDULER_*`, CLI keys) is visible
-  in the returned dict without requiring `runtime/.env`.
-- Added `test_env_only_key_visible_in_load_config` to `tests/test_config.py`.
+- Удалён белый список `_KNOWN_KEYS`; `load_config()` теперь делает `cfg.update(os.environ)` —
+  любой ключ, заданный только через env (`BROWSER_HEADLESS`, `SCHEDULER_*`, CLI-ключи ВК/Яндекса),
+  виден в возвращаемом словаре без `runtime/.env`.
+- Добавлен тест `test_env_only_key_visible_in_load_config` в `tests/test_config.py`.
+- Итог в чистом клоне: 976 passed, 3 failed (K-3, ждёт T-103).
 
 ## 2026-11-03
 
