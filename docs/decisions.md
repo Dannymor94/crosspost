@@ -4,6 +4,18 @@ Short dated entries. One paragraph each.
 
 ---
 
+## 2026-11-03 — Переход на рельсы продакшена
+
+MVP пройден: шесть каналов, планировщик, импорт плана, клиентский режим. Следующая цель — сервис для многих клиентов, работающий на сервере без ноутбука владельца. Приоритеты меняются: надёжность, изоляция клиентов и предсказуемость важнее новых каналов. Порядок работ — фазы в `docs/ROADMAP.md` с проверяемыми критериями; новые каналы отложены до фазы 5.
+
+## 2026-11-03 — Два агента с разделёнными ролями
+
+Claude (Claude Code, Sonnet 4.6) — исполнитель: пишет код, тесты, доки, открывает PR. Codex — ревьюер: проверяет PR по чек-листу и выносит вердикт, код в ветку не пушит. Мержит владелец при зелёном CI, `APPROVE` и отсутствии замечаний `blocker`/`major`. Разделение даёт независимую проверку: автор кода не принимает собственную работу. Процесс — `docs/WORKFLOW.md`.
+
+## 2026-11-03 — Документация: один источник правды на каждый вопрос
+
+Правила живут только в `AGENTS.md` (его читает Codex; `CLAUDE.md` подключает его через `@AGENTS.md`). Состояние — только в `docs/STATUS.md`, задачи — только в `docs/BACKLOG.md`. Старые документы этапа MVP перенесены в `docs/archive/` без правок. Причина: девять документов описывали состояние по-разному и отстали от кода, агенты получали ложную картину. Статус и доки меняются в том же PR, что и поведение; согласованность проверяется тестом (T-107).
+
 ## 2026-10-28 — Instagram via API tier with video_url and signed links
 
 Instagram is implemented as an API-tier adapter (no Playwright). Meta's video ingestor fetches the clip from a signed `/public-media/{token}` URL rather than via resumable upload. Resumable upload (`upload_type=resumable`, rupload.facebook.com) is unavailable for Instagram Login tokens — confirmed by live API probe. The signed-URL approach keeps the adapter stateless and avoids multipart streaming complexity. The token is HMAC-SHA256-signed and expiring; path confinement is enforced server-side.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-03
+
+### Документация (T-100)
+
+- Документация перестроена под продакшен и работу двух агентов.
+- `AGENTS.md` — единый источник правил; `CLAUDE.md` подключает его и описывает роль исполнителя.
+- Новые `docs/STATUS.md`, `ROADMAP.md`, `BACKLOG.md`, `WORKFLOW.md`, `ARCHITECTURE.md`, `OPERATIONS.md`.
+- Старые документы этапа MVP перенесены в `docs/archive/` без правок.
+- Шаблон PR `.github/pull_request_template.md`.
+- Зафиксированы известные проблемы K-1…K-12 и задачи по фазам 1–5.
+
 ## 2026-10-31
 
 ### Telegram forum topics
