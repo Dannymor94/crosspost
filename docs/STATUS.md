@@ -2,7 +2,7 @@
 
 **Единственный источник правды о состоянии проекта.** Меняется в том же PR, что и поведение.
 
-- **Последняя сверка с кодом:** 2026-11-03, T-102 + T-103
+- **Последняя сверка с кодом:** 2026-11-03, T-104
 - **Текущая фаза:** 1 — Фундамент (см. [`ROADMAP.md`](ROADMAP.md))
 - **Фокус:** зелёный CI, герметичные тесты, корректная конфигурация из окружения.
 
@@ -55,7 +55,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 979 passed, 0 failed (`env -i HOME=… PATH=… uv run pytest -q`) |
+| `pytest -q` | 980 passed, 0 failed (`env -i HOME=… PATH=… uv run pytest -q`) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
@@ -69,7 +69,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | K-1 | ~~CI ставил неполные зависимости и использовал Python 3.11~~ — исправлено в T-101 | T-101 ✅ |
 | K-2 | ~~`load_config()` не читала переменные вне `_KNOWN_KEYS` из окружения~~ — исправлено в T-102 | T-102 ✅ |
 | K-3 | ~~3 теста падают без папки `runtime/`~~ — исправлено в T-103 | T-103 ✅ |
-| K-4 | `.env.example` не соответствует коду: нет `SESSION_SECRET`, `DB_URL`, `INSTAGRAM_*`, `SCHEDULER_*`; есть неиспользуемые `REDIS_URL`, `STATE_DB_URL` | T-104 |
+| K-4 | ~~`.env.example` не соответствует коду~~ — исправлено в T-104 | T-104 ✅ |
 | K-5 | README предлагал `python -m crosspost.web`, а `web/__main__.py` нет. Рабочая команда — `uvicorn crosspost.web.app:app` | T-105 |
 | K-6 | Две системы миграций: одна ревизия Alembic + ручные `ALTER` в `db/engine.py` | T-201 |
 | K-7 | Не реализованы health-check сессий, релогин-флоу, circuit breaker (`sessions/*.py`, `orchestrator/breaker.py` — заглушки) | T-202, T-203 |
