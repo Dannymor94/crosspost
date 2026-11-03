@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-03 (T-102)
+
+### `load_config()` reads all env vars (T-102)
+
+- Removed `_KNOWN_KEYS` whitelist; `load_config()` now merges all of `os.environ`
+  so any env-only key (e.g. `BROWSER_HEADLESS`, `SCHEDULER_*`, CLI keys) is visible
+  in the returned dict without requiring `runtime/.env`.
+- Added `test_env_only_key_visible_in_load_config` to `tests/test_config.py`.
+
 ## 2026-11-03
 
 ### Документация (T-100)

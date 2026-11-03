@@ -12,18 +12,6 @@ from pathlib import Path
 
 DEFAULT_ENV_PATH = Path("runtime/.env")
 
-# Ключи API-тира MVP-0 — их разрешено брать прямо из окружения, даже без файла.
-_KNOWN_KEYS = [
-    "TG_API_ID",
-    "TG_API_HASH",
-    "TG_TARGET_CHANNEL",
-    "TG_SESSION_PATH",
-    "VK_ACCESS_TOKEN",
-    "VK_GROUP_ID",
-    "VK_PHOTO_UPLOAD_ENABLED",
-]
-
-
 _FALSY = {"false", "0", "no", "off", ""}
 
 
@@ -82,11 +70,9 @@ def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
             key, _, val = line.partition("=")
             val = val.split(" #", 1)[0].strip().strip('"').strip("'")
             cfg[key.strip()] = val
-    # os.environ побеждает файл.
-    for key in list(cfg) + _KNOWN_KEYS:
-        if key in os.environ:
-            cfg[key] = os.environ[key]
-    # Инжектируем в os.environ (setdefault — не затираем то, что задано снаружи).
+    # os.environ wins over .env for every key; keys only in env are also included.
+    cfg.update(os.environ)
+    # Inject .env-only keys into os.environ (setdefault — don't overwrite external env).
     for key, val in cfg.items():
         os.environ.setdefault(key, val)
     return cfg
