@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-03 (T-103)
+
+### Герметичные тесты (T-103)
+
+- `tests/conftest.py`: autouse-фикстура `_hermetic_env` удаляет все проектные переменные
+  окружения, перенаправляет пути (`MEDIA_DIR`, `SCREENSHOT_DIR`, `RUNTIME_SETTINGS_PATH`,
+  `BROWSER_PROFILES_DIR`, `TG_SESSION_PATH`) в `tmp_path`, `DB_URL` → `:memory:`, патчит
+  `DEFAULT_ENV_PATH` на несуществующий tmp-путь — `load_config()` никогда не читает `runtime/.env`.
+- `tests/conftest.py`: сессионный guard `_runtime_guard` — если `runtime/` не было до прогона,
+  после прогона его быть не должно.
+- `src/crosspost/config.py`: `load_config(env_path=None)` — `DEFAULT_ENV_PATH` резолвится
+  в момент вызова, что позволяет тестам подменять его через `monkeypatch.setattr`.
+- Итог: `env -i HOME=… PATH=… uv run pytest -q` → 979 passed, 0 failed.
+
 ## 2026-11-03 (T-102)
 
 ### `load_config()` читает все переменные окружения (T-102)
