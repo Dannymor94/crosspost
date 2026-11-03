@@ -6,29 +6,24 @@ on:
 
 jobs:
   quality:
-    name: ruff + mypy + pytest
+    name: ruff + mypy + pytest (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[dev,browser]"
+        run: uv sync --extra dev --extra browser --extra infra --extra crypto
 
-      - name: ruff lint
-        run: python -m ruff check src tests
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium --with-deps
 
-      - name: ruff format check
-        run: python -m ruff format --check src tests
-
-      - name: mypy
-        run: python -m mypy src
-
-      - name: pytest
-        run: python -m pytest --tb=short -q
+      - name: Check (ruff + mypy + pytest)
+        run: make check

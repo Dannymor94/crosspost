@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-03 (T-101)
+
+### CI зелёный и равен DoD (T-101)
+
+- `.github/workflows/ci.yml`: переход на `astral-sh/setup-uv@v5`, матрица Python 3.11 + 3.13,
+  установка `.[dev,browser,infra,crypto]`, `playwright install chromium --with-deps`.
+- `Makefile`: новая цель `check` — ровно четыре команды DoD (`ruff check`, `ruff format --check`,
+  `mypy src`, `pytest -q`) через `uv run`; CI вызывает `make check`.
+- `.python-version`: добавлен со значением `3.13`.
+- Итог: CI зелёный на обеих версиях Python; `make check` локально = CI.
+
 ## 2026-11-03 (T-103)
 
 ### Герметичные тесты (T-103)

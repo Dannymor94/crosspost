@@ -1,4 +1,11 @@
-.PHONY: install install-mvp test lint mvp smoke up run tunnel tunnel-stop
+.PHONY: check install install-mvp test lint mvp smoke up run tunnel tunnel-stop
+
+# Четыре команды DoD — локально и в CI одинаково.
+check:
+	uv run ruff check src tests
+	uv run ruff format --check src tests
+	uv run mypy src
+	uv run pytest -q
 
 # Быстрая установка для MVP: только ядро + dev. Без playwright/celery/postgres.
 install-mvp:
