@@ -29,10 +29,8 @@ ruff check src tests && ruff format --check src tests && mypy src && pytest -q
 
 ## 2. Конфигурация (переменные, которые читает код)
 
-Источник: `os.environ`, затем `runtime/.env` (при старте `load_config()` подмешивает файл в
-`os.environ`, не перезаписывая заданное снаружи). **Внимание (K-2):** до исправления T-102
-ключи, которые читаются через словарь `load_config()` (помечены ¹), должны быть в `runtime/.env`
-или в `_KNOWN_KEYS` — заданные только через env, они не видны.
+Источник: `os.environ` побеждает `runtime/.env` для любого ключа (при старте `load_config()`
+подмешивает файл в `os.environ`, не перезаписывая заданное снаружи).
 
 ### 2.1 Веб-приложение
 
@@ -42,7 +40,7 @@ ruff check src tests && ruff format --check src tests && mypy src && pytest -q
 |---|---|
 | Секреты (обязательны, только из окружения в проде) | `SESSION_SECRET`, `VAULT_KEY`, `MEDIA_URL_SECRET` |
 | База и файлы | `DB_URL` (по умолчанию `sqlite+aiosqlite:///runtime/db.sqlite3`), `MEDIA_DIR`, `SCREENSHOT_DIR`, `RUNTIME_SETTINGS_PATH`, `BROWSER_PROFILES_DIR` |
-| Браузер | `BROWSER_HEADLESS`¹ (по умолчанию `false`), `BROWSER_SESSION_COOLDOWN_SECONDS` |
+| Браузер | `BROWSER_HEADLESS` (по умолчанию `false`), `BROWSER_SESSION_COOLDOWN_SECONDS` |
 | Планировщик | `SCHEDULER_ENABLED` (true), `SCHEDULER_POLL_SECONDS` (30), `SCHEDULER_PACING_SECONDS` (5), `SCHEDULER_MAX_ATTEMPTS` (3) |
 | Импорт плана | `IMPORT_PACING_SECONDS`, `IMPORT_MAX_IMAGES`, `IMPORT_MAX_CONCURRENCY`, `IMPORT_MAX_BYTES`, `IMPORT_IMAGE_MAX_BYTES` |
 | Медиа | `MEDIA_URL_TTL_SECONDS` (3600), `VIDEO_MAX_BYTES` |
@@ -58,13 +56,11 @@ CLI-публикация берёт учётные данные каналов �
 | `telegram` | `TG_API_ID`, `TG_API_HASH`, `TG_TARGET_CHANNEL`, `TG_SESSION_PATH` |
 | `vk` (браузер) | `VK_GROUP_ID` |
 | `vk_api` | `VK_ACCESS_TOKEN`, `VK_GROUP_ID`, `VK_PHOTO_UPLOAD_ENABLED` |
-| `vk_wall` | `VK_GROUP_SCREEN_NAME`¹ или `VK_GROUP_URL`¹ |
-| `vk_channel` | `VK_CHANNEL_ID`¹ |
-| `yandex` | `YANDEX_ORG_ID`¹ |
-| все браузерные | `BROWSER_HEADLESS`¹ |
+| `vk_wall` | `VK_GROUP_SCREEN_NAME` или `VK_GROUP_URL` |
+| `vk_channel` | `VK_CHANNEL_ID` |
+| `yandex` | `YANDEX_ORG_ID` |
+| все браузерные | `BROWSER_HEADLESS` |
 | `user-add` | `CROSSPOST_PASSWORD` (если пароль не передан флагом) |
-
-¹ — читается через словарь `load_config()`; до T-102 задавать в `runtime/.env`.
 
 ### 2.3 Генерация секретов
 

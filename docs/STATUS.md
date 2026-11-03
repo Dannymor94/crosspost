@@ -2,7 +2,7 @@
 
 **Единственный источник правды о состоянии проекта.** Меняется в том же PR, что и поведение.
 
-- **Последняя сверка с кодом:** 2026-11-03, коммит `ede92c0`
+- **Последняя сверка с кодом:** 2026-11-03, коммит `82b33cd` (T-102)
 - **Текущая фаза:** 1 — Фундамент (см. [`ROADMAP.md`](ROADMAP.md))
 - **Фокус:** зелёный CI, герметичные тесты, корректная конфигурация из окружения.
 
@@ -55,7 +55,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 974 passed, 4 failed (падают только без папки `runtime/`, см. K-2, K-3) |
+| `pytest -q` | 976 passed, 3 failed в чистом клоне (K-3, ждёт T-103) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | вероятно красный: ставит `[dev,browser]` без `infra` и `crypto` (K-1) |
@@ -67,7 +67,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | ID | Проблема | Задача |
 |---|---|---|
 | K-1 | CI ставит неполные зависимости и использует Python 3.11 вместо целевого 3.13 | T-101 |
-| K-2 | `load_config()` подмешивает `runtime/.env` в `os.environ`, поэтому код, читающий `os.environ` напрямую (`SCHEDULER_*`, `DB_URL`, секреты, `INSTAGRAM_*`), работает и без файла. Проблема только у потребителей **словаря** `load_config()`: ключ вне `_KNOWN_KEYS`, заданный только через env, в словарь не попадает. Затронуты `BROWSER_HEADLESS` (`config.py`, веб и CLI) и CLI-ключи `VK_GROUP_SCREEN_NAME`, `VK_GROUP_URL`, `VK_CHANNEL_ID`, `YANDEX_ORG_ID` (см. `OPERATIONS.md` §2.2) | T-102 |
+| K-2 | ~~`load_config()` не читала переменные вне `_KNOWN_KEYS` из окружения~~ — исправлено в T-102 | T-102 ✅ |
 | K-3 | 3 теста падают без папки `runtime/` (не герметичны) | T-103 |
 | K-4 | `.env.example` не соответствует коду: нет `SESSION_SECRET`, `DB_URL`, `INSTAGRAM_*`, `SCHEDULER_*`; есть неиспользуемые `REDIS_URL`, `STATE_DB_URL` | T-104 |
 | K-5 | README предлагал `python -m crosspost.web`, а `web/__main__.py` нет. Рабочая команда — `uvicorn crosspost.web.app:app` | T-105 |

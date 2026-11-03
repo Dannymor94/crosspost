@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-03 (T-102)
+
+### `load_config()` читает все переменные окружения (T-102)
+
+- Удалён белый список `_KNOWN_KEYS`; `load_config()` теперь делает `cfg.update(os.environ)` —
+  любой ключ, заданный только через env (`BROWSER_HEADLESS`, `SCHEDULER_*`, CLI-ключи ВК/Яндекса),
+  виден в возвращаемом словаре без `runtime/.env`.
+- Добавлен тест `test_env_only_key_visible_in_load_config` в `tests/test_config.py`.
+- Итог в чистом клоне: 976 passed, 3 failed (K-3, ждёт T-103).
+
 ## 2026-11-03
 
 ### Документация (T-100)
