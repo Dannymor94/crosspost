@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 
+from crosspost.config import parse_bool
 from crosspost.tunnel import state
 
 _PID_FILE = Path("/tmp/crosspost-tunnel.pid")
@@ -126,7 +127,7 @@ async def ensure_tunnel() -> str:
     Raises TunnelError when tunnel cannot be raised within _GIVE_UP_S seconds.
     Returns the current (possibly updated) public base URL.
     """
-    if not os.environ.get("INSTAGRAM_TUNNEL_AUTO"):
+    if not parse_bool(os.environ.get("INSTAGRAM_TUNNEL_AUTO"), default=False):
         return state.get_public_base_url()
 
     nonce = state.get_nonce()

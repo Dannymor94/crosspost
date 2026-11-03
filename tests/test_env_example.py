@@ -5,25 +5,75 @@ Fail modes:
 - old var removed from src/ but still in .env.example → test fails
 """
 
+import ast
 import re
 from pathlib import Path
-
-# Regex: captures the key name from all env-var access patterns in src/:
-#   os.environ["KEY"], os.environ.get("KEY"), os.getenv("KEY"),
-#   cfg["KEY"], cfg.get("KEY"), load_config().get("KEY")
-_ENV_ACCESS = re.compile(
-    r"""(?:os\.environ(?:\.get)?\s*[\[(]|os\.getenv\s*\(|(?:cfg|load_config\(\))(?:\.get\s*)?\s*[\[(])['"]([A-Z][A-Z0-9_]+)['"]"""
-)
 
 _SRC = Path(__file__).parent.parent / "src"
 _EXAMPLE = Path(__file__).parent.parent / ".env.example"
 
 
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def _const_str(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _env_key_from_node(node: ast.AST) -> str | None:
+    """Return the env var name if this AST node is an env-var access, else None.
+
+    Covers:
+      os.environ["KEY"], os.environ.get("KEY"),
+      os.getenv("KEY"),
+      cfg["KEY"], cfg.get("KEY"),
+      <any_call>.get("KEY")  — catches load_config().get("KEY")
+    """
+    if isinstance(node, ast.Subscript):
+        # os.environ["KEY"] or cfg["KEY"]
+        if _is_os_environ(node.value) or (
+            isinstance(node.value, ast.Name) and node.value.id == "cfg"
+        ):
+            return _const_str(node.slice)
+
+    if isinstance(node, ast.Call) and node.args:
+        first = _const_str(node.args[0])
+        if first is None:
+            return None
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr == "get":
+                # os.environ.get("KEY"), cfg.get("KEY"), load_config().get("KEY")
+                if (
+                    _is_os_environ(func.value)
+                    or (isinstance(func.value, ast.Name) and func.value.id == "cfg")
+                    or isinstance(func.value, ast.Call)
+                ):
+                    return first
+            if func.attr == "getenv" and isinstance(func.value, ast.Name) and func.value.id == "os":
+                # os.getenv("KEY")
+                return first
+
+    return None
+
+
 def _code_keys() -> set[str]:
     keys: set[str] = set()
     for f in _SRC.rglob("*.py"):
-        for m in _ENV_ACCESS.finditer(f.read_text()):
-            keys.add(m.group(1))
+        try:
+            tree = ast.parse(f.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            key = _env_key_from_node(node)
+            if key and re.match(r"^[A-Z][A-Z0-9_]+$", key):
+                keys.add(key)
     return keys
 
 
