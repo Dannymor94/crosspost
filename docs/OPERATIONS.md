@@ -9,6 +9,7 @@
 ```bash
 uv sync --all-extras                 # или: pip install -e ".[dev,browser,infra,crypto]"
 playwright install chromium          # для браузерных каналов
+mkdir -p runtime
 cp .env.example runtime/.env         # заполнить (см. §2); .env.example устарел — K-4
 make run                             # uvicorn crosspost.web.app:app --reload
 ```
@@ -28,23 +29,51 @@ ruff check src tests && ruff format --check src tests && mypy src && pytest -q
 
 ## 2. Конфигурация (переменные, которые читает код)
 
-Источник: `os.environ`, затем `runtime/.env`. **Внимание (K-2):** до исправления T-102
-часть переменных из окружения игнорируется, если их нет в `runtime/.env`.
+Источник: `os.environ`, затем `runtime/.env` (при старте `load_config()` подмешивает файл в
+`os.environ`, не перезаписывая заданное снаружи). **Внимание (K-2):** до исправления T-102
+ключи, которые читаются через словарь `load_config()` (помечены ¹), должны быть в `runtime/.env`
+или в `_KNOWN_KEYS` — заданные только через env, они не видны.
+
+### 2.1 Веб-приложение
+
+Учётные данные каналов хранятся в vault, а не в env.
 
 | Группа | Переменные |
 |---|---|
 | Секреты (обязательны, только из окружения в проде) | `SESSION_SECRET`, `VAULT_KEY`, `MEDIA_URL_SECRET` |
 | База и файлы | `DB_URL` (по умолчанию `sqlite+aiosqlite:///runtime/db.sqlite3`), `MEDIA_DIR`, `SCREENSHOT_DIR`, `RUNTIME_SETTINGS_PATH`, `BROWSER_PROFILES_DIR` |
-| Браузер | `BROWSER_HEADLESS` (по умолчанию `false`), `BROWSER_SESSION_COOLDOWN_SECONDS` |
+| Браузер | `BROWSER_HEADLESS`¹ (по умолчанию `false`), `BROWSER_SESSION_COOLDOWN_SECONDS` |
 | Планировщик | `SCHEDULER_ENABLED` (true), `SCHEDULER_POLL_SECONDS` (30), `SCHEDULER_PACING_SECONDS` (5), `SCHEDULER_MAX_ATTEMPTS` (3) |
 | Импорт плана | `IMPORT_PACING_SECONDS`, `IMPORT_MAX_IMAGES`, `IMPORT_MAX_CONCURRENCY`, `IMPORT_MAX_BYTES`, `IMPORT_IMAGE_MAX_BYTES` |
 | Медиа | `MEDIA_URL_TTL_SECONDS` (3600), `VIDEO_MAX_BYTES` |
-| Telegram | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` (запасные, если не заданы в учётных данных канала), `TG_SESSION_PATH`; в `.env` также встречается `TG_API_ID` — K-10 |
+| Telegram | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` (запасные для проверки подключения, если их нет в учётных данных канала) — K-10 |
 | Instagram | `INSTAGRAM_PUBLIC_BASE_URL`, `INSTAGRAM_PROXY_URL`, `INSTAGRAM_TUNNEL_AUTO`, `INSTAGRAM_GRAPH_VERSION`, `INSTAGRAM_POLL_SECONDS`, `INSTAGRAM_POLL_TIMEOUT_SECONDS` |
-| ВК | `VK_GROUP_URL`, `VK_GROUP_SCREEN_NAME`, `VK_PHOTO_UPLOAD_ENABLED` |
-| CLI | `CROSSPOST_PASSWORD` (пароль для `user-add`, если не передан флагом) |
 
-Сгенерировать секрет: `python -c "import secrets; print(secrets.token_hex(32))"`.
+### 2.2 CLI (`python -m crosspost`)
+
+CLI-публикация берёт учётные данные каналов из env/`.env`, а не из vault.
+
+| Канал (`--to`) | Переменные |
+|---|---|
+| `telegram` | `TG_API_ID`, `TG_API_HASH`, `TG_TARGET_CHANNEL`, `TG_SESSION_PATH` |
+| `vk` (браузер) | `VK_GROUP_ID` |
+| `vk_api` | `VK_ACCESS_TOKEN`, `VK_GROUP_ID`, `VK_PHOTO_UPLOAD_ENABLED` |
+| `vk_wall` | `VK_GROUP_SCREEN_NAME`¹ или `VK_GROUP_URL`¹ |
+| `vk_channel` | `VK_CHANNEL_ID`¹ |
+| `yandex` | `YANDEX_ORG_ID`¹ |
+| все браузерные | `BROWSER_HEADLESS`¹ |
+| `user-add` | `CROSSPOST_PASSWORD` (если пароль не передан флагом) |
+
+¹ — читается через словарь `load_config()`; до T-102 задавать в `runtime/.env`.
+
+### 2.3 Генерация секретов
+
+```bash
+# VAULT_KEY — только Fernet-ключ (hex не подойдёт: Fernet выдаст ValueError)
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# SESSION_SECRET, MEDIA_URL_SECRET
+python -c "import secrets; print(secrets.token_hex(32))"
+```
 Смена `SESSION_SECRET` разлогинивает всех пользователей.
 
 ---

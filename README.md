@@ -34,6 +34,7 @@
 
 ```bash
 uv sync --all-extras
+mkdir -p runtime
 cp .env.example runtime/.env    # заполнить: docs/OPERATIONS.md §2
 make run
 pytest -q                       # все тесты на моках, ключи не нужны

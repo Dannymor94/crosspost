@@ -85,7 +85,8 @@ SQLite через SQLAlchemy async (`db/`). Таблицы (`db/models.py`): `Pr
 
 ## 6. Рецепт нового канала
 
-Новый канал не требует правок оркестратора, роутов и фронта.
+Новый канал не требует правок роутов, `publish_service` и фронта. Нужна одна ветка в фабрике
+адаптеров: без неё `build_adapter()` вернёт `None`, и канал не опубликуется.
 
 1. Скопировать ближайший адаптер: `adapters/api/telegram.py` (API) или
    `adapters/browser/yandex.py` (браузер).
@@ -95,8 +96,13 @@ SQLite через SQLAlchemy async (`db/`). Таблицы (`db/models.py`): `Pr
 5. Добавить декларацию в `channels/validators.py` (тир, тип учётных данных, мастер из
    `channels/guide.py`, платформа, при необходимости `proxy_env_var`, `account_group`)
    и типы в `content/capabilities.py`.
-6. Добавить строку в `docs/STATUS.md` §1 и, при особенностях, `docs/channels/<канал>.md`.
-7. Тесты на моках зелёные → канал готов к живому smoke владельца.
+6. Зарегистрировать создание адаптера в `orchestrator/adapter_factory.py`: ветка по имени канала
+   в `build_adapter()` (API) или в `_build_browser()` (браузер). Тест: `build_adapter()` для
+   канала с моковыми учётными данными возвращает адаптер нужного класса, публикация через
+   `publish_service` на моке даёт `ChannelResult`. Декларативная регистрация — T-506.
+7. Добавить строку в `docs/STATUS.md` §1 и, при особенностях, `docs/channels/<канал>.md`.
+8. Тесты на моках зелёные → канал готов к живому smoke владельца.
+9. По желанию — ветка в CLI (`build_adapter` в `__main__.py`), если канал нужен из командной строки.
 
 Контракт (`adapters/base.py`):
 ```python
@@ -133,7 +139,7 @@ src/crosspost/
     base.py              контракт: ChannelAdapter, ChannelResult, ResultStatus
     api/                 telegram, instagram, telegraph, vk (заблокирован), youtube (заглушка)
     browser/             base_browser (open_page, login_context, storage_state),
-                         yandex, vk_wall, vk_channel, vk (проверить использование — T-205);
+                         yandex, vk_wall, vk_channel; vk — только для CLI `--to vk`;
                          dzen, whatsapp, instagram — заглушки
   channels/
     validators.py        реестр каналов (декларации)                 ← общий реестр
@@ -141,7 +147,7 @@ src/crosspost/
     telegram_login.py, browser_login.py, telegram_discovery.py, connection*.py
   content/               canonical, capabilities (← общий реестр), validation,
                          article_blocks, article_link, telegram_text, media_kind
-  orchestrator/          publish_service (ядро), adapter_factory, task (идемпотентность),
+  orchestrator/          publish_service (ядро), adapter_factory (← общий реестр), task (идемпотентность),
                          article_flow, breaker (заглушка — T-203)
   scheduler/             executor, import_plan, remote_table, media_sources,
                          browser_cooldown
@@ -159,7 +165,7 @@ src/crosspost/
     signed_media.py, media.py
   config.py              load_config(), флаги
   runtime_settings.py    настройки из админки, переживающие рестарт
-  __main__.py            CLI: post, login, user-add, tg-session
+  __main__.py            CLI: post, login, user-add, tg-session; свой build_adapter, учётки из env
 tests/                   зеркало src/, всё на моках
 runtime/                 .env, база, медиа, сессии — не в git
 ```

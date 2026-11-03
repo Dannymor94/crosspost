@@ -74,8 +74,9 @@
 - **Mock-first.** Весь код пишется и тестируется на моках площадок. Реальные ключи нужны только
   для живого smoke, и делает его владелец.
 - **TDD для логики.** Сначала падающий тест, потом код. Тесты зеркалят `src/`.
-- **Новый канал = декларация + адаптер.** Рецепт: [`docs/ARCHITECTURE.md` §6](docs/ARCHITECTURE.md).
-  Оркестратор, роуты и фронт для нового канала не правятся.
+- **Новый канал = декларация + адаптер + ветка в фабрике** (`orchestrator/adapter_factory.py`).
+  Рецепт: [`docs/ARCHITECTURE.md` §6](docs/ARCHITECTURE.md). Роуты, `publish_service` и фронт
+  не правятся. Декларативная фабрика без ручных веток — T-506.
 - **Async везде** (FastAPI, SQLAlchemy async). Синхронный I/O в event loop запрещён.
 - **Одна задача = одна ветка = один PR.** Ветка `task/T-NNN-коротко`.
 - **Коммиты:** `type(scope): что` — `feat`, `fix`, `docs`, `test`, `refactor`, `chore`.
@@ -128,5 +129,5 @@ pytest -q
 | `src/crosspost/web/frontend/index.html` (~4800 строк) | высокий | один агент за раз |
 | `src/crosspost/db/models.py` + миграции | высокий | изменения схемы только последовательно |
 | `src/crosspost/web/app.py` | низкий | +1 строка `include_router`; новый роут обязан попасть в `tests/web/test_app_routes_smoke.py` |
-| `channels/validators.py`, `content/capabilities.py` | низкий | общие реестры, дописывать по строке |
+| `channels/validators.py`, `content/capabilities.py`, `orchestrator/adapter_factory.py` | низкий | общие реестры, дописывать по строке или ветке |
 | `docs/STATUS.md`, `CHANGELOG.md` | низкий | дописывать, не переписывать чужое |

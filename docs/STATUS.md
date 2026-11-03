@@ -8,7 +8,7 @@
 
 ---
 
-## 1. Каналы
+## 1. Каналы (веб-реестр `channels/validators.py`)
 
 | Канал (ключ) | Тир | Типы контента | Статус | Примечание |
 |---|---|---|---|---|
@@ -18,10 +18,14 @@
 | `yandex` | браузер | post | ✅ работает | квитанция-заглушка `submitted`; модерация площадки до 7 дней |
 | `vk_wall` | браузер | post | ✅ работает | общая сессия ВК с `vk_channel` |
 | `vk_channel` | браузер | post | ✅ работает | квитанция-заглушка `posted` |
-| `vk` | API | — | ⛔ заблокирован площадкой | ошибки 27/214; ждёт user-токен |
+| `vk` | API | — | ⛔ отключён в веб-реестре | API заблокирован площадкой (ошибки 27/214), ждёт user-токен |
 | `youtube`, `dzen`, `whatsapp` | — | в матрице есть | не реализованы | файлы-заглушки |
 
-Реестры: `channels/validators.py` (декларации), `content/capabilities.py` (типы контента).
+Реестры: `channels/validators.py` (декларации), `content/capabilities.py` (типы контента),
+`orchestrator/adapter_factory.py` (создание адаптеров).
+
+CLI (`python -m crosspost post --to …`) использует свой набор: `telegram`, `vk` (браузерный
+`adapters/browser/vk.py`), `vk_api`, `yandex`, `vk_wall`, `vk_channel`; учётные данные берёт из env, а не из vault.
 
 ---
 
@@ -63,7 +67,7 @@
 | ID | Проблема | Задача |
 |---|---|---|
 | K-1 | CI ставит неполные зависимости и использует Python 3.11 вместо целевого 3.13 | T-101 |
-| K-2 | `load_config()` берёт из окружения только 7 ключей из `_KNOWN_KEYS`; `BROWSER_HEADLESS`, `SCHEDULER_*` и другие, заданные только через env, игнорируются. Сломает docker и VPS | T-102 |
+| K-2 | `load_config()` подмешивает `runtime/.env` в `os.environ`, поэтому код, читающий `os.environ` напрямую (`SCHEDULER_*`, `DB_URL`, секреты, `INSTAGRAM_*`), работает и без файла. Проблема только у потребителей **словаря** `load_config()`: ключ вне `_KNOWN_KEYS`, заданный только через env, в словарь не попадает. Затронуты `BROWSER_HEADLESS` (`config.py`, веб и CLI) и CLI-ключи `VK_GROUP_SCREEN_NAME`, `VK_GROUP_URL`, `VK_CHANNEL_ID`, `YANDEX_ORG_ID` (см. `OPERATIONS.md` §2.2) | T-102 |
 | K-3 | 3 теста падают без папки `runtime/` (не герметичны) | T-103 |
 | K-4 | `.env.example` не соответствует коду: нет `SESSION_SECRET`, `DB_URL`, `INSTAGRAM_*`, `SCHEDULER_*`; есть неиспользуемые `REDIS_URL`, `STATE_DB_URL` | T-104 |
 | K-5 | README предлагал `python -m crosspost.web`, а `web/__main__.py` нет. Рабочая команда — `uvicorn crosspost.web.app:app` | T-105 |
