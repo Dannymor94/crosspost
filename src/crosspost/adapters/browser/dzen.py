@@ -1,3 +1,3 @@
 """Дзен-адаптер (браузер). Эпик 5. Редактор статьи. Пилот браузерного тира."""
 
-# TODO: реализовать по PRD_BACKLOG.
+# TODO T-505: implement channel (see docs/BACKLOG.md)

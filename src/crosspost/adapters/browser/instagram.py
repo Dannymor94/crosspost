@@ -1,3 +1,3 @@
 """Instagram-адаптер (браузер). Эпик 5. Добавить рилс. Самый хрупкий узел."""
 
-# TODO: реализовать по PRD_BACKLOG.
+# TODO T-205: delete dead stub (see docs/BACKLOG.md)

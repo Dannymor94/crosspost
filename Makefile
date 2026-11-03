@@ -24,7 +24,7 @@ lint:
 
 # MVP-0: проверить, что CLI собирается и тесты ядра зелёные.
 mvp: install-mvp test
-	@echo "Ядро MVP готово. Для реальной отправки заполни runtime/.env (см. SETUP.md) и запусти make smoke."
+	@echo "Ядро MVP готово. Для реальной отправки заполни runtime/.env (см. docs/OPERATIONS.md §2) и запусти make smoke."
 
 # Финиш MVP-0: реальная отправка в TG+ВК с ключами из runtime/.env.
 # Зависит от install-mvp: иначе `python -m crosspost` падает с "No module named crosspost".

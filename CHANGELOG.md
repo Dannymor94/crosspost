@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-03 (T-108)
+
+### Обновлены ссылки на архивные доки (T-108)
+
+- 11 заглушек: `# TODO: реализовать по PRD_BACKLOG.` → `# TODO T-NNN: ... (see docs/BACKLOG.md)`
+  с правильными ID задач (T-205 для мёртвых, T-505 для будущих каналов, T-202 для сессий).
+- `src/crosspost/channels/validators.py`: `PRD_BACKLOG` → `docs/BACKLOG.md`.
+- `src/crosspost/__main__.py`: убрана ссылка на `MILESTONES.md`.
+- `Makefile`: `SETUP.md` → `docs/OPERATIONS.md §2`.
+- `grep -rnE "PRD_BACKLOG|SETUP\.md|PROJECT_GUIDE|AGENT_BRIEF|MILESTONES" src Makefile` — пусто.
+
 ## 2026-11-03 (T-104)
 
 ### `.env.example` соответствует коду (T-104)

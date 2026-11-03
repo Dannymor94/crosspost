@@ -1,3 +1,3 @@
 """Очередь (Redis+Celery/RQ). Эпик 3. Раздельные fast/slow дорожки, ретраи с потолком."""
 
-# TODO: реализовать по PRD_BACKLOG.
+# TODO T-205: delete dead stub (see docs/BACKLOG.md)
