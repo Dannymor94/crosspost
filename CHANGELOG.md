@@ -52,6 +52,14 @@
 - `Makefile`: `SETUP.md` → `docs/OPERATIONS.md §2`.
 - `grep -rnE "PRD_BACKLOG|SETUP\.md|PROJECT_GUIDE|AGENT_BRIEF|MILESTONES" src Makefile` — пусто.
 
+## 2026-11-03 (T-107)
+
+### Тест согласованности документации (T-107)
+
+- `tests/test_doc_consistency.py`: два новых теста — (1) каждый ключ из `VALIDATORS`
+  присутствует в таблице §1 `docs/STATUS.md`; (2) все относительные ссылки в `AGENTS.md`
+  и `docs/*.md` (кроме `docs/archive/`) ведут на существующие файлы.
+
 ## 2026-11-03 (T-104)
 
 ### `.env.example` соответствует коду (T-104)

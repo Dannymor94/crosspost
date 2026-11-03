@@ -63,7 +63,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 1111 passed, 0 failed (`.venv/bin/pytest -q`) |
+| `pytest -q` | 1110 passed, 0 failed (`uv run pytest -q`) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
