@@ -54,14 +54,16 @@ def browser_headless() -> bool:
     return parse_bool(load_config().get("BROWSER_HEADLESS", "false"), default=False)
 
 
-def load_config(env_path: str | Path = DEFAULT_ENV_PATH) -> dict[str, str]:
+def load_config(env_path: str | Path | None = None) -> dict[str, str]:
     """Прочитать .env (+ окружение) в dict и вставить в os.environ.
 
     os.environ перекрывает файл (удобно для CI/секрет-сторов).
     Уже установленные переменные окружения НЕ перезаписываем (setdefault).
+    env_path=None резолвится в DEFAULT_ENV_PATH в момент вызова, а не при импорте —
+    это позволяет тестам подменять DEFAULT_ENV_PATH через monkeypatch.setattr.
     """
     cfg: dict[str, str] = {}
-    p = Path(env_path)
+    p = Path(env_path) if env_path is not None else DEFAULT_ENV_PATH
     if p.exists():
         for raw in p.read_text("utf-8").splitlines():
             line = raw.strip()
