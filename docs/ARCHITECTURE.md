@@ -86,7 +86,7 @@ SQLite через SQLAlchemy async (`db/`). Таблицы (`db/models.py`): `Pr
 ## 6. Рецепт нового канала
 
 Новый канал не требует правок роутов, `publish_service` и фронта. Нужна одна ветка в фабрике
-адаптеров: без неё `build_adapter()` вернёт `None`, и канал не опубликуется.
+адаптеров: без неё `build_profile_adapter()` вернёт `None`, и канал не опубликуется.
 
 1. Скопировать ближайший адаптер: `adapters/api/telegram.py` (API) или
    `adapters/browser/yandex.py` (браузер).
@@ -97,9 +97,9 @@ SQLite через SQLAlchemy async (`db/`). Таблицы (`db/models.py`): `Pr
    `channels/guide.py`, платформа, при необходимости `proxy_env_var`, `account_group`)
    и типы в `content/capabilities.py`.
 6. Зарегистрировать создание адаптера в `orchestrator/adapter_factory.py`: ветка по имени канала
-   в `build_adapter()` (API) или в `_build_browser()` (браузер). Тест: `build_adapter()` для
+   в `build_profile_adapter()` (API) или в `_build_browser()` (браузер). Тест: `build_profile_adapter()` для
    канала с моковыми учётными данными возвращает адаптер нужного класса, публикация через
-   `publish_service` на моке даёт `ChannelResult`. Декларативная регистрация — T-506.
+   `publish_service` на моке даёт `ChannelOutcome`. Декларативная регистрация — T-506.
 7. Добавить строку в `docs/STATUS.md` §1 и, при особенностях, `docs/channels/<канал>.md`.
 8. Тесты на моках зелёные → канал готов к живому smoke владельца.
 9. По желанию — ветка в CLI (`build_adapter` в `__main__.py`), если канал нужен из командной строки.
