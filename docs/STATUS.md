@@ -83,6 +83,6 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | K-7 | Не реализованы health-check сессий, релогин-флоу, circuit breaker (`sessions/*.py`, `orchestrator/breaker.py` — заглушки) | T-202, T-203 |
 | K-8 | ~~Решение о российском прокси для ВК и Яндекса не реализовано для браузерного тира~~ — реализовано в T-204 | T-204 ✅ |
 | K-9 | Мёртвые заглушки: `adapters/browser/instagram.py`, `sessions/vault.py`, `orchestrator/dispatcher.py`, `queue.py`, `media/lifecycle.py` | T-205 |
-| K-10 | Переменные Telegram названы по-разному: `TG_API_ID` в `.env`, `TELEGRAM_API_ID` в `validators.py` | T-106 |
+| K-10 | ~~`TG_API_ID` vs `TELEGRAM_API_ID`~~ — исправлено в T-106; `TG_API_ID` — deprecated alias с предупреждением | T-106 ✅ |
 | K-11 | `index.html` ~4800 строк — горячая точка конфликтов | T-501 |
 | K-12 | Комментарий TODO про кнопку публикации в `vk_wall.py` при работающем канале; проверить, устарел ли он | T-206 |
