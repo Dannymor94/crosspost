@@ -431,7 +431,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         credential_kind=CredentialKind.API_TOKEN,
         fn=_validate_vk_api,
         title="ВКонтакте (API)",
-        enabled=False,  # VK блокирует токен сообщества; ждёт user-токена — см. PRD_BACKLOG
+        enabled=False,  # VK блокирует токен сообщества; ждёт user-токена — см. docs/BACKLOG.md
         platform="vk",
         platform_title="ВКонтакте",
     ),

@@ -1,3 +1,3 @@
 """Модель пользователя. Эпик 9. Токены/сессии/прокси на пользователя."""
 
-# TODO: реализовать по PRD_BACKLOG.
+# TODO T-205: delete dead stub (see docs/BACKLOG.md)

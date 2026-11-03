@@ -3,8 +3,7 @@
     python -m crosspost post --type post --text "..." --image a.jpg --to telegram,vk
     python -m crosspost login --channel yandex
 
-Синхронно, состояние в JSON. Без очереди/веба/БД/браузера (см. MILESTONES.md).
-Статус: КАРКАС. Сборка адаптеров и реальная отправка — задача фазы 0 (см. PLAN.md).
+CLI-публикация использует env-конфигурацию (см. docs/OPERATIONS.md §2.2).
 """
 
 from __future__ import annotations
