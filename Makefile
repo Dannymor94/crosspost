@@ -35,7 +35,7 @@ smoke: install-mvp
 up:
 	docker compose up -d
 run:
-	uvicorn crosspost.web.app:app --reload --port 8001
+	uv run uvicorn crosspost.web.app:app --reload --port 8001
 
 # Start localhost.run SSH tunnel, update INSTAGRAM_PUBLIC_BASE_URL in runtime/.env.
 # Stop with: make tunnel-stop

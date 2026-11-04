@@ -11,7 +11,7 @@ uv sync --all-extras                 # или: pip install -e ".[dev,browser,inf
 playwright install chromium          # для браузерных каналов
 mkdir -p runtime
 cp .env.example runtime/.env         # заполнить (см. §2)
-make run                             # uvicorn crosspost.web.app:app --reload --port 8001
+make run                             # uv run uvicorn crosspost.web.app:app --reload --port 8001
 ```
 
 Эквивалент: `python -m crosspost.web` (тот же порт и `--reload`).
