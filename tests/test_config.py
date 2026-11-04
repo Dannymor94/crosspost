@@ -45,11 +45,14 @@ def test_tg_api_id_alias(monkeypatch, tmp_path, caplog) -> None:
 
 
 def test_tg_alias_used_when_canonical_empty(monkeypatch, tmp_path) -> None:
-    """Empty TELEGRAM_API_ID is treated as not set; legacy TG_API_ID alias applies."""
+    """Empty TELEGRAM_API_ID is treated as not set; alias applies to cfg AND os.environ."""
+    import os
+
     monkeypatch.setenv("TG_API_ID", "12345")
     monkeypatch.setenv("TELEGRAM_API_ID", "")
     cfg = load_config(tmp_path / "nonexistent.env")
     assert cfg["TELEGRAM_API_ID"] == "12345"
+    assert os.environ["TELEGRAM_API_ID"] == "12345"
 
 
 def test_canonical_name_takes_precedence(monkeypatch, tmp_path) -> None:
