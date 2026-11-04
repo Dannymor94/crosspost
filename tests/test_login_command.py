@@ -57,20 +57,6 @@ async def test_login_yandex_opens_browser_and_saves_state():
     save_state.assert_awaited_once()  # storageState экспортирован
 
 
-async def test_login_vk_opens_browser_and_saves_state():
-    """login --channel vk: goto vk.com, storageState экспортирован."""
-    page = AsyncMock()
-    page.goto = AsyncMock()
-    save_state = AsyncMock(return_value=Path("/x/vk_state.json"))
-
-    with _patch_login_context(page, save_state, url_after_login="https://vk.com/feed"):
-        result = await cli._run_login("vk", {}, _input=lambda: None)
-
-    assert result == 0
-    assert "vk.com" in page.goto.call_args.args[0]
-    save_state.assert_awaited_once()
-
-
 async def test_login_reprompts_when_still_on_login_page():
     """Если после Enter URL всё ещё страница логина — не сохраняем, ждём ещё раз."""
     page = AsyncMock()

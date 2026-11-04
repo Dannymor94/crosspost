@@ -672,6 +672,23 @@ async def test_browser_login_confirm_without_begin_400(client: AsyncClient) -> N
     assert resp.status_code == 400
 
 
+async def test_browser_login_begin_proxy_missing_returns_400(client: AsyncClient) -> None:
+    """RuntimeError from _get_proxy (proxy required but env unset) → 400, not 500."""
+    from crosspost.channels import browser_login as bl
+
+    r = await client.post("/api/profiles", json={"name": "proxy-test"})
+    pid = r.json()["id"]
+
+    def _raise_proxy(ch: str):
+        raise RuntimeError(f"канал {ch!r} требует прокси — задайте переменную VK_PROXY_URL")
+
+    with patch.object(bl, "_get_proxy", _raise_proxy):
+        resp = await client.post(f"/api/profiles/{pid}/channels/vk_wall/browser-login/begin")
+
+    assert resp.status_code == 400
+    assert "VK_PROXY_URL" in resp.json()["detail"]
+
+
 async def test_connect_rejects_interactive_channel(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "ivan"})
     pid = resp.json()["id"]

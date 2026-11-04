@@ -816,6 +816,8 @@ async def browser_login_begin(profile_id: int, channel: str, repo: RepoDep) -> V
         await bl.begin(profile_id, channel)
     except bl.BrowserLoginError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.warning("browser login begin failed %s/%s: %s", profile_id, channel, exc)
         raise HTTPException(status_code=500, detail=f"Не удалось открыть браузер: {exc}") from exc
