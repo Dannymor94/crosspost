@@ -171,7 +171,18 @@ def upgrade():
         "UPDATE publications SET updated_at=COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"
     )
     columns = {c["name"]: c for c in sa.inspect(op.get_bind()).get_columns("publications")}
-    with op.batch_alter_table("publications") as batch:
+    # Старый raw SQL объявлял REFERENCES inline. SQLite reflection может потерять
+    # ON DELETE, поэтому одного recreate="always" недостаточно: восстанавливаем
+    # действие явно в копируемой таблице, сохраняя остальные constraints/индексы.
+    publications = sa.Table("publications", sa.MetaData(), autoload_with=op.get_bind())
+    for constraint in publications.foreign_key_constraints:
+        if constraint.column_keys == ["profile_id"] and [
+            fk.target_fullname for fk in constraint.elements
+        ] == ["profiles.id"]:
+            constraint.ondelete = "CASCADE"
+            for fk in constraint.elements:
+                fk.ondelete = "CASCADE"
+    with op.batch_alter_table("publications", recreate="always", copy_from=publications) as batch:
         for name in ("target", "attempt_count"):
             if columns[name]["default"] is not None:
                 batch.alter_column(name, server_default=None)

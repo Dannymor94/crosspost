@@ -55,7 +55,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 987 passed, 0 failed (`uv run pytest -q`) |
+| `pytest -q` | 991 passed, 0 failed (`uv run pytest -q`) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
@@ -71,7 +71,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | K-3 | ~~3 теста падают без папки `runtime/`~~ — исправлено в T-103 | T-103 ✅ |
 | K-4 | ~~`.env.example` не соответствует коду~~ — исправлено в T-104 | T-104 ✅ |
 | K-5 | README предлагал `python -m crosspost.web`, а `web/__main__.py` нет. Рабочая команда — `uvicorn crosspost.web.app:app` | T-105 |
-| K-6 | ~~Две системы миграций~~ — запуск и CLI используют Alembic; старые БД обновляются до `head` | T-201 ✅ |
+| K-6 | ~~Две системы миграций~~ — запуск и CLI используют Alembic; старые БД обновляются до `head`, включая сохранение `CASCADE` после старого ручного rebuild; схема всех таблиц сверяется с моделями | T-201 ✅ |
 | K-7 | Не реализованы health-check сессий, релогин-флоу, circuit breaker (`sessions/*.py`, `orchestrator/breaker.py` — заглушки) | T-202, T-203 |
 | K-8 | Решение о российском прокси для ВК и Яндекса (`decisions.md`, 2026-10-28) не реализовано для браузерного тира | T-204 |
 | K-9 | Мёртвые заглушки: `adapters/browser/instagram.py`, `sessions/vault.py`, `orchestrator/dispatcher.py`, `queue.py`, `media/lifecycle.py` | T-205 |
