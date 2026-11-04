@@ -74,6 +74,12 @@ def _code_keys() -> set[str]:
             key = _env_key_from_node(node)
             if key and re.match(r"^[A-Z][A-Z0-9_]+$", key):
                 keys.add(key)
+            # Also pick up proxy_env_var="KEY" in channel declarations —
+            # these are read indirectly via _get_proxy() at runtime.
+            if isinstance(node, ast.keyword) and node.arg == "proxy_env_var":
+                val = _const_str(node.value)
+                if val and re.match(r"^[A-Z][A-Z0-9_]+$", val):
+                    keys.add(val)
     return keys
 
 

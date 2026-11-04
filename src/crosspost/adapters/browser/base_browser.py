@@ -40,35 +40,61 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 _PROFILES_ROOT_DEFAULT = "runtime/browser_profiles"
 _SCREENSHOT_ROOT_DEFAULT = "runtime/logs/screenshots"
 
-# Chromium args that prevent WebRTC from bypassing the proxy via direct UDP.
-# Applied whenever a proxy is configured.
-_WEBRTC_DISABLE_ARGS = ["--disable-webrtc"]
+# Prevents WebRTC from leaking the real IP via non-proxied UDP when a proxy is set.
+# --disable-webrtc alone is insufficient (verified: 4 direct UDP packets still escape).
+_WEBRTC_DISABLE_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 
 
 def _parse_proxy(url: str) -> dict[str, str] | None:
     """Parse proxy URL into a Playwright proxy dict, splitting out credentials.
 
-    Returns None when url is empty.
-    For scheme://user:pass@host:port returns {"server":..., "username":..., "password":...}.
-    For scheme://host:port returns {"server": url}.
-    Password is never logged — callers log only the server portion if needed.
+    For scheme://user:pass@host:port: {"server": ..., "username": ..., "password": ...}.
+    For scheme://host:port: {"server": url}.
+    Returns None for empty url.
+    Raises ValueError on malformed URL — message never contains the URL (no password leak).
     """
     if not url:
         return None
-    parsed = urlparse(url)
-    if parsed.username:
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        server = f"{parsed.scheme}://{host}{port}"
-        return {"server": server, "username": parsed.username, "password": parsed.password or ""}
-    return {"server": url}
+    try:
+        parsed = urlparse(url)
+        if parsed.username:
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            server = f"{parsed.scheme}://{host}{port}"
+            return {
+                "server": server,
+                "username": unquote(parsed.username),
+                "password": unquote(parsed.password or ""),
+            }
+        return {"server": url}
+    except Exception:
+        raise ValueError("proxy URL is malformed") from None
+
+
+def _get_proxy(channel: str) -> dict[str, str] | None:
+    """Resolve proxy for channel from its VALIDATORS declaration.
+
+    If the channel declares proxy_env_var but the env var is unset or empty,
+    raises RuntimeError — silent fallback to a direct connection is not allowed.
+    Returns None when the channel has no proxy_env_var (direct connection is fine).
+    """
+    from crosspost.channels.validators import VALIDATORS  # lazy: avoids circular import
+
+    v = VALIDATORS.get(channel)
+    proxy_env_var = v.proxy_env_var if v else ""
+    if not proxy_env_var:
+        return None
+    url = os.environ.get(proxy_env_var, "")
+    if not url:
+        raise RuntimeError(f"канал {channel!r} требует прокси — задайте переменную {proxy_env_var}")
+    return _parse_proxy(url)
 
 
 # Сентинел «сессию брать из файла» (CLI-режим). UI ВСЕГДА передаёт storage_state
@@ -158,7 +184,6 @@ async def open_page(
     headless: bool = False,
     session_channel: str | None = None,
     storage_state: Any = _FROM_FILE,
-    proxy_url: str = "",
 ) -> AsyncGenerator:
     """PUBLISH/VALIDATE: свежий контекст с загруженным storageState.
 
@@ -187,7 +212,7 @@ async def open_page(
         storage_state = _coerce_storage_state(storage_state)
 
     lock = _lock_for(session_key)
-    proxy = _parse_proxy(proxy_url)
+    proxy = _get_proxy(channel)
     async with lock:
         async with async_playwright() as pw:
             launch_kwargs: dict[str, Any] = {"headless": headless}
@@ -225,7 +250,6 @@ async def login_context(
     channel: str,
     *,
     headless: bool = False,
-    proxy_url: str = "",
 ) -> AsyncGenerator:
     """LOGIN (CLI): persistent-контекст для ручного входа + экспорт storageState в файл.
 
@@ -245,7 +269,7 @@ async def login_context(
     p.mkdir(parents=True, exist_ok=True)
 
     lock = _lock_for(channel)
-    proxy = _parse_proxy(proxy_url)
+    proxy = _get_proxy(channel)
     async with lock:
         async with async_playwright() as pw:
             lpc_kwargs: dict[str, Any] = {

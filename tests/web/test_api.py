@@ -536,6 +536,9 @@ def _patch_browser_login(state_dict: dict, *, logged_in: bool = True):
         patch.object(bl, "_launch", fake_launch),
         patch.object(bb, "open_page", fake_open_page),
         patch.object(bb, "is_logged_in", fake_is_logged_in),
+        # _get_proxy is called by begin() before _launch; stub it out so web
+        # tests don't require proxy env vars to be set.
+        patch.object(bl, "_get_proxy", lambda ch: None),
     )
 
 
@@ -545,8 +548,8 @@ async def _browser_login(client: AsyncClient, pid: int, channel: str, state_dict
     for c in state_dict.get("cookies", []):
         c.setdefault("domain", ".vk.com")
     base = f"/api/profiles/{pid}/channels/{channel}/browser-login"
-    p_launch, p_open, p_logged = _patch_browser_login(state_dict)
-    with p_launch, p_open, p_logged:
+    p_launch, p_open, p_logged, p_proxy = _patch_browser_login(state_dict)
+    with p_launch, p_open, p_logged, p_proxy:
         rb = await client.post(f"{base}/begin")
         assert rb.status_code == 200, rb.text
         rc = await client.post(f"{base}/confirm")
@@ -649,8 +652,8 @@ async def test_browser_login_confirm_not_logged_in_returns_409(client: AsyncClie
     pid = r.json()["id"]
     base = f"/api/profiles/{pid}/channels/vk_wall/browser-login"
 
-    p_launch, p_open, p_logged = _patch_browser_login({"cookies": []}, logged_in=False)
-    with p_launch, p_open, p_logged:
+    p_launch, p_open, p_logged, p_proxy = _patch_browser_login({"cookies": []}, logged_in=False)
+    with p_launch, p_open, p_logged, p_proxy:
         assert (await client.post(f"{base}/begin")).status_code == 200
         rc = await client.post(f"{base}/confirm")
     assert rc.status_code == 409

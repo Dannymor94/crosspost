@@ -90,14 +90,12 @@ class VKWallBrowserAdapter:
         *,
         headless: bool = False,
         storage_state: Any = _FROM_FILE,
-        proxy_url: str = "",
     ) -> None:
         self._screen_name = screen_name  # напр. "medithou"
         self._store = store
         self._headless = headless
         # per-profile сессия из credentials (UI), либо _FROM_FILE → CLI-файл.
         self._storage_state = storage_state
-        self._proxy_url = proxy_url
 
     async def publish(
         self,
@@ -113,7 +111,6 @@ class VKWallBrowserAdapter:
             self.channel,
             headless=self._headless,
             storage_state=self._storage_state,
-            proxy_url=self._proxy_url,
         ) as page:
             # 2) открыть стену сообщества
             url = _WALL_URL.format(screen_name=self._screen_name)

@@ -189,7 +189,6 @@ def _build_browser(channel: str, storage_state: str, store, target: str) -> Chan
             store,
             headless=headless,
             storage_state=storage_state,
-            proxy_url=os.environ.get("YANDEX_PROXY_URL", ""),
         )
     if channel == "vk_wall":
         from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter  # noqa: PLC0415
@@ -199,7 +198,6 @@ def _build_browser(channel: str, storage_state: str, store, target: str) -> Chan
             store,
             headless=headless,
             storage_state=storage_state,
-            proxy_url=os.environ.get("VK_PROXY_URL", ""),
         )
     if channel == "vk_channel":
         from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter  # noqa: PLC0415
@@ -209,6 +207,5 @@ def _build_browser(channel: str, storage_state: str, store, target: str) -> Chan
             store,
             headless=headless,
             storage_state=storage_state,
-            proxy_url=os.environ.get("VK_PROXY_URL", ""),
         )
     return None

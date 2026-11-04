@@ -28,7 +28,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from crosspost.adapters.browser.base_browser import _WEBRTC_DISABLE_ARGS, _parse_proxy
+from crosspost.adapters.browser.base_browser import _WEBRTC_DISABLE_ARGS, _get_proxy, _parse_proxy
 from crosspost.channels.validators import VALIDATORS
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,9 @@ async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str
     v = _validator(channel)
     await cancel(profile_id, channel)  # закрыть возможное недоделанное окно
 
+    # Validate proxy before launching: raises RuntimeError if proxy_env_var is
+    # declared but the env var is unset (silent direct connection is not allowed).
+    _get_proxy(channel)
     proxy_url = os.environ.get(v.proxy_env_var, "") if v.proxy_env_var else ""
     pw, browser, context, page = await _launch(headless=headless, proxy_url=proxy_url)
     session_key = v.session_channel or channel

@@ -99,6 +99,14 @@ def _clear():
     bl._SESSIONS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _proxy_env(monkeypatch):
+    # vk_wall and yandex declare proxy_env_var; set default so begin() doesn't
+    # raise RuntimeError in tests that aren't testing the missing-proxy path.
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.test:3128")
+    monkeypatch.setenv("YANDEX_PROXY_URL", "http://proxy.test:3128")
+
+
 async def test_begin_opens_empty_context_on_login_page(monkeypatch):
     pw, browser, ctx, page, _ = _install_launch(monkeypatch, {"cookies": []})
 
@@ -217,14 +225,13 @@ async def test_begin_passes_proxy_from_env(monkeypatch):
     assert captured["proxy_url"] == "http://ru-proxy:3128"
 
 
-async def test_begin_passes_empty_proxy_when_env_not_set(monkeypatch):
-    """begin() без переменной прокси → proxy_url='' в _launch."""
+async def test_begin_raises_when_proxy_required_but_missing(monkeypatch):
+    """begin() с объявленным proxy_env_var, но без переменной → RuntimeError."""
     monkeypatch.delenv("VK_PROXY_URL", raising=False)
-    _, _, _, _, captured = _install_launch(monkeypatch, _VK_STATE)
+    _install_launch(monkeypatch, _VK_STATE)
 
-    await bl.begin(1, "vk_wall")
-
-    assert captured["proxy_url"] == ""
+    with pytest.raises(RuntimeError, match="VK_PROXY_URL"):
+        await bl.begin(1, "vk_wall")
 
 
 # ── Диагностика / хелперы (юнит) ──────────────────────────────────────────────
