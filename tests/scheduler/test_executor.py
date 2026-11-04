@@ -18,8 +18,9 @@ from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crosspost.adapters.base import ChannelResult, ResultStatus
-from crosspost.db.engine import _migrate_scheduled_status, create_engine_and_tables
+from crosspost.db.engine import create_engine_and_tables
 from crosspost.db.log_repo import LogRepository
+from crosspost.db.migration_runner import upgrade_database
 from crosspost.db.models import (
     ConnectionState,
     CredentialKind,
@@ -599,9 +600,10 @@ async def test_legacy_published_migrates_to_done_or_failed(factory):
                 text("UPDATE scheduled_posts SET status='published' WHERE id=:i"), {"i": i}
             )
         await s.commit()
-        # Прогоняем миграцию напрямую (как в _migrate_sqlite на старте движка).
+        # Имитируем БД старого приложения без версии; запускаем настоящий upgrade.
         conn = await s.connection()
-        await conn.run_sync(_migrate_scheduled_status)
+        await conn.execute(text("DELETE FROM alembic_version"))
+        await conn.run_sync(upgrade_database)
         await s.commit()
 
     assert await _post_status(factory, done_id) == ScheduledPostStatus.DONE

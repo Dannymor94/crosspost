@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from logging.config import fileConfig
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from alembic import context
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from crosspost.db.engine import get_db_url  # noqa: E402
-from crosspost.db.models import Base  # noqa: E402
+from alembic import command, context
+from crosspost.db.engine import get_db_url
+from crosspost.db.migration_runner import adopt_legacy
+from crosspost.db.models import Base
 
 config = context.config
 if config.config_file_name is not None:
@@ -30,18 +27,13 @@ def get_url() -> str:
 
 
 def run_migrations_offline() -> None:
-    url = get_url()
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
-    with context.begin_transaction():
-        context.run_migrations()
+    raise RuntimeError("T-201 requires an online connection to inspect the legacy schema")
 
 
 def do_run_migrations(connection: Connection) -> None:
+    cli_command = getattr(config.cmd_opts, "cmd", (None,))[0]
+    if config.attributes.get("adopt_legacy") or cli_command is command.upgrade:
+        adopt_legacy(connection, config)
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
@@ -55,13 +47,21 @@ async def run_async_migrations() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
+    try:
+        async with connectable.begin() as connection:
+            if connection.dialect.name == "sqlite":
+                await connection.exec_driver_sql("BEGIN IMMEDIATE")
+            await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
 
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        do_run_migrations(connection)
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
