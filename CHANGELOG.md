@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-04 (T-204)
+
+### Российский прокси для браузерных каналов (T-204)
+
+- `open_page()` в `base_browser.py` принимает `proxy_url: str`; при непустом значении
+  передаёт `proxy={"server": url}` в `browser.new_context()`.
+- Адаптеры `VKWallBrowserAdapter`, `VKChannelBrowserAdapter`, `YandexBrowserAdapter`
+  принимают `proxy_url` в `__init__` и пробрасывают в `open_page()`.
+- `adapter_factory._build_browser` читает `VK_PROXY_URL` / `YANDEX_PROXY_URL` из env
+  и передаёт в соответствующий адаптер.
+- `validators.py`: `proxy_env_var="VK_PROXY_URL"` для `vk_wall` и `vk_channel`,
+  `proxy_env_var="YANDEX_PROXY_URL"` для `yandex`.
+- `.env.example`: добавлены `VK_PROXY_URL=` и `YANDEX_PROXY_URL=` с комментариями.
+- Тесты: 2 теста в `test_base_browser.py` (proxy forwarding / absent); 4 теста в
+  `test_browser_proxy.py` (factory reads env, empty when not set).
+
 ## 2026-11-04 (T-201)
 
 ### Единая система миграций Alembic

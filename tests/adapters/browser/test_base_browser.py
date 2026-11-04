@@ -200,3 +200,29 @@ async def test_is_logged_in_url_reject_still_wins():
     page = _MarkerPage("https://vk.com/login", present=set())
     result = await bb.is_logged_in(page, reject_url_fragments=("vk.com/login",))
     assert result is False
+
+
+# ── proxy_url forwarding ──────────────────────────────────────────────────────
+
+
+async def test_open_page_passes_proxy_to_new_context(profiles_root):
+    """proxy_url → new_context receives proxy={"server": url}."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True, proxy_url="http://proxy.example:3128"):
+            pass
+
+    kwargs = browser.new_context.call_args.kwargs
+    assert kwargs.get("proxy") == {"server": "http://proxy.example:3128"}
+
+
+async def test_open_page_no_proxy_kwarg_when_empty(profiles_root):
+    """proxy_url='' → new_context не получает ключ proxy."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True, proxy_url=""):
+            pass
+
+    assert "proxy" not in browser.new_context.call_args.kwargs

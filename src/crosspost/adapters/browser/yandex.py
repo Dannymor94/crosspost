@@ -76,11 +76,13 @@ class YandexBrowserAdapter:
         *,
         headless: bool = False,
         storage_state: Any = _FROM_FILE,
+        proxy_url: str = "",
     ) -> None:
         self._org_id = org_id
         self._store = store
         self._headless = headless
         self._storage_state = storage_state  # per-profile сессия; _FROM_FILE → CLI-файл
+        self._proxy_url = proxy_url
 
     async def publish(
         self,
@@ -96,6 +98,7 @@ class YandexBrowserAdapter:
             self.channel,
             headless=self._headless,
             storage_state=self._storage_state,
+            proxy_url=self._proxy_url,
         ) as page:
             # 2) переходим в раздел Публикации
             url = _POSTS_URL.format(org_id=self._org_id)

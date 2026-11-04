@@ -129,11 +129,13 @@ class VKChannelBrowserAdapter:
         *,
         headless: bool = False,
         storage_state: Any = _FROM_FILE,
+        proxy_url: str = "",
     ) -> None:
         self._channel_id = channel_id  # напр. "-240033402"
         self._store = store
         self._headless = headless
         self._storage_state = storage_state  # per-profile сессия vk_wall; _FROM_FILE → CLI-файл
+        self._proxy_url = proxy_url
 
     async def publish(
         self,
@@ -151,6 +153,7 @@ class VKChannelBrowserAdapter:
             headless=self._headless,
             session_channel=_SESSION_CHANNEL,
             storage_state=self._storage_state,
+            proxy_url=self._proxy_url,
         ) as page:
             # 2) навигация в раздел канала мессенджера
             # ID канала ВК — всегда отрицательный; добавляем '-' если пользователь

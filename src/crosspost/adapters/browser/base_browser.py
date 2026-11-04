@@ -133,6 +133,7 @@ async def open_page(
     headless: bool = False,
     session_channel: str | None = None,
     storage_state: Any = _FROM_FILE,
+    proxy_url: str = "",
 ) -> AsyncGenerator:
     """PUBLISH/VALIDATE: свежий контекст с загруженным storageState.
 
@@ -164,11 +165,14 @@ async def open_page(
     async with lock:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=headless)
-            context = await browser.new_context(
-                storage_state=storage_state,
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-            )
+            ctx_kwargs: dict[str, Any] = {
+                "storage_state": storage_state,
+                "locale": "ru-RU",
+                "timezone_id": "Europe/Moscow",
+            }
+            if proxy_url:
+                ctx_kwargs["proxy"] = {"server": proxy_url}
+            context = await browser.new_context(**ctx_kwargs)
             page = await context.new_page()
             try:
                 yield page
