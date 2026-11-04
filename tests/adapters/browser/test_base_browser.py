@@ -226,3 +226,85 @@ async def test_open_page_no_proxy_kwarg_when_empty(profiles_root):
             pass
 
     assert "proxy" not in browser.new_context.call_args.kwargs
+
+
+# ── _parse_proxy ──────────────────────────────────────────────────────────────
+
+
+def test_parse_proxy_empty_returns_none():
+    assert bb._parse_proxy("") is None
+
+
+def test_parse_proxy_no_creds():
+    result = bb._parse_proxy("http://proxy.example:3128")
+    assert result == {"server": "http://proxy.example:3128"}
+
+
+def test_parse_proxy_with_credentials():
+    result = bb._parse_proxy("http://user:secret@proxy.example:3128")
+    assert result == {
+        "server": "http://proxy.example:3128",
+        "username": "user",
+        "password": "secret",
+    }
+
+
+def test_parse_proxy_password_not_in_server():
+    result = bb._parse_proxy("http://user:secret@proxy.example:3128")
+    assert result is not None
+    assert "secret" not in result["server"]
+
+
+# ── WebRTC disable args ───────────────────────────────────────────────────────
+
+
+async def test_open_page_webrtc_args_added_when_proxy(profiles_root):
+    """proxy_url → chromium.launch() получает --disable-webrtc."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True, proxy_url="http://proxy:3128"):
+            pass
+
+    launch_args = pw.chromium.launch.call_args.kwargs.get("args", [])
+    assert "--disable-webrtc" in launch_args
+
+
+async def test_open_page_no_webrtc_args_without_proxy(profiles_root):
+    """proxy_url='' → chromium.launch() не получает WebRTC-аргументы."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True):
+            pass
+
+    launch_kwargs = pw.chromium.launch.call_args.kwargs
+    assert "args" not in launch_kwargs or "--disable-webrtc" not in launch_kwargs.get("args", [])
+
+
+# ── login_context proxy ───────────────────────────────────────────────────────
+
+
+async def test_login_context_passes_proxy_to_launch_persistent_context(profiles_root):
+    """login_context(proxy_url=...) → launch_persistent_context получает proxy и WebRTC-args."""
+    pw, context, page = _fake_playwright_for_login()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.login_context("yandex", headless=True, proxy_url="http://proxy:8080"):
+            pass
+
+    kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
+    assert kwargs.get("proxy") == {"server": "http://proxy:8080"}
+    assert "--disable-webrtc" in kwargs.get("args", [])
+
+
+async def test_login_context_no_proxy_when_empty(profiles_root):
+    """login_context без proxy_url → launch_persistent_context не получает proxy."""
+    pw, context, page = _fake_playwright_for_login()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.login_context("yandex", headless=True):
+            pass
+
+    kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
+    assert "proxy" not in kwargs

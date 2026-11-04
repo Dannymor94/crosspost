@@ -24,9 +24,11 @@ telegram_login. Один процесс-владелец (uvicorn, 1 ворке�
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
+from crosspost.adapters.browser.base_browser import _WEBRTC_DISABLE_ARGS, _parse_proxy
 from crosspost.channels.validators import VALIDATORS
 
 logger = logging.getLogger(__name__)
@@ -53,16 +55,24 @@ class _LiveLogin:
 _SESSIONS: dict[tuple[int, str], _LiveLogin] = {}
 
 
-async def _launch(headless: bool = False) -> tuple[Any, Any, Any, Any]:
+async def _launch(headless: bool = False, proxy_url: str = "") -> tuple[Any, Any, Any, Any]:
     """Поднять браузер и СВЕЖИЙ ПУСТОЙ контекст. Подменяется в тестах.
 
     Пустой контекст = никаких кук: пользователь обязан войти руками.
+    proxy_url применяется ко ВСЕМ запросам; при наличии — WebRTC отключается.
     """
     from playwright.async_api import async_playwright
 
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=headless)
-    context = await browser.new_context(locale="ru-RU", timezone_id="Europe/Moscow")
+    proxy = _parse_proxy(proxy_url)
+    launch_kwargs: dict[str, Any] = {"headless": headless}
+    if proxy:
+        launch_kwargs["args"] = _WEBRTC_DISABLE_ARGS
+    browser = await pw.chromium.launch(**launch_kwargs)
+    ctx_kwargs: dict[str, Any] = {"locale": "ru-RU", "timezone_id": "Europe/Moscow"}
+    if proxy:
+        ctx_kwargs["proxy"] = proxy
+    context = await browser.new_context(**ctx_kwargs)
     page = await context.new_page()
     return pw, browser, context, page
 
@@ -96,7 +106,8 @@ async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str
     v = _validator(channel)
     await cancel(profile_id, channel)  # закрыть возможное недоделанное окно
 
-    pw, browser, context, page = await _launch(headless=headless)
+    proxy_url = os.environ.get(v.proxy_env_var, "") if v.proxy_env_var else ""
+    pw, browser, context, page = await _launch(headless=headless, proxy_url=proxy_url)
     session_key = v.session_channel or channel
     _SESSIONS[(profile_id, channel)] = _LiveLogin(
         profile_id=profile_id,

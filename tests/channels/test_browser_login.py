@@ -82,12 +82,14 @@ def _install_launch(monkeypatch, state: dict, *, land_url=None, has_login_text=F
     browser = _FakeBrowser()
     ctx = _FakeContext(state)
     page = _FakePage(land_url=land_url, has_login_text=has_login_text)
+    captured: dict = {}
 
-    async def fake_launch(headless=False):
+    async def fake_launch(headless=False, proxy_url=""):
+        captured["proxy_url"] = proxy_url
         return pw, browser, ctx, page
 
     monkeypatch.setattr(bl, "_launch", fake_launch)
-    return pw, browser, ctx, page
+    return pw, browser, ctx, page, captured
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +100,7 @@ def _clear():
 
 
 async def test_begin_opens_empty_context_on_login_page(monkeypatch):
-    pw, browser, ctx, page = _install_launch(monkeypatch, {"cookies": []})
+    pw, browser, ctx, page, _ = _install_launch(monkeypatch, {"cookies": []})
 
     session_key = await bl.begin(1, "vk_wall")
 
@@ -108,7 +110,7 @@ async def test_begin_opens_empty_context_on_login_page(monkeypatch):
 
 
 async def test_confirm_success_when_on_feed_with_cookies(monkeypatch):
-    pw, browser, ctx, page = _install_launch(monkeypatch, _VK_STATE)  # feed, куки vk.com
+    pw, browser, ctx, page, _ = _install_launch(monkeypatch, _VK_STATE)  # feed, куки vk.com
 
     await bl.begin(1, "vk_wall")
     result = await bl.confirm(1, "vk_wall")
@@ -192,7 +194,7 @@ async def test_isolation_two_profiles_independent(monkeypatch):
 
 
 async def test_cancel_closes_window(monkeypatch):
-    pw, browser, ctx, page = _install_launch(monkeypatch, {"cookies": []})
+    pw, browser, ctx, page, _ = _install_launch(monkeypatch, {"cookies": []})
     await bl.begin(1, "vk_wall")
 
     await bl.cancel(1, "vk_wall")
@@ -203,6 +205,26 @@ async def test_cancel_closes_window(monkeypatch):
 async def test_begin_rejects_non_browser_channel(monkeypatch):
     with pytest.raises(bl.BrowserLoginError, match="не браузерный"):
         await bl.begin(1, "telegram")
+
+
+async def test_begin_passes_proxy_from_env(monkeypatch):
+    """begin() читает proxy_env_var из декларации канала и передаёт в _launch."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://ru-proxy:3128")
+    _, _, _, _, captured = _install_launch(monkeypatch, _VK_STATE)
+
+    await bl.begin(1, "vk_wall")
+
+    assert captured["proxy_url"] == "http://ru-proxy:3128"
+
+
+async def test_begin_passes_empty_proxy_when_env_not_set(monkeypatch):
+    """begin() без переменной прокси → proxy_url='' в _launch."""
+    monkeypatch.delenv("VK_PROXY_URL", raising=False)
+    _, _, _, _, captured = _install_launch(monkeypatch, _VK_STATE)
+
+    await bl.begin(1, "vk_wall")
+
+    assert captured["proxy_url"] == ""
 
 
 # ── Диагностика / хелперы (юнит) ──────────────────────────────────────────────

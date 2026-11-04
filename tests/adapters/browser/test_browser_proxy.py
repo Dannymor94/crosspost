@@ -46,3 +46,10 @@ def test_adapter_proxy_url_empty_when_env_not_set(monkeypatch, store):
     monkeypatch.delenv("VK_PROXY_URL", raising=False)
     adapter = _build_browser("vk_wall", "{}", store, "mygroup")
     assert adapter._proxy_url == ""
+
+
+def test_adapter_proxy_url_with_credentials(monkeypatch, store):
+    """Прокси с логином:паролем хранится как есть в адаптере (парсинг — в base_browser)."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://user:secret@ru-proxy:3128")
+    adapter = _build_browser("vk_wall", "{}", store, "mygroup")
+    assert adapter._proxy_url == "http://user:secret@ru-proxy:3128"

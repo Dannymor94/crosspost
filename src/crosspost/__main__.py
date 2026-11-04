@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -127,6 +128,7 @@ async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
         is_logged_in,
         login_context,
     )
+    from crosspost.channels.validators import VALIDATORS as _VALIDATORS
 
     if channel not in _LOGIN_SUPPORTED:
         print(f"login: канал {channel!r} не поддерживает браузерный логин")
@@ -141,10 +143,13 @@ async def _run_login(channel: str, cfg: dict, *, _input=None) -> int:
         print(msg)
         await asyncio.get_event_loop().run_in_executor(None, wait)
 
+    _v = _VALIDATORS.get(channel)
+    _proxy_url = os.environ.get(_v.proxy_env_var, "") if (_v and _v.proxy_env_var) else ""
+
     print(f"Открываю браузер для {channel} ({url}) ...")
     # ЛОГИН всегда headful: пользователь входит руками. BROWSER_HEADLESS сюда
     # НЕ применяется (флаг — только для публикации, см. config.browser_headless).
-    async with login_context(channel, headless=False) as (page, save_state):
+    async with login_context(channel, headless=False, proxy_url=_proxy_url) as (page, save_state):
         await page.goto(url, wait_until="domcontentloaded")
         print("\nВойдите в аккаунт в открывшемся браузере.")
         print("ВАЖНО: не закрывайте браузер вручную. Дождитесь РАБОЧЕГО кабинета,")

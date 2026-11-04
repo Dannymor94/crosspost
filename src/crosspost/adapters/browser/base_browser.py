@@ -40,11 +40,36 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 _PROFILES_ROOT_DEFAULT = "runtime/browser_profiles"
 _SCREENSHOT_ROOT_DEFAULT = "runtime/logs/screenshots"
+
+# Chromium args that prevent WebRTC from bypassing the proxy via direct UDP.
+# Applied whenever a proxy is configured.
+_WEBRTC_DISABLE_ARGS = ["--disable-webrtc"]
+
+
+def _parse_proxy(url: str) -> dict[str, str] | None:
+    """Parse proxy URL into a Playwright proxy dict, splitting out credentials.
+
+    Returns None when url is empty.
+    For scheme://user:pass@host:port returns {"server":..., "username":..., "password":...}.
+    For scheme://host:port returns {"server": url}.
+    Password is never logged — callers log only the server portion if needed.
+    """
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.username:
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        server = f"{parsed.scheme}://{host}{port}"
+        return {"server": server, "username": parsed.username, "password": parsed.password or ""}
+    return {"server": url}
+
 
 # Сентинел «сессию брать из файла» (CLI-режим). UI ВСЕГДА передаёт storage_state
 # явно (dict / JSON-строка / None) — из credentials профиля, не из общего файла.
@@ -162,16 +187,20 @@ async def open_page(
         storage_state = _coerce_storage_state(storage_state)
 
     lock = _lock_for(session_key)
+    proxy = _parse_proxy(proxy_url)
     async with lock:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=headless)
+            launch_kwargs: dict[str, Any] = {"headless": headless}
+            if proxy:
+                launch_kwargs["args"] = _WEBRTC_DISABLE_ARGS
+            browser = await pw.chromium.launch(**launch_kwargs)
             ctx_kwargs: dict[str, Any] = {
                 "storage_state": storage_state,
                 "locale": "ru-RU",
                 "timezone_id": "Europe/Moscow",
             }
-            if proxy_url:
-                ctx_kwargs["proxy"] = {"server": proxy_url}
+            if proxy:
+                ctx_kwargs["proxy"] = proxy
             context = await browser.new_context(**ctx_kwargs)
             page = await context.new_page()
             try:
@@ -196,6 +225,7 @@ async def login_context(
     channel: str,
     *,
     headless: bool = False,
+    proxy_url: str = "",
 ) -> AsyncGenerator:
     """LOGIN (CLI): persistent-контекст для ручного входа + экспорт storageState в файл.
 
@@ -215,14 +245,18 @@ async def login_context(
     p.mkdir(parents=True, exist_ok=True)
 
     lock = _lock_for(channel)
+    proxy = _parse_proxy(proxy_url)
     async with lock:
         async with async_playwright() as pw:
-            context = await pw.chromium.launch_persistent_context(
-                str(p),
-                headless=headless,
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-            )
+            lpc_kwargs: dict[str, Any] = {
+                "headless": headless,
+                "locale": "ru-RU",
+                "timezone_id": "Europe/Moscow",
+            }
+            if proxy:
+                lpc_kwargs["args"] = _WEBRTC_DISABLE_ARGS
+                lpc_kwargs["proxy"] = proxy
+            context = await pw.chromium.launch_persistent_context(str(p), **lpc_kwargs)
             page = context.pages[0] if context.pages else await context.new_page()
 
             async def save_state() -> Path:

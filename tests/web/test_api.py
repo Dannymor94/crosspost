@@ -514,7 +514,7 @@ def _patch_browser_login(state_dict: dict, *, logged_in: bool = True):
     from crosspost.adapters.browser import base_browser as bb
     from crosspost.channels import browser_login as bl
 
-    async def fake_launch(headless=False):
+    async def fake_launch(headless=False, proxy_url=""):
         pw, browser, context, page = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
         context.storage_state = AsyncMock(return_value=state_dict)
         # После confirm probe навигирует сюда; URL решает, «вошёл» ли пользователь.
