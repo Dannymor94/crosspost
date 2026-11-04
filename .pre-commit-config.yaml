@@ -17,6 +17,8 @@ repos:
         additional_dependencies:
           - pydantic==2.13.4
           - python-dotenv==1.2.2
+          - alembic==1.18.5
+          - sqlalchemy==2.0.51
 
   - repo: local
     hooks:

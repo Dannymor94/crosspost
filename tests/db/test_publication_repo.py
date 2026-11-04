@@ -163,30 +163,25 @@ async def test_migration_rebuilds_old_publications_preserving_rows(tmp_path):
     db_file = tmp_path / "legacy.sqlite3"
     # Старая схема publications (до мультицелей): UNIQUE без target.
     con = sqlite3.connect(db_file)
+    # Полная историческая база из исходной ревизии Alembic.
+    from sqlalchemy import create_engine
+
+    from alembic import command
+    from crosspost.db.migration_runner import migration_config
+
+    sync_engine = create_engine(f"sqlite:///{db_file}")
+    with sync_engine.begin() as connection:
+        config = migration_config()
+        config.attributes["connection"] = connection
+        command.upgrade(config, "85b6d4dfff8f")
+    sync_engine.dispose()
     con.executescript(
         """
-        CREATE TABLE profiles (
-            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-            name VARCHAR(128) NOT NULL,
-            created_at DATETIME
-        );
-        CREATE TABLE publications (
-            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-            profile_id INTEGER NOT NULL REFERENCES profiles (id) ON DELETE CASCADE,
-            publication_id VARCHAR(64) NOT NULL,
-            channel VARCHAR(64) NOT NULL,
-            status VARCHAR(32) NOT NULL,
-            external_id VARCHAR(255),
-            error TEXT,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            created_at DATETIME,
-            updated_at DATETIME,
-            CONSTRAINT uq_publication UNIQUE (profile_id, publication_id, channel)
-        );
+        DELETE FROM alembic_version;
         INSERT INTO profiles (id, name) VALUES (1, 'p');
         INSERT INTO publications
-            (profile_id, publication_id, channel, status, external_id, attempt_count)
-        VALUES (1, 'old1', 'telegram', 'done', 'ext-1', 3);
+            (profile_id, publication_id, channel, status, external_id, attempt_count, updated_at)
+        VALUES (1, 'old1', 'telegram', 'done', 'ext-1', 3, CURRENT_TIMESTAMP);
         """
     )
     con.commit()
