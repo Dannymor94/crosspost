@@ -75,6 +75,11 @@ async def build_adapter(channel: str, store, *, schedule: datetime | None = None
             client, target=cfg["TG_TARGET_CHANNEL"], store=store, schedule=schedule
         )
 
+    if channel == "vk":
+        raise ValueError(
+            "канал 'vk' удалён — используйте 'vk_wall' для публикации в сообщество ВКонтакте"
+        )
+
     if channel == "vk_api":
         # API-тир ВК — оставлен на случай появления рабочего user-токена.
         from vkbottle import API
@@ -167,7 +172,12 @@ async def _run(
             print(f"✗ {ch}: тип {content.type.value} не поддерживается")
             failures += 1
             continue
-        adapter = await build_adapter(ch, store, schedule=schedule)
+        try:
+            adapter = await build_adapter(ch, store, schedule=schedule)
+        except ValueError as exc:
+            print(f"✗ {ch}: {exc}")
+            failures += 1
+            continue
         result = await adapter.publish(content, publication_id=publication_id)
         mark = "✓" if result.error is None else "✗"
         print(
@@ -314,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--text", default="")
     p.add_argument("--title", default=None)
     p.add_argument("--image", action="append", default=[], help="путь к медиа (можно несколько)")
-    p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk")
+    p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk_wall")
     p.add_argument("--state", default=None, help="путь к JSON-стору (устарело; умолч. → SQLite)")
     p.add_argument("--profile", type=int, default=1, help="profile_id в БД (умолч. 1)")
     p.add_argument(

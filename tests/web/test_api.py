@@ -689,6 +689,44 @@ async def test_browser_login_begin_proxy_missing_returns_400(client: AsyncClient
     assert "VK_PROXY_URL" in resp.json()["detail"]
 
 
+async def test_browser_login_begin_unreachable_proxy_returns_400(
+    client: AsyncClient, monkeypatch
+) -> None:
+    """Proxy env set but unreachable → begin() raises RuntimeError → 400, no opening state."""
+    from crosspost.channels import browser_login as bl
+
+    monkeypatch.setenv("VK_PROXY_URL", "http://dead-proxy:3128")
+
+    r = await client.post("/api/profiles", json={"name": "proxy-fail"})
+    pid = r.json()["id"]
+
+    direct_calls: list[str] = []
+
+    async def fake_launch_proxy_fails(headless=False, proxy_url=""):
+        pw, browser, context, page = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+        context.storage_state = AsyncMock(return_value={})
+
+        async def _goto(url, **kwargs):
+            if proxy_url:
+                raise Exception("net::ERR_PROXY_CONNECTION_FAILED")
+            # Direct fallback must not happen.
+            direct_calls.append(url)
+
+        page.goto = _goto
+        return pw, browser, context, page
+
+    with (
+        patch.object(bl, "_launch", fake_launch_proxy_fails),
+        patch.object(bl, "_get_proxy", lambda ch: {"server": "http://dead-proxy:3128"}),
+    ):
+        resp = await client.post(f"/api/profiles/{pid}/channels/vk_wall/browser-login/begin")
+
+    assert resp.status_code == 400
+    assert "прокси" in resp.json()["detail"].lower()
+    assert not direct_calls, "browser went direct after proxy failed — not allowed"
+    assert (pid, "vk_wall") not in bl._SESSIONS
+
+
 async def test_connect_rejects_interactive_channel(client: AsyncClient) -> None:
     resp = await client.post("/api/profiles", json={"name": "ivan"})
     pid = resp.json()["id"]

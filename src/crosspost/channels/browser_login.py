@@ -112,7 +112,7 @@ async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str
     proxy_url = os.environ.get(v.proxy_env_var, "") if v.proxy_env_var else ""
     pw, browser, context, page = await _launch(headless=headless, proxy_url=proxy_url)
     session_key = v.session_channel or channel
-    _SESSIONS[(profile_id, channel)] = _LiveLogin(
+    sess = _LiveLogin(
         profile_id=profile_id,
         channel=channel,
         session_key=session_key,
@@ -121,9 +121,19 @@ async def begin(profile_id: int, channel: str, *, headless: bool = False) -> str
         context=context,
         page=page,
     )
+    _SESSIONS[(profile_id, channel)] = sess
     try:
         await page.goto(v.login_url, wait_until="domcontentloaded", timeout=30_000)
-    except Exception as exc:  # noqa: BLE001 — окно оставляем открытым даже при флаки-goto
+    except Exception as exc:  # noqa: BLE001
+        if proxy_url:
+            # Proxy unreachable: clean up and surface as a user-visible error.
+            # Direct fallback must not happen — raise so the route returns 400.
+            _SESSIONS.pop((profile_id, channel), None)
+            await _close(sess)
+            raise RuntimeError(
+                f"Не удалось подключиться через прокси для канала {channel!r}: {exc}"
+            ) from exc
+        # No proxy configured — a flaky goto keeps the window open for the user.
         logger.debug("login goto failed for %s: %s", channel, exc)
     return session_key
 

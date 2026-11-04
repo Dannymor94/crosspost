@@ -84,6 +84,12 @@ async def test_builds_telegram_adapter_starts_and_persists_session(store, fake_c
     assert Path(fake_cfg["TG_SESSION_PATH"]).read_text() == "SAVED_STRING_SESSION"
 
 
+async def test_vk_removed_raises_clear_error(store):
+    """build_adapter('vk') → ValueError with helpful message pointing to vk_wall."""
+    with pytest.raises(ValueError, match="vk_wall"):
+        await cli.build_adapter("vk", store)
+
+
 async def test_builds_vk_api_adapter(store, fake_vkbottle):
     """'vk_api' → VKAdapter (API-тир, ждёт рабочий токен)."""
     adapter = await cli.build_adapter("vk_api", store)
