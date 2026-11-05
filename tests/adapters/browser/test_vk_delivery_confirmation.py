@@ -330,4 +330,4 @@ async def test_late_old_matching_post_is_only_submitted(store, publication_id, m
         result = await adapter.publish(content, publication_id=publication_id)
         again = await adapter.publish(content, publication_id=publication_id)
     assert result.status is ResultStatus.SUBMITTED
-    assert again.status is ResultStatus.SKIPPED
+    assert again.status is ResultStatus.SUBMITTED

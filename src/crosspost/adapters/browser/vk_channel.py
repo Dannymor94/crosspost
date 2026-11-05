@@ -143,7 +143,7 @@ class VKChannelBrowserAdapter:
     ) -> ChannelResult:
         # 1) идемпотентность
         if await self._store.is_done(publication_id, self.channel):
-            return ChannelResult(self.channel, ResultStatus.SKIPPED)
+            return ChannelResult(self.channel, ResultStatus.SUBMITTED)
 
         # Сессию берём из vk_wall — тот же аккаунт ВК, не логинимся дважды.
         async with open_page(

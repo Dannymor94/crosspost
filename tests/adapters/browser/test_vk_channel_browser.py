@@ -140,7 +140,7 @@ async def test_skips_when_already_published(store, publication_id, sample_post):
     with patch("crosspost.adapters.browser.vk_channel.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.SKIPPED
+    assert result.status is ResultStatus.SUBMITTED
     mock_op.assert_not_called()
 
 

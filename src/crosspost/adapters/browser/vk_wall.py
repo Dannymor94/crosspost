@@ -111,7 +111,7 @@ class VKWallBrowserAdapter:
     ) -> ChannelResult:
         # 1) идемпотентность
         if await self._store.is_done(publication_id, self.channel):
-            return ChannelResult(self.channel, ResultStatus.SKIPPED)
+            return ChannelResult(self.channel, ResultStatus.SUBMITTED)
 
         async with open_page(
             self.channel,
