@@ -267,37 +267,99 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
 
 
 @pytest.mark.asyncio
-async def test_verify_network_error_is_not_done(store, publication_id):
-    """Потеря связи при verify-after-send → RuntimeError, mark_done не вызван.
+async def test_old_post_captured_in_baseline_no_false_done(store, publication_id, monkeypatch):
+    """Старый пост дорисовывается В ПРОЦЕССЕ стабилизации → попадает в снимок.
 
-    Инвариант §3.3: verify обязателен. Провал verify = не done.
+    После отправки _wait_for_post видит старый пост как known_id и не принимает
+    его за новый — возвращает ID именно нового поста. Ложного DONE нет.
     """
     adapter = _make_adapter(store)
-    content = CanonicalContent(type=ContentType.POST, text="тест verify", media_paths=[])
+    old_id, new_id = "wall-123_100", "wall-123_200"
+    old_text, new_text = "старый пост", "новый пост"
 
+    # Последовательность _read_posts:
+    # читение 1 (стабилизация): пусто — старый пост ещё не отрисован
+    # чтение 2 (стабилизация): появился старый пост — не стабильно
+    # чтение 3 (стабилизация): то же — стабильно → baseline = {old_id}
+    # чтение 4+ (_wait_for_post): после отправки новый пост тоже виден
+    call_idx = [0]
+    sequence = [
+        {},
+        {old_id: old_text},
+        {old_id: old_text},
+        {old_id: old_text, new_id: new_text},
+    ]
+
+    async def _mock_read(page):
+        idx = call_idx[0]
+        call_idx[0] += 1
+        return sequence[min(idx, len(sequence) - 1)]
+
+    monkeypatch.setattr(adapter, "_read_posts", _mock_read)
+
+    content = CanonicalContent(type=ContentType.POST, text=new_text, media_paths=[])
     page = _make_page()
-    original_locator = page.locator.side_effect
-    submitted = False
 
-    async def fail_after_send(*args, **kwargs):
-        nonlocal submitted
-        submitted = True
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
 
-    def locator(selector, **kwargs):
-        loc = original_locator(selector, **kwargs)
-        if "posting_confirm_screen_submit" in selector:
-            loc.first.click.side_effect = fail_after_send
-        if selector == "[data-post-id], .wall_post_cont":
+    assert result.status is ResultStatus.DONE
+    assert result.external_id == new_id, (
+        f"ожидали {new_id!r}, получили {result.external_id!r} — старый пост попал в DONE"
+    )
+    assert await store.is_done(publication_id, "vk_wall")
 
-            async def posts():
-                if submitted:
-                    raise OSError("ERR_PROXY_CONNECTION_FAILED")
-                return []
 
-            loc.all.side_effect = posts
-        return loc
+@pytest.mark.asyncio
+async def test_stabilization_timeout_raises_not_done(store, publication_id, monkeypatch):
+    """Лента никогда не стабилизируется → RuntimeError, отправка не делается.
 
-    page.locator.side_effect = locator
+    Инвариант §3.3: неопределённое состояние ленты = не отправлять вслепую.
+    """
+    from crosspost.adapters.browser import vk_wall as mod
+
+    monkeypatch.setattr(mod, "_STABILIZE_POLLS", 4)  # быстрее в тесте
+
+    adapter = _make_adapter(store)
+    call_idx = [0]
+
+    async def _always_different(page):
+        call_idx[0] += 1
+        return {f"wall-id-{call_idx[0]}": "text"}  # каждый раз новый ключ
+
+    monkeypatch.setattr(adapter, "_read_posts", _always_different)
+
+    content = CanonicalContent(type=ContentType.POST, text="тест", media_paths=[])
+    page = _make_page()
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        with pytest.raises(RuntimeError, match="не стабилизировалась"):
+            await adapter.publish(content, publication_id=publication_id)
+
+    assert not await store.is_done(publication_id, "vk_wall"), (
+        "отправлять вслепую запрещено — mark_done не должен вызываться"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id, monkeypatch):
+    """Сетевая ошибка при _read_posts во время verify-after-send → не done.
+
+    Инвариант §3.3: провал verify = не done.
+    """
+    adapter = _make_adapter(store)
+    call_idx = [0]
+
+    async def _read_then_fail(page):
+        call_idx[0] += 1
+        if call_idx[0] <= 2:  # стабилизация проходит с пустой лентой
+            return {}
+        raise OSError("ERR_PROXY_CONNECTION_FAILED")  # прокси упал после отправки
+
+    monkeypatch.setattr(adapter, "_read_posts", _read_then_fail)
+
+    content = CanonicalContent(type=ContentType.POST, text="тест verify", media_paths=[])
+    page = _make_page()
 
     with _patch_open_page(page), _patch_logged_in(True):
         with pytest.raises((RuntimeError, OSError)):

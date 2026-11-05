@@ -77,6 +77,12 @@ _NAV_TIMEOUT = 15_000
 _MODAL_TIMEOUT = 10_000
 _PHOTO_TIMEOUT = 15_000
 _POST_APPEAR_TIMEOUT = 20_000
+
+# Стабилизация ленты до отправки
+# Два подряд одинаковых чтения с паузой = лента устоялась.
+# Максимум: _STABILIZE_POLLS × _STABILIZE_PAUSE_MS мс ожидания.
+_STABILIZE_POLLS = 8  # max 8 чтений, итого до 4 с
+_STABILIZE_PAUSE_MS = 500  # пауза между чтениями
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -127,10 +133,10 @@ class VKWallBrowserAdapter:
                     error="ВК: сессия протухла, выполни crosspost login --channel vk_wall",
                 )
 
-            # 4) verify-before-retry: пост уже есть в ленте — не дублируем
+            # 4) стабилизация ленты → базовое множество id перед отправкой
             if not content.text.strip():
                 raise RuntimeError("vk_wall: без текста невозможно подтвердить публикацию в ленте")
-            posts = await self._read_posts(page)
+            posts = await self._stabilize_posts(page)
             recovered_id = self._find_post(posts, content.text)
             if recovered_id:
                 await self._store.mark_done(publication_id, self.channel, external_id=recovered_id)
@@ -235,6 +241,26 @@ class VKWallBrowserAdapter:
 
         return await self._wait_for_post(page, text, known_ids)
 
+    async def _stabilize_posts(self, page) -> dict[str, str]:
+        """Читать ленту, пока два подряд чтения не дадут одинаковый набор id.
+
+        Гарантирует: все посты, отрисованные ДО отправки, попадут в базовое
+        множество → _wait_for_post не примет старый пост за новый.
+        Если за _STABILIZE_POLLS чтений стабилизации нет → не отправляем вслепую.
+        """
+        prev_keys: frozenset[str] | None = None
+        for _ in range(_STABILIZE_POLLS):
+            await page.wait_for_timeout(_STABILIZE_PAUSE_MS)
+            curr = await self._read_posts(page)
+            curr_keys = frozenset(curr.keys())
+            if curr_keys == prev_keys:
+                return curr
+            prev_keys = curr_keys
+        raise RuntimeError(
+            "vk_wall: лента не стабилизировалась за отведённое время — "
+            "отправка отменена; следующий retry проверит через verify-before-retry."
+        )
+
     async def _read_posts(self, page) -> dict[str, str]:
         """Прочитать квитанции и текст из ленты; ошибка чтения не означает успех."""
         posts = {}
@@ -247,7 +273,7 @@ class VKWallBrowserAdapter:
     @staticmethod
     def _find_post(posts: dict[str, str], text: str) -> str | None:
         for post_id, post_text in posts.items():
-            if text.strip() and text.strip() in post_text:
+            if text.strip() and " ".join(text.split()) == " ".join(post_text.split()):
                 return post_id
         return None
 
