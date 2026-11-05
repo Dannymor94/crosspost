@@ -305,8 +305,14 @@ class VKChannelBrowserAdapter:
         for _ in range(_VERIFY_POLLS):
             try:
                 text = (await composer.inner_text()).strip()
-            except Exception:
-                return True  # composer исчез из DOM — тоже признак отправки
+            except Exception as exc:
+                # Различаем «элемент ушёл из DOM» (страница жива → пост принят)
+                # от потери связи с браузером (страница мертва → verify провалился).
+                try:
+                    await page.evaluate("1")
+                    return True  # страница жива, composer пропал из DOM = пост отправлен
+                except Exception:
+                    raise exc from None  # сетевая ошибка / прокси упал: не считаем success
             if text == "":
                 return True
             await page.wait_for_timeout(_VERIFY_POLL_INTERVAL)

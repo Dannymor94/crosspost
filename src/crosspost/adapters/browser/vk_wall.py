@@ -271,8 +271,13 @@ class VKWallBrowserAdapter:
             post_id = await post.get_attribute("data-post-id") or ""
             if post_id:
                 return f"wall{post_id}"
-        except Exception:
-            pass
+        except Exception as exc:
+            # Любое исключение здесь означает потерю связи с браузером — POST не верифицирован.
+            # Не записываем done: следующий запуск найдёт пост через verify-before-retry.
+            raise RuntimeError(
+                "vk_wall: не удалось проверить публикацию (потеря связи при verify — "
+                "пост может быть не опубликован). Повторите вручную или дождитесь retry."
+            ) from exc
         return "posted"
 
 

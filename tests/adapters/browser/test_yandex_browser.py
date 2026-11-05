@@ -261,3 +261,25 @@ async def test_external_id_fallback_submitted(store, publication_id, sample_post
 
     assert result.status is ResultStatus.SUBMITTED
     assert result.external_id in ("submitted", "yandex_post:", "") or result.external_id is not None
+
+
+@pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id, sample_post, tmp_path):
+    """Потеря связи при wait_for_card → исключение, mark_done не вызван.
+
+    Яндекс не глотал исключения из _wait_for_card — проверяем что контракт
+    соблюдается: провал verify = не done/submitted.
+    Инвариант §3.3.
+    """
+    adapter = _make_adapter(store, tmp_path)
+    page = _make_page(card_exists=False)
+    # Сетевая ошибка при ожидании карточки (verify-after-send)
+    page.wait_for_function = AsyncMock(side_effect=RuntimeError("ERR_PROXY_CONNECTION_FAILED"))
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        with pytest.raises(RuntimeError):
+            await adapter.publish(sample_post, publication_id=publication_id)
+
+    assert not await store.is_done(publication_id, "yandex"), (
+        "mark_done не должен вызываться, если verify провалился"
+    )

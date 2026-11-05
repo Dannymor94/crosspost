@@ -256,6 +256,84 @@ async def test_photo_upload_stuck_raises_clear_error(store, publication_id, samp
 
 
 @pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id, monkeypatch):
+    """Потеря связи при verify-after-send → исключение, mark_done не вызван.
+
+    _verify_sent: inner_text кидает + page.evaluate кидает = страница мертва = не success.
+    Инвариант §3.3: провал verify ≠ done.
+    """
+    from crosspost.adapters.browser import vk_channel as mod
+
+    monkeypatch.setattr(mod, "_VERIFY_POLLS", 1)  # один опрос для теста
+
+    adapter = _make_adapter(store)
+    content = CanonicalContent(type=ContentType.POST, text="сетевая ошибка", media_paths=[])
+    page = _make_page()
+    page.evaluate = AsyncMock(side_effect=RuntimeError("Target closed"))
+
+    def _locator_dead(selector, **_kw):
+        loc = AsyncMock()
+        loc.first = AsyncMock()
+        loc.first.click = AsyncMock()
+        loc.first.type = AsyncMock()
+        # inner_text кидает — страница умерла (прокси)
+        loc.first.inner_text = AsyncMock(side_effect=RuntimeError("Target closed"))
+        loc.first.count = AsyncMock(return_value=1)
+        loc.count = AsyncMock(return_value=1)
+        loc.nth = MagicMock(return_value=AsyncMock())
+        return loc
+
+    page.locator = MagicMock(side_effect=_locator_dead)
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        with pytest.raises(RuntimeError):
+            await adapter.publish(content, publication_id=publication_id)
+
+    assert not await store.is_done(publication_id, "vk_channel"), (
+        "mark_done не должен вызываться, если verify провалился"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_element_detached_is_done(store, publication_id, monkeypatch):
+    """Composer пропал из DOM, но страница жива → успех, mark_done вызван.
+
+    Это валидный сценарий: ВК убирает composer после отправки.
+    page.evaluate('1') проходит → страница жива → DONE.
+    """
+    from crosspost.adapters.browser import vk_channel as mod
+
+    monkeypatch.setattr(mod, "_VERIFY_POLLS", 1)
+
+    adapter = _make_adapter(store)
+    content = CanonicalContent(type=ContentType.POST, text="composer пропал", media_paths=[])
+    page = _make_page()
+    page.evaluate = AsyncMock(return_value=1)  # страница жива
+
+    def _locator_detached(selector, **_kw):
+        loc = AsyncMock()
+        loc.first = AsyncMock()
+        loc.first.click = AsyncMock()
+        loc.first.type = AsyncMock()
+        # inner_text кидает (элемент ушёл из DOM), но страница жива
+        loc.first.inner_text = AsyncMock(
+            side_effect=RuntimeError("element is not attached to the DOM")
+        )
+        loc.first.count = AsyncMock(return_value=1)
+        loc.count = AsyncMock(return_value=1)
+        loc.nth = MagicMock(return_value=AsyncMock())
+        return loc
+
+    page.locator = MagicMock(side_effect=_locator_detached)
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
+
+    assert result.status is ResultStatus.DONE
+    assert await store.is_done(publication_id, "vk_channel")
+
+
+@pytest.mark.asyncio
 async def test_build_adapter_creates_vk_channel(store):
     from crosspost import __main__ as cli
 

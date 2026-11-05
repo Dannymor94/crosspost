@@ -245,6 +245,45 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
 
 
 @pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id):
+    """Потеря связи при verify-after-send → RuntimeError, mark_done не вызван.
+
+    Инвариант §3.3: verify обязателен. Провал verify = не done.
+    """
+    adapter = _make_adapter(store)
+    content = CanonicalContent(type=ContentType.POST, text="тест verify", media_paths=[])
+
+    def _locator_broken(selector, **_kw):
+        loc = AsyncMock()
+        loc.first = AsyncMock()
+        loc.first.click = AsyncMock()
+        loc.first.fill = AsyncMock()
+        # [data-post-id] — прокси упал при попытке получить id поста
+        if "data-post-id" in str(selector):
+            loc.first.get_attribute = AsyncMock(side_effect=OSError("ERR_PROXY_CONNECTION_FAILED"))
+        else:
+            loc.first.get_attribute = AsyncMock(return_value="")
+        loc.count = AsyncMock(return_value=1)
+        loc.first.count = AsyncMock(return_value=1)
+        # verify-before-retry: пост не найден → не прерываем нормальный флоу
+        loc.all = AsyncMock(
+            return_value=[AsyncMock(inner_text=AsyncMock(return_value="другой пост"))]
+        )
+        return loc
+
+    page = _make_page()
+    page.locator = MagicMock(side_effect=_locator_broken)
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        with pytest.raises((RuntimeError, OSError)):
+            await adapter.publish(content, publication_id=publication_id)
+
+    assert not await store.is_done(publication_id, "vk_wall"), (
+        "mark_done не должен вызываться, если verify провалился"
+    )
+
+
+@pytest.mark.asyncio
 async def test_build_adapter_creates_vk_wall(store, tmp_path):
     """build_adapter('vk_wall') → VKWallBrowserAdapter с правильным screen_name."""
     from crosspost import __main__ as cli
