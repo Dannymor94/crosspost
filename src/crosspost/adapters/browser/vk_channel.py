@@ -12,7 +12,7 @@
   - Фото: кнопка "+" слева от поля → поповер Фото/Видео/… → «Фото» →
     скрытый input[type=file]. Используем set_input_files напрямую, не клик по видимой кнопке.
   - Отправка: Enter в поле ИЛИ кнопка отправки в ChannelComposer__actionsContainer.
-  - Verify: composer очистился ИЛИ пост появился в истории канала (PostsHistory).
+  - Verify: новый пост с нашим текстом и data-itemkey появился в истории канала.
 
 Сессия ПЕРЕИСПОЛЬЗУЕТСЯ из vk_wall — тот же аккаунт ВК, не логинимся дважды:
     open_page(channel, session_channel="vk_wall").
@@ -169,6 +169,19 @@ class VKChannelBrowserAdapter:
                     error="ВК: сессия протухла, выполни crosspost login --channel vk_wall",
                 )
 
+            # Verify-before-retry: присутствие поста подтверждается текстом и ID.
+            if not content.text.strip():
+                raise RuntimeError(
+                    "vk_channel: без текста невозможно подтвердить публикацию в ленте"
+                )
+            posts = await self._read_posts(page)
+            recovered_id = self._matching_post(posts, content.text)
+            if recovered_id:
+                await self._store.mark_done(publication_id, self.channel, external_id=recovered_id)
+                return ChannelResult(
+                    self.channel, ResultStatus.DONE, external_id=recovered_id, url=url
+                )
+
             # 4) ждём composer, вводим текст
             composer = await self._focus_composer(page)
             if content.text:
@@ -180,7 +193,9 @@ class VKChannelBrowserAdapter:
                 await self._attach_photos(page, content.media_paths[:10])
 
             # 6) отправка
-            external_id = await self._send(page, has_media=has_media)
+            external_id = await self._send(
+                page, text=content.text, known_ids=set(posts), has_media=has_media
+            )
 
         await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на сам канал (стабильного пост-URL мессенджер ВК не отдаёт):
@@ -237,7 +252,7 @@ class VKChannelBrowserAdapter:
         except Exception:
             pass  # превью не обязательно — отправка всё равно пройдёт
 
-    async def _send(self, page, *, has_media: bool) -> str:
+    async def _send(self, page, *, text: str, known_ids: set[str], has_media: bool) -> str:
         """Отправить пост кнопкой «Отправить сообщение».
 
         НЕ через Enter первым — в contenteditable Enter делает перенос строки.
@@ -246,10 +261,8 @@ class VKChannelBrowserAdapter:
            осталась disabled/--loading, значит заливка фото упала («Ошибка при
            загрузке») — не кликаем вслепую (это давало 30-сек зависание Playwright).
         2. Кликаем с коротким таймаутом.
-        3. Verify: ВК очистил composer (снято с живого DOM — .ComposerInput__input
-           опустошается ТОЛЬКО после того, как сервер принял пост). Это надёжный
-           сигнал приёма И он ДЕРЖИТ страницу открытой до долёта XHR отправки —
-           раньше ложный verify закрывал браузер до отправки, и пост не уходил.
+        3. Verify: новый пост с нашим текстом и ID появился в истории канала.
+           Состояние composer и локальный JavaScript не подтверждают доставку.
 
         Бросает RuntimeError с человеческой причиной — open_page снимет скриншот.
         """
@@ -284,57 +297,39 @@ class VKChannelBrowserAdapter:
         # 2) клик с коротким таймаутом — кнопка уже готова, ждать 30с незачем
         await page.locator(_SEND_BUTTON_SELECTOR).first.click(timeout=_CLICK_TIMEOUT)
 
-        # 3) verify: ВК очистил composer → пост принят сервером
-        if not await self._verify_sent(page):
-            raise RuntimeError(
-                "vk_channel: пост не отправился (composer не очистился — ВК не принял "
-                "сообщение). Проверьте сессию/содержимое или повторите."
-            )
+        return await self._verify_sent(page, text, known_ids)
 
-        return await self._extract_post_id(page)
+    async def _read_posts(self, page) -> dict[str, str]:
+        """Снять текст и ID из опубликованных записей, не из composer."""
+        posts = {}
+        for post in await page.locator(f"{_POST_ITEM_SELECTOR}[data-itemkey]").all():
+            key = await post.get_attribute("data-itemkey")
+            if key:
+                posts[f"channel-item{key}"] = await post.inner_text()
+        return posts
 
-    async def _verify_sent(self, page) -> bool:
-        """Дождаться, что composer опустел → ВК принял пост (сигнал с живого DOM).
+    @staticmethod
+    def _matching_post(posts: dict[str, str], text: str) -> str | None:
+        for key, post_text in posts.items():
+            if text.strip() and text.strip() in post_text:
+                return key
+        return None
 
-        Contenteditable .ComposerInput__input очищается ТОЛЬКО после успешной
-        отправки на сервер. Пуллим inner_text до пустоты или таймаута. Ожидание
-        держит страницу открытой, пока XHR отправки не долетит (иначе браузер
-        закрывался раньше отправки → пост не уходил, а мы рапортовали done).
+    async def _verify_sent(self, page, text: str, known_ids: set[str]) -> str:
+        """Дождаться нового поста с совпадающим текстом и непустым ID.
+
+        Не читаем composer: очистка/удаление поля возможны и при сетевой ошибке.
+        Ошибка чтения ленты или таймаут оставляют публикацию без checkpoint.
         """
-        composer = page.locator(_COMPOSER_INPUT_SELECTOR).first
         for _ in range(_VERIFY_POLLS):
-            try:
-                text = (await composer.inner_text()).strip()
-            except Exception as exc:
-                # Различаем «элемент ушёл из DOM» (страница жива → пост принят)
-                # от потери связи с браузером (страница мертва → verify провалился).
-                try:
-                    await page.evaluate("1")
-                    return True  # страница жива, composer пропал из DOM = пост отправлен
-                except Exception:
-                    raise exc from None  # сетевая ошибка / прокси упал: не считаем success
-            if text == "":
-                return True
+            posts = await self._read_posts(page)
+            post_id = self._matching_post(
+                {key: value for key, value in posts.items() if key not in known_ids}, text
+            )
+            if post_id:
+                return post_id
             await page.wait_for_timeout(_VERIFY_POLL_INTERVAL)
-        return False
-
-    async def _extract_post_id(self, page) -> str:
-        """Вытащить ключ свежего поста из ленты канала. Фолбэк 'posted'.
-
-        Живой DOM: .PostsList__item[data-itemkey]. Стабильного post-id ВК в ленте
-        не отдаёт (канал-мессенджер), берём data-itemkey последнего элемента —
-        квитанция для верификации, НЕ ключ дедупа (дедуп — по publication_id).
-        """
-        try:
-            items = page.locator(f"{_POST_ITEM_SELECTOR}[data-itemkey]")
-            count = await items.count()
-            if count > 0:
-                key = await items.nth(count - 1).get_attribute("data-itemkey") or ""
-                if key:
-                    return f"channel-item{key}"
-        except Exception:
-            pass
-        return "posted"
+        raise RuntimeError("vk_channel: пост не отправился — доставка в ленте не подтверждена")
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека

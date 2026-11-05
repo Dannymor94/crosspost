@@ -264,7 +264,11 @@ async def test_external_id_fallback_submitted(store, publication_id, sample_post
 
 
 @pytest.mark.asyncio
-async def test_verify_network_error_is_not_done(store, publication_id, sample_post, tmp_path):
+@pytest.mark.parametrize("submit_by_class", [True, False])
+@pytest.mark.parametrize("error", [OSError("proxy lost"), TimeoutError("no card")])
+async def test_verify_network_error_is_not_done(
+    store, publication_id, tmp_path, submit_by_class, error
+):
     """Потеря связи при wait_for_card → исключение, mark_done не вызван.
 
     Яндекс не глотал исключения из _wait_for_card — проверяем что контракт
@@ -272,14 +276,25 @@ async def test_verify_network_error_is_not_done(store, publication_id, sample_po
     Инвариант §3.3.
     """
     adapter = _make_adapter(store, tmp_path)
-    page = _make_page(card_exists=False)
+    page = _make_page(card_exists=False, submit_by_class=submit_by_class)
+    content = CanonicalContent(type=ContentType.POST, text="недоставленный пост", media_paths=[])
     # Сетевая ошибка при ожидании карточки (verify-after-send)
-    page.wait_for_function = AsyncMock(side_effect=RuntimeError("ERR_PROXY_CONNECTION_FAILED"))
+    page.wait_for_function = AsyncMock(side_effect=error)
 
-    with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError):
-            await adapter.publish(sample_post, publication_id=publication_id)
+    with (
+        _patch_open_page(page),
+        _patch_logged_in(True),
+        patch.object(adapter, "_wait_for_card", wraps=adapter._wait_for_card) as verify,
+        patch.object(adapter, "_click_create", wraps=adapter._click_create) as submit,
+    ):
+        with pytest.raises(type(error)):
+            await adapter.publish(content, publication_id=publication_id)
+    submit.assert_awaited_once_with(page)
+    verify.assert_awaited_once_with(page, content.text)
 
+    page.wait_for_function.assert_awaited_once()
+    submit_calls = [c for c in page.locator.call_args_list if c.args[0] == _SUBMIT_SELECTOR]
+    assert submit_calls, "тест обязан дойти до отправки"
     assert not await store.is_done(publication_id, "yandex"), (
         "mark_done не должен вызываться, если verify провалился"
     )

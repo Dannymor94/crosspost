@@ -35,11 +35,25 @@ def _make_page(
     page = AsyncMock()
     page.url = "https://vk.com/medithou"
 
+    sent = False
+    filled_text = ""
+
+    async def fill(text):
+        nonlocal filled_text
+        filled_text = text
+
+    async def send(*args, **kwargs):
+        nonlocal sent
+        sent = True
+
     def _locator(selector, **_kw):
         loc = AsyncMock()
         loc.first = AsyncMock()
         loc.first.click = AsyncMock()
-        loc.first.fill = AsyncMock()
+        loc.first.fill = AsyncMock(side_effect=fill)
+        loc.fill = AsyncMock(side_effect=fill)
+        if "posting_confirm_screen_submit" in selector:
+            loc.first.click.side_effect = send
         loc.first.get_attribute = AsyncMock(return_value=post_data_id)
 
         # .count() — по умолчанию 1, для file-input управляем параметром
@@ -57,7 +71,15 @@ def _make_page(
         post_mock.inner_text = AsyncMock(
             return_value=post_text_match if post_exists else "другой пост"
         )
-        loc.all = AsyncMock(return_value=[post_mock])
+        post_mock.get_attribute = AsyncMock(return_value=post_data_id)
+
+        async def posts():
+            if sent:
+                post_mock.inner_text.return_value = filled_text
+                return [post_mock]
+            return [post_mock] if post_exists else []
+
+        loc.all = AsyncMock(side_effect=posts)
         return loc
 
     page.locator = MagicMock(side_effect=_locator)
@@ -147,7 +169,7 @@ async def test_verify_before_retry_finds_existing_post(store, publication_id):
         result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.DONE
-    assert result.external_id == "posted:recovered"
+    assert result.external_id == "wall-123456_789"
     assert await store.is_done(publication_id, "vk_wall")
     # до формы не дошли
     page.get_by_role.assert_not_called()
@@ -253,26 +275,29 @@ async def test_verify_network_error_is_not_done(store, publication_id):
     adapter = _make_adapter(store)
     content = CanonicalContent(type=ContentType.POST, text="тест verify", media_paths=[])
 
-    def _locator_broken(selector, **_kw):
-        loc = AsyncMock()
-        loc.first = AsyncMock()
-        loc.first.click = AsyncMock()
-        loc.first.fill = AsyncMock()
-        # [data-post-id] — прокси упал при попытке получить id поста
-        if "data-post-id" in str(selector):
-            loc.first.get_attribute = AsyncMock(side_effect=OSError("ERR_PROXY_CONNECTION_FAILED"))
-        else:
-            loc.first.get_attribute = AsyncMock(return_value="")
-        loc.count = AsyncMock(return_value=1)
-        loc.first.count = AsyncMock(return_value=1)
-        # verify-before-retry: пост не найден → не прерываем нормальный флоу
-        loc.all = AsyncMock(
-            return_value=[AsyncMock(inner_text=AsyncMock(return_value="другой пост"))]
-        )
+    page = _make_page()
+    original_locator = page.locator.side_effect
+    submitted = False
+
+    async def fail_after_send(*args, **kwargs):
+        nonlocal submitted
+        submitted = True
+
+    def locator(selector, **kwargs):
+        loc = original_locator(selector, **kwargs)
+        if "posting_confirm_screen_submit" in selector:
+            loc.first.click.side_effect = fail_after_send
+        if selector == "[data-post-id], .wall_post_cont":
+
+            async def posts():
+                if submitted:
+                    raise OSError("ERR_PROXY_CONNECTION_FAILED")
+                return []
+
+            loc.all.side_effect = posts
         return loc
 
-    page = _make_page()
-    page.locator = MagicMock(side_effect=_locator_broken)
+    page.locator.side_effect = locator
 
     with _patch_open_page(page), _patch_logged_in(True):
         with pytest.raises((RuntimeError, OSError)):
