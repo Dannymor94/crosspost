@@ -179,7 +179,7 @@ class VKChannelBrowserAdapter:
             if recovered_id:
                 await self._store.mark_done(publication_id, self.channel, external_id=recovered_id)
                 return ChannelResult(
-                    self.channel, ResultStatus.DONE, external_id=recovered_id, url=url
+                    self.channel, ResultStatus.SUBMITTED, external_id=recovered_id, url=url
                 )
 
             # 4) ждём composer, вводим текст
@@ -200,7 +200,12 @@ class VKChannelBrowserAdapter:
         await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на сам канал (стабильного пост-URL мессенджер ВК не отдаёт):
         # переход из UI открывает канал, свежий пост виден в ленте.
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
+        return ChannelResult(
+            self.channel,
+            ResultStatus.SUBMITTED,
+            external_id=external_id,
+            url=url,
+        )
 
     # ── внутренние методы ────────────────────────────────────────────────────
 
@@ -252,7 +257,7 @@ class VKChannelBrowserAdapter:
         except Exception:
             pass  # превью не обязательно — отправка всё равно пройдёт
 
-    async def _send(self, page, *, text: str, known_ids: set[str], has_media: bool) -> str:
+    async def _send(self, page, *, text: str, known_ids: set[str], has_media: bool) -> str | None:
         """Отправить пост кнопкой «Отправить сообщение».
 
         НЕ через Enter первым — в contenteditable Enter делает перенос строки.
@@ -297,7 +302,10 @@ class VKChannelBrowserAdapter:
         # 2) клик с коротким таймаутом — кнопка уже готова, ждать 30с незачем
         await page.locator(_SEND_BUTTON_SELECTOR).first.click(timeout=_CLICK_TIMEOUT)
 
-        return await self._verify_sent(page, text, known_ids)
+        try:
+            return await self._verify_sent(page, text, known_ids)
+        except Exception:
+            return None  # клик выполнен; подтверждение доставки недоступно
 
     async def _read_posts(self, page) -> dict[str, str]:
         """Снять текст и ID из опубликованных записей, не из composer."""
@@ -311,15 +319,15 @@ class VKChannelBrowserAdapter:
     @staticmethod
     def _matching_post(posts: dict[str, str], text: str) -> str | None:
         for key, post_text in posts.items():
-            if text.strip() and text.strip() in post_text:
+            if text.strip() and " ".join(text.split()) == " ".join(post_text.split()):
                 return key
         return None
 
     async def _verify_sent(self, page, text: str, known_ids: set[str]) -> str:
-        """Дождаться нового поста с совпадающим текстом и непустым ID.
+        """Дождаться DOM-кандидата с точным текстом и непустым ID.
 
         Не читаем composer: очистка/удаление поля возможны и при сетевой ошибке.
-        Ошибка чтения ленты или таймаут оставляют публикацию без checkpoint.
+        Ошибка чтения ленты или таймаут дают submitted в вызывающем методе.
         """
         for _ in range(_VERIFY_POLLS):
             posts = await self._read_posts(page)

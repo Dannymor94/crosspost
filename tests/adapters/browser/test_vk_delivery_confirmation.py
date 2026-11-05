@@ -161,7 +161,7 @@ _CHANNEL_FAILURES = _COMMON_FAILURES + [
     ]
     + [f"channel-{scenario}" for scenario in _CHANNEL_FAILURES],
 )
-async def test_undelivered_post_never_gets_checkpoint(
+async def test_unconfirmed_send_is_submitted(
     store, publication_id, monkeypatch, module, scenario, tmp_path, fallback
 ):
     monkeypatch.setattr(vk_channel, "_VERIFY_POLLS", 2)
@@ -195,9 +195,15 @@ async def test_undelivered_post_never_gets_checkpoint(
         patch.object(module, "open_page", lambda *a, **kw: _open(page)),
         patch.object(module, "is_logged_in", AsyncMock(return_value=True)),
     ):
-        with pytest.raises((RuntimeError, OSError, TimeoutError)):
-            await adapter.publish(content, publication_id=publication_id)
-    assert not await store.is_done(publication_id, adapter.channel)
+        if scenario in {"snapshot_error", "button_timeout", "send_click_error"}:
+            with pytest.raises((RuntimeError, OSError, TimeoutError)):
+                await adapter.publish(content, publication_id=publication_id)
+            assert not await store.is_done(publication_id, adapter.channel)
+        else:
+            result = await adapter.publish(content, publication_id=publication_id)
+            assert result.status is ResultStatus.SUBMITTED
+            assert result.external_id is None
+            assert await store.is_done(publication_id, adapter.channel)
 
 
 @pytest.mark.asyncio
@@ -221,7 +227,7 @@ async def test_new_matching_receipt_confirms_delivery(
         patch.object(module, "is_logged_in", AsyncMock(return_value=True)),
     ):
         result = await adapter.publish(content, publication_id=publication_id)
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert result.external_id == ("wallnew" if module is vk_wall else "channel-itemnew")
     assert await store.is_done(publication_id, adapter.channel)
 
@@ -241,7 +247,7 @@ async def test_retry_recovers_only_matching_post_with_receipt(store, publication
         patch.object(module, "is_logged_in", AsyncMock(return_value=True)),
     ):
         result = await adapter.publish(content, publication_id=publication_id)
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert result.external_id.endswith("existing")
     assert await store.is_done(publication_id, adapter.channel)
     page.get_by_role.assert_not_called()
@@ -264,3 +270,64 @@ async def test_media_without_searchable_text_cannot_be_acknowledged(store, publi
         with pytest.raises(RuntimeError, match="без текста"):
             await adapter.publish(content, publication_id=publication_id)
     assert not await store.is_done(publication_id, adapter.channel)
+
+
+@pytest.mark.parametrize(
+    "adapter,method",
+    [
+        (vk_wall.VKWallBrowserAdapter, "_find_post"),
+        (vk_channel.VKChannelBrowserAdapter, "_matching_post"),
+    ],
+)
+@pytest.mark.parametrize(
+    "actual,expected",
+    [
+        ("NOT the publication being sent — another post", None),
+        ("the  publication\nbeing\tsent", "receipt"),
+        (TEXT, "receipt"),
+    ],
+)
+def test_matching_requires_entire_normalized_text(adapter, method, actual, expected):
+    assert getattr(adapter, method)({"receipt": actual}, TEXT) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module", [vk_wall, vk_channel])
+async def test_similar_text_does_not_skip_sending(store, publication_id, module):
+    page = _page(
+        module, before=[_post("old", "NOT " + TEXT)], after=[_post("other", "NOT " + TEXT)]
+    )
+    adapter = (
+        vk_wall.VKWallBrowserAdapter("group", store)
+        if module is vk_wall
+        else vk_channel.VKChannelBrowserAdapter("-1", store)
+    )
+    content = CanonicalContent(type=ContentType.POST, text=TEXT, media_paths=[])
+    with (
+        patch.object(module, "open_page", lambda *a, **kw: _open(page)),
+        patch.object(module, "is_logged_in", AsyncMock(return_value=True)),
+    ):
+        result = await adapter.publish(content, publication_id=publication_id)
+    assert result.status is ResultStatus.SUBMITTED
+    assert result.external_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module", [vk_wall, vk_channel])
+async def test_late_old_matching_post_is_only_submitted(store, publication_id, module):
+    # An old post first rendered after two identical baseline reads is not a receipt.
+    page = _page(module, before=[], after=[_post("999", TEXT)])
+    adapter = (
+        vk_wall.VKWallBrowserAdapter("group", store)
+        if module is vk_wall
+        else vk_channel.VKChannelBrowserAdapter("-1", store)
+    )
+    content = CanonicalContent(type=ContentType.POST, text=TEXT, media_paths=[])
+    with (
+        patch.object(module, "open_page", lambda *a, **kw: _open(page)),
+        patch.object(module, "is_logged_in", AsyncMock(return_value=True)),
+    ):
+        result = await adapter.publish(content, publication_id=publication_id)
+        again = await adapter.publish(content, publication_id=publication_id)
+    assert result.status is ResultStatus.SUBMITTED
+    assert again.status is ResultStatus.SKIPPED

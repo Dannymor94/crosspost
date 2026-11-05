@@ -253,6 +253,7 @@ textarea { resize: vertical; min-height: 110px; }
   text-align: center;
   margin-top: 20px;
 }
+.success-card.unconfirmed { border-color: var(--text-2); }
 .success-icon { font-size: 48px; margin-bottom: 12px; }
 .success-title { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
 .success-sub { color: var(--text-2); margin-bottom: 24px; }
@@ -490,7 +491,10 @@ function ComposeView({ user }) {
       if (when === 'now') {
         const r = await api.postForm(`/api/profiles/${pid}/publish`, fd);
         if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
-        setSuccess({ msg: 'Пост опубликован.', sub: '' });
+        const result = await r.json();
+        const feedback = publicationFeedback(result.outcomes || []);
+        if (feedback.error) { setErr(feedback.error); return; }
+        setSuccess(feedback);
       } else {
         fd.append('scheduled_at', new Date(scheduledAt).toISOString());
         const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd);
@@ -513,9 +517,9 @@ function ComposeView({ user }) {
   }
 
   if (success) return html`
-    <div class="success-card">
-      <div class="success-icon">✓</div>
-      <div class="success-title">Готово! ${success.msg}</div>
+    <div class=${`success-card${success.unconfirmed ? ' unconfirmed' : ''}`}>
+      <div class="success-icon">${success.unconfirmed ? '…' : '✓'}</div>
+      <div class="success-title">${success.unconfirmed ? '' : 'Готово! '}${success.msg}</div>
       ${success.sub && html`<div class="success-sub">${success.sub}</div>`}
       <button class="btn btn-primary" onClick=${reset}>Новый пост</button>
     </div>
@@ -592,6 +596,16 @@ function ComposeView({ user }) {
       </button>
     </div>
   `;
+}
+
+function publicationFeedback(outcomes) {
+  if (outcomes.some(o => o.status === 'failed' || o.status === 'needs_relogin')) {
+    return { error: 'Некоторые каналы не приняли публикацию. Проверьте результаты у администратора.' };
+  }
+  const unconfirmed = outcomes.some(o => o.status === 'submitted');
+  return { unconfirmed,
+    msg: unconfirmed ? 'Отправлено, подтверждение недоступно' : 'Пост опубликован.',
+    sub: unconfirmed ? 'Проверьте публикацию в выбранных каналах.' : '' };
 }
 
 // ── My Posts ───────────────────────────────────────────────────────────────────

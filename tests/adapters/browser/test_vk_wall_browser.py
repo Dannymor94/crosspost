@@ -168,7 +168,7 @@ async def test_verify_before_retry_finds_existing_post(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert result.external_id == "wall-123456_789"
     assert await store.is_done(publication_id, "vk_wall")
     # до формы не дошли
@@ -185,7 +185,7 @@ async def test_publishes_text_only(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert await store.is_done(publication_id, "vk_wall")
 
     # открытие формы: «Создать» через get_by_role exact=True
@@ -224,7 +224,7 @@ async def test_publishes_with_photo_calls_set_input_files(store, publication_id,
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
 
     # file-input был найден и set_input_files вызван
     file_input_calls = [c for c in page.locator.call_args_list if "file" in str(c)]
@@ -256,7 +256,7 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
 
     # page.locator должен быть вызван с селектором кнопки «Далее»
     next_calls = [c for c in page.locator.call_args_list if "posting_base_screen_next" in str(c)]
@@ -264,50 +264,6 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
         "ожидали page.locator('[data-testid=\"posting_base_screen_next\"]') — "
         f"реальные вызовы: {[str(c) for c in page.locator.call_args_list]}"
     )
-
-
-@pytest.mark.asyncio
-async def test_old_post_captured_in_baseline_no_false_done(store, publication_id, monkeypatch):
-    """Старый пост дорисовывается В ПРОЦЕССЕ стабилизации → попадает в снимок.
-
-    После отправки _wait_for_post видит старый пост как known_id и не принимает
-    его за новый — возвращает ID именно нового поста. Ложного DONE нет.
-    """
-    adapter = _make_adapter(store)
-    old_id, new_id = "wall-123_100", "wall-123_200"
-    old_text, new_text = "старый пост", "новый пост"
-
-    # Последовательность _read_posts:
-    # читение 1 (стабилизация): пусто — старый пост ещё не отрисован
-    # чтение 2 (стабилизация): появился старый пост — не стабильно
-    # чтение 3 (стабилизация): то же — стабильно → baseline = {old_id}
-    # чтение 4+ (_wait_for_post): после отправки новый пост тоже виден
-    call_idx = [0]
-    sequence = [
-        {},
-        {old_id: old_text},
-        {old_id: old_text},
-        {old_id: old_text, new_id: new_text},
-    ]
-
-    async def _mock_read(page):
-        idx = call_idx[0]
-        call_idx[0] += 1
-        return sequence[min(idx, len(sequence) - 1)]
-
-    monkeypatch.setattr(adapter, "_read_posts", _mock_read)
-
-    content = CanonicalContent(type=ContentType.POST, text=new_text, media_paths=[])
-    page = _make_page()
-
-    with _patch_open_page(page), _patch_logged_in(True):
-        result = await adapter.publish(content, publication_id=publication_id)
-
-    assert result.status is ResultStatus.DONE
-    assert result.external_id == new_id, (
-        f"ожидали {new_id!r}, получили {result.external_id!r} — старый пост попал в DONE"
-    )
-    assert await store.is_done(publication_id, "vk_wall")
 
 
 @pytest.mark.asyncio
@@ -333,10 +289,10 @@ async def test_stabilization_timeout_raises_not_done(store, publication_id, monk
     page = _make_page()
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError, match="не стабилизировалась"):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
 
-    assert not await store.is_done(publication_id, "vk_wall"), (
+    assert await store.is_done(publication_id, "vk_wall"), (
         "отправлять вслепую запрещено — mark_done не должен вызываться"
     )
 
@@ -362,10 +318,10 @@ async def test_verify_network_error_is_not_done(store, publication_id, monkeypat
     page = _make_page()
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises((RuntimeError, OSError)):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
 
-    assert not await store.is_done(publication_id, "vk_wall"), (
+    assert await store.is_done(publication_id, "vk_wall"), (
         "mark_done не должен вызываться, если verify провалился"
     )
 

@@ -141,7 +141,7 @@ class VKWallBrowserAdapter:
             if recovered_id:
                 await self._store.mark_done(publication_id, self.channel, external_id=recovered_id)
                 return ChannelResult(
-                    self.channel, ResultStatus.DONE, external_id=recovered_id, url=url
+                    self.channel, ResultStatus.SUBMITTED, external_id=recovered_id, url=url
                 )
 
             # 5) шаг 1: открыть форму → модалка
@@ -164,7 +164,12 @@ class VKWallBrowserAdapter:
 
         await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на стену сообщества (свежий пост сверху): переход из UI после отправки.
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
+        return ChannelResult(
+            self.channel,
+            ResultStatus.SUBMITTED,
+            external_id=external_id,
+            url=url,
+        )
 
     # ── внутренние методы ────────────────────────────────────────────────────
 
@@ -222,7 +227,7 @@ class VKWallBrowserAdapter:
                 timeout=_PHOTO_TIMEOUT,
             )
 
-    async def _publish_step2(self, page, text: str, known_ids: set[str]) -> str:
+    async def _publish_step2(self, page, text: str, known_ids: set[str]) -> str | None:
         """Шаг 2: финальный экран публикации.
 
         Нажимаем кнопку публикации (несколько кандидатов на случай A/B),
@@ -239,14 +244,15 @@ class VKWallBrowserAdapter:
         else:
             await page.get_by_role("button", name="Опубликовать", exact=True).click()
 
-        return await self._wait_for_post(page, text, known_ids)
+        try:
+            return await self._wait_for_post(page, text, known_ids)
+        except Exception:
+            return None  # клик выполнен; подтверждение доставки недоступно
 
     async def _stabilize_posts(self, page) -> dict[str, str]:
         """Читать ленту, пока два подряд чтения не дадут одинаковый набор id.
 
-        Гарантирует: все посты, отрисованные ДО отправки, попадут в базовое
-        множество → _wait_for_post не примет старый пост за новый.
-        Если за _STABILIZE_POLLS чтений стабилизации нет → не отправляем вслепую.
+        Это эвристика наполнения снимка, а не гарантия загрузки всей истории.
         """
         prev_keys: frozenset[str] | None = None
         for _ in range(_STABILIZE_POLLS):
@@ -256,10 +262,7 @@ class VKWallBrowserAdapter:
             if curr_keys == prev_keys:
                 return curr
             prev_keys = curr_keys
-        raise RuntimeError(
-            "vk_wall: лента не стабилизировалась за отведённое время — "
-            "отправка отменена; следующий retry проверит через verify-before-retry."
-        )
+        return curr
 
     async def _read_posts(self, page) -> dict[str, str]:
         """Прочитать квитанции и текст из ленты; ошибка чтения не означает успех."""
@@ -278,10 +281,10 @@ class VKWallBrowserAdapter:
         return None
 
     async def _wait_for_post(self, page, text: str, known_ids: set[str]) -> str:
-        """Только новый ID с совпадающим текстом подтверждает доставку.
+        """Найти DOM-кандидата с точным текстом и ID вне снимка.
 
         Исчезновение модалки, чужой старый пост и истёкший таймаут не квитанции.
-        Ошибки чтения пробрасываются без mark_done; retry проверит ленту заново.
+        Ошибка чтения обрабатывается вызывающим методом как submitted.
         """
         for _ in range(max(1, _POST_APPEAR_TIMEOUT // 500)):
             posts = await self._read_posts(page)

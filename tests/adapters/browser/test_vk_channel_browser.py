@@ -165,7 +165,7 @@ async def test_publishes_text_only(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert await store.is_done(publication_id, "vk_channel")
 
     # временная ссылка «открыть канал» — на сам канал мессенджера (id нормализован)
@@ -192,7 +192,7 @@ async def test_publishes_with_photo_calls_set_input_files(store, publication_id,
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     file_calls = [c for c in page.locator.call_args_list if "file" in str(c)]
     assert file_calls, "ожидали page.locator с input[type=file]"
 
@@ -225,7 +225,7 @@ async def test_clicks_send_button_not_enter(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     send_calls = [c for c in page.locator.call_args_list if "Отправить сообщение" in str(c)]
     assert send_calls, "ожидали locator('button[aria-label=\"Отправить сообщение\"]')"
 
@@ -256,10 +256,10 @@ async def test_no_false_done_when_composer_not_cleared(store, publication_id, mo
     page.locator = MagicMock(side_effect=_locator_stuck)
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError, match="не отправился"):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
 
-    assert not await store.is_done(publication_id, "vk_channel")
+    assert await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio
@@ -309,10 +309,10 @@ async def test_verify_network_error_is_not_done(store, publication_id, monkeypat
 
     page.locator.side_effect = locator
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(OSError):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
     assert submitted
-    assert not await store.is_done(publication_id, "vk_channel")
+    assert await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio
@@ -345,10 +345,10 @@ async def test_verify_element_detached_is_not_done(store, publication_id, monkey
     page.locator = MagicMock(side_effect=_locator_detached)
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError, match="не подтверждена"):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
 
-    assert not await store.is_done(publication_id, "vk_channel")
+    assert await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio

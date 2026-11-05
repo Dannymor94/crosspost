@@ -43,3 +43,26 @@ Instagram Graph API calls are blocked or severely throttled from Russian IP rang
 ## 2026-10-28 — Dannymor94/ig-probe is a manual diagnostic tool only
 
 The `ig-probe` GitHub Actions repo (`Dannymor94/ig-probe`) was created during development to diagnose Instagram Graph API access from a non-Russian IP. All workflows use `workflow_dispatch` only and are never triggered on a schedule. GitHub Actions terms prohibit using Actions as a general-purpose compute platform; the repo must not gain a `schedule:` trigger or be invoked from production code. Secrets (`IG_TOKEN`) are set immediately before each run and deleted immediately after.
+
+
+## 2026-11-05 — VK: submitted без реальной квитанции (T-208, T-502)
+
+`vk_wall` и `vk_channel` после выполненного клика возвращают `submitted`: «отправлено,
+подтверждение недоступно». Ошибки до отправки остаются ошибками. Недоступное чтение
+ленты и таймаут подтверждения после клика не превращают результат в failed.
+
+Точное сравнение нормализует пробелы и переносы и сравнивает текст целиком.
+Новый относительно снимка ID и совпавший текст — необходимые признаки кандидата,
+но DOM не доказывает его происхождение: старый пост может отрисоваться позднее.
+Поэтому текущая реализация сохраняет даже такого кандидата как submitted; DONE
+зарезервирован для однозначной идентификации реальной квитанцией. Стабилизация
+ленты остаётся эвристикой и не гарантирует новизну. Recovery по точному тексту
+также возвращает submitted.
+
+Как у Яндекса, submitted терминален: checkpoint по внутреннему publication_id
+предотвращает автоматическую повторную отправку. Это не подтверждение публикации.
+UI показывает нейтральное состояние, без зелёной галочки и ошибки. Реальные ошибки
+до клика повторяются через verify-before-retry.
+
+Точное подтверждение для VK вернётся после живого smoke владельца в фазе 3,
+в рамках T-502 (реальные квитанции); новые DOM-селекторы/форматы ответов не угадываются.
