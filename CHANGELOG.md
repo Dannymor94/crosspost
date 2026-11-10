@@ -1,5 +1,6 @@
 # Changelog
 
+<<<<<<< HEAD
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут
@@ -67,6 +68,17 @@
 - `src/crosspost/web/__main__.py`: добавлен — `python -m crosspost.web` запускает uvicorn на порту 8001 с `--reload`.
 - `Makefile`: `make run` теперь явно указывает `--port 8001`.
 - `docs/OPERATIONS.md` §1: убрана устаревшая заметка про K-4 и "порт 8001 исторически"; единая команда `make run`.
+
+## 2026-11-03 (T-106)
+
+### Единые имена переменных Telegram (T-106)
+
+- `src/crosspost/config.py`: `load_config()` теперь при наличии `TG_API_ID`/`TG_API_HASH` автоматически
+  создаёт `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` с `DeprecationWarning`.
+- `src/crosspost/__main__.py`: CLI-клиент использует каноническое `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`.
+- `.env.example`: `TG_API_ID` / `TG_API_HASH` заменены на закомментированные deprecated-алиасы.
+- `tests/test_config.py`: два новых теста — алиас работает, каноническое имя побеждает.
+- Итог: 982 passed, 0 failed.
 
 ## 2026-11-03 (T-104)
 

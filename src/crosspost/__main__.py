@@ -66,7 +66,7 @@ async def build_adapter(channel: str, store, *, schedule: datetime | None = None
         session_path = Path(cfg.get("TG_SESSION_PATH", "runtime/sessions/telegram.session"))
         session_str = session_path.read_text().strip() if session_path.exists() else None
         client = TelegramClient(
-            StringSession(session_str), int(cfg["TG_API_ID"]), cfg["TG_API_HASH"]
+            StringSession(session_str), int(cfg["TELEGRAM_API_ID"]), cfg["TELEGRAM_API_HASH"]
         )
         await client.start()
         session_path.parent.mkdir(parents=True, exist_ok=True)

@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 DEFAULT_ENV_PATH = Path("runtime/.env")
 
@@ -74,6 +77,17 @@ def load_config(env_path: str | Path | None = None) -> dict[str, str]:
             cfg[key.strip()] = val
     # os.environ wins over .env for every key; keys only in env are also included.
     cfg.update(os.environ)
+    # Deprecated Telegram var aliases: TG_API_ID → TELEGRAM_API_ID (T-106).
+    # Empty canonical is treated as "not set"; alias is applied to both cfg and os.environ
+    # (setdefault below won't overwrite an empty string already in os.environ).
+    for canonical, legacy in (
+        ("TELEGRAM_API_ID", "TG_API_ID"),
+        ("TELEGRAM_API_HASH", "TG_API_HASH"),
+    ):
+        if legacy in cfg and not cfg.get(canonical):
+            _log.warning("%s is deprecated, use %s", legacy, canonical)
+            cfg[canonical] = cfg[legacy]
+            os.environ[canonical] = cfg[legacy]  # force-write: empty string must be replaced
     # Inject .env-only keys into os.environ (setdefault — don't overwrite external env).
     for key, val in cfg.items():
         os.environ.setdefault(key, val)

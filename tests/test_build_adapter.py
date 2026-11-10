@@ -28,8 +28,8 @@ from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 def fake_cfg(tmp_path) -> dict[str, str]:
     # TG_SESSION_PATH — во временный каталог: тест пишет сюда сохранённую сессию
     return {
-        "TG_API_ID": "123",
-        "TG_API_HASH": "deadbeefhash",
+        "TELEGRAM_API_ID": "123",
+        "TELEGRAM_API_HASH": "deadbeefhash",
         "TG_TARGET_CHANNEL": "@my_channel",
         "TG_SESSION_PATH": str(tmp_path / "sessions" / "tg.session"),
         "VK_ACCESS_TOKEN": "vk-token",
