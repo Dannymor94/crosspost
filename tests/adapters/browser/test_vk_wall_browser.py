@@ -35,11 +35,25 @@ def _make_page(
     page = AsyncMock()
     page.url = "https://vk.com/medithou"
 
+    sent = False
+    filled_text = ""
+
+    async def fill(text):
+        nonlocal filled_text
+        filled_text = text
+
+    async def send(*args, **kwargs):
+        nonlocal sent
+        sent = True
+
     def _locator(selector, **_kw):
         loc = AsyncMock()
         loc.first = AsyncMock()
         loc.first.click = AsyncMock()
-        loc.first.fill = AsyncMock()
+        loc.first.fill = AsyncMock(side_effect=fill)
+        loc.fill = AsyncMock(side_effect=fill)
+        if "posting_confirm_screen_submit" in selector:
+            loc.first.click.side_effect = send
         loc.first.get_attribute = AsyncMock(return_value=post_data_id)
 
         # .count() — по умолчанию 1, для file-input управляем параметром
@@ -57,7 +71,15 @@ def _make_page(
         post_mock.inner_text = AsyncMock(
             return_value=post_text_match if post_exists else "другой пост"
         )
-        loc.all = AsyncMock(return_value=[post_mock])
+        post_mock.get_attribute = AsyncMock(return_value=post_data_id)
+
+        async def posts():
+            if sent:
+                post_mock.inner_text.return_value = filled_text
+                return [post_mock]
+            return [post_mock] if post_exists else []
+
+        loc.all = AsyncMock(side_effect=posts)
         return loc
 
     page.locator = MagicMock(side_effect=_locator)
@@ -117,7 +139,7 @@ async def test_skips_when_already_published(store, publication_id, sample_post):
     with patch("crosspost.adapters.browser.vk_wall.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.SKIPPED
+    assert result.status is ResultStatus.SUBMITTED
     mock_op.assert_not_called()
 
 
@@ -146,8 +168,8 @@ async def test_verify_before_retry_finds_existing_post(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
-    assert result.external_id == "posted:recovered"
+    assert result.status is ResultStatus.SUBMITTED
+    assert result.external_id == "wall-123456_789"
     assert await store.is_done(publication_id, "vk_wall")
     # до формы не дошли
     page.get_by_role.assert_not_called()
@@ -163,7 +185,7 @@ async def test_publishes_text_only(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert await store.is_done(publication_id, "vk_wall")
 
     # открытие формы: «Создать» через get_by_role exact=True
@@ -202,7 +224,7 @@ async def test_publishes_with_photo_calls_set_input_files(store, publication_id,
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
 
     # file-input был найден и set_input_files вызван
     file_input_calls = [c for c in page.locator.call_args_list if "file" in str(c)]
@@ -234,13 +256,73 @@ async def test_next_button_is_clicked_before_step2(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
 
     # page.locator должен быть вызван с селектором кнопки «Далее»
     next_calls = [c for c in page.locator.call_args_list if "posting_base_screen_next" in str(c)]
     assert next_calls, (
         "ожидали page.locator('[data-testid=\"posting_base_screen_next\"]') — "
         f"реальные вызовы: {[str(c) for c in page.locator.call_args_list]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stabilization_timeout_raises_not_done(store, publication_id, monkeypatch):
+    """Лента никогда не стабилизируется → RuntimeError, отправка не делается.
+
+    Инвариант §3.3: неопределённое состояние ленты = не отправлять вслепую.
+    """
+    from crosspost.adapters.browser import vk_wall as mod
+
+    monkeypatch.setattr(mod, "_STABILIZE_POLLS", 4)  # быстрее в тесте
+
+    adapter = _make_adapter(store)
+    call_idx = [0]
+
+    async def _always_different(page):
+        call_idx[0] += 1
+        return {f"wall-id-{call_idx[0]}": "text"}  # каждый раз новый ключ
+
+    monkeypatch.setattr(adapter, "_read_posts", _always_different)
+
+    content = CanonicalContent(type=ContentType.POST, text="тест", media_paths=[])
+    page = _make_page()
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
+
+    assert await store.is_done(publication_id, "vk_wall"), (
+        "отправлять вслепую запрещено — mark_done не должен вызываться"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id, monkeypatch):
+    """Сетевая ошибка при _read_posts во время verify-after-send → не done.
+
+    Инвариант §3.3: провал verify = не done.
+    """
+    adapter = _make_adapter(store)
+    call_idx = [0]
+
+    async def _read_then_fail(page):
+        call_idx[0] += 1
+        if call_idx[0] <= 2:  # стабилизация проходит с пустой лентой
+            return {}
+        raise OSError("ERR_PROXY_CONNECTION_FAILED")  # прокси упал после отправки
+
+    monkeypatch.setattr(adapter, "_read_posts", _read_then_fail)
+
+    content = CanonicalContent(type=ContentType.POST, text="тест verify", media_paths=[])
+    page = _make_page()
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
+
+    assert await store.is_done(publication_id, "vk_wall"), (
+        "mark_done не должен вызываться, если verify провалился"
     )
 
 

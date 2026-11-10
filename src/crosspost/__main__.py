@@ -1,6 +1,6 @@
 """CLI кросс-постинга — точка входа MVP-0.
 
-    python -m crosspost post --type post --text "..." --image a.jpg --to telegram,vk
+    python -m crosspost post --type post --text "..." --image a.jpg --to telegram,vk_wall
     python -m crosspost login --channel yandex
 
 CLI-публикация использует env-конфигурацию (см. docs/OPERATIONS.md §2.2).
@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter  # "vk_api" — ждёт рабочий токен
-from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.adapters.browser.vk_channel import VKChannelBrowserAdapter
 from crosspost.adapters.browser.vk_wall import VKWallBrowserAdapter
 from crosspost.adapters.browser.yandex import YandexBrowserAdapter
@@ -29,19 +29,17 @@ from crosspost.orchestrator.task import JSONIdempotencyStore, new_publication_id
 _BROWSER_CHANNELS = {"whatsapp", "instagram", "dzen"}  # yandex реализован отдельной веткой
 
 # Каналы, поддерживающие ручной логин через браузер.
-_LOGIN_SUPPORTED = {"yandex", "vk", "vk_wall"}
+_LOGIN_SUPPORTED = {"yandex", "vk_wall"}
 
 # Точка входа для ручного логина: открываем страницу канала, она сама редиректнет на паспорт.
 _LOGIN_ENTRY_URLS: dict[str, str] = {
     "yandex": "https://yandex.ru/sprav/",
-    "vk": "https://vk.com/",
     "vk_wall": "https://vk.com/",
 }
 
 # Маркеры «ещё не вошёл» в URL — если после Enter они остались, вход не завершён.
 _LOGIN_REJECT_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "yandex": ("passport.yandex", "auth/login"),
-    "vk": ("vk.com/login", "id.vk.com"),
     "vk_wall": ("vk.com/login", "id.vk.com"),
 }
 
@@ -52,8 +50,8 @@ async def build_adapter(channel: str, store, *, schedule: datetime | None = None
     schedule (aware datetime) — отложенная публикация; поддерживает только telegram,
     остальные каналы его игнорируют.
 
-    "vk"     → VKBrowserAdapter (браузерный тир; API-путь заблокирован платформой).
-    "vk_api" → VKAdapter (API-тир, ждёт рабочий токен — оставлен для будущего).
+    "vk_wall" → VKWallBrowserAdapter (браузерный тир).
+    "vk_api"  → VKAdapter (API-тир, ждёт рабочий токен — оставлен для будущего).
     Тяжёлые SDK импортируются ЛЕНИВО внутри ветки.
     """
     cfg = load_config()
@@ -78,10 +76,9 @@ async def build_adapter(channel: str, store, *, schedule: datetime | None = None
         )
 
     if channel == "vk":
-        # Браузерный тир: API заблокирован (err 27/214), работаем через Playwright.
-        headless = browser_headless()
-        group_id = abs(int(cfg["VK_GROUP_ID"]))
-        return VKBrowserAdapter(group_id, store, headless=headless)
+        raise ValueError(
+            "канал 'vk' удалён — используйте 'vk_wall' для публикации в сообщество ВКонтакте"
+        )
 
     if channel == "vk_api":
         # API-тир ВК — оставлен на случай появления рабочего user-токена.
@@ -109,10 +106,10 @@ async def build_adapter(channel: str, store, *, schedule: datetime | None = None
 
     if channel in _BROWSER_CHANNELS:
         raise ValueError(
-            f"{channel}: браузерный канал пока не реализован (реализованы: vk, yandex, vk_wall)"
+            f"{channel}: браузерный канал пока не реализован (реализованы: yandex, vk_wall, vk_channel)"
         )
     raise ValueError(
-        f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, vk, yandex, vk_api, vk_wall)"
+        f"build_adapter: неизвестный канал {channel!r} (ожидались: telegram, yandex, vk_api, vk_wall, vk_channel)"
     )
 
 
@@ -175,7 +172,12 @@ async def _run(
             print(f"✗ {ch}: тип {content.type.value} не поддерживается")
             failures += 1
             continue
-        adapter = await build_adapter(ch, store, schedule=schedule)
+        try:
+            adapter = await build_adapter(ch, store, schedule=schedule)
+        except ValueError as exc:
+            print(f"✗ {ch}: {exc}")
+            failures += 1
+            continue
         result = await adapter.publish(content, publication_id=publication_id)
         mark = "✓" if result.error is None else "✗"
         print(
@@ -273,7 +275,6 @@ async def _run_user_add(login: str, role: str, profile_id: int | None, password:
     Сырой пароль не логируется и не сохраняется — в БД идёт только scrypt-хэш.
     """
     import getpass
-    import os
 
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -323,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--text", default="")
     p.add_argument("--title", default=None)
     p.add_argument("--image", action="append", default=[], help="путь к медиа (можно несколько)")
-    p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk")
+    p.add_argument("--to", required=True, help="каналы через запятую: telegram,vk_wall")
     p.add_argument("--state", default=None, help="путь к JSON-стору (устарело; умолч. → SQLite)")
     p.add_argument("--profile", type=int, default=1, help="profile_id в БД (умолч. 1)")
     p.add_argument(

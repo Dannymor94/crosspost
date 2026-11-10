@@ -18,7 +18,7 @@ class ResultStatus(StrEnum):
     DONE = "done"
     FAILED = "failed"
     SKIPPED = "skipped"  # идемпотентность: уже опубликовано
-    SUBMITTED = "submitted"  # fire-and-forget: ушло на модерацию (Яндекс Бизнес)
+    SUBMITTED = "submitted"  # отправлено без окончательного подтверждения (VK / модерация Яндекс)
     NEEDS_RELOGIN = "needs_relogin"  # сессия протухла — нужен ручной логин
 
 

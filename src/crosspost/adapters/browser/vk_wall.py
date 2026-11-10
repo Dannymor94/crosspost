@@ -77,6 +77,12 @@ _NAV_TIMEOUT = 15_000
 _MODAL_TIMEOUT = 10_000
 _PHOTO_TIMEOUT = 15_000
 _POST_APPEAR_TIMEOUT = 20_000
+
+# Стабилизация ленты до отправки
+# Два подряд одинаковых чтения с паузой = лента устоялась.
+# Максимум: _STABILIZE_POLLS × _STABILIZE_PAUSE_MS мс ожидания.
+_STABILIZE_POLLS = 8  # max 8 чтений, итого до 4 с
+_STABILIZE_PAUSE_MS = 500  # пауза между чтениями
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -105,7 +111,7 @@ class VKWallBrowserAdapter:
     ) -> ChannelResult:
         # 1) идемпотентность
         if await self._store.is_done(publication_id, self.channel):
-            return ChannelResult(self.channel, ResultStatus.SKIPPED)
+            return ChannelResult(self.channel, ResultStatus.SUBMITTED)
 
         async with open_page(
             self.channel,
@@ -127,13 +133,15 @@ class VKWallBrowserAdapter:
                     error="ВК: сессия протухла, выполни crosspost login --channel vk_wall",
                 )
 
-            # 4) verify-before-retry: пост уже есть в ленте — не дублируем
-            if await self._find_post(page, content.text):
-                await self._store.mark_done(
-                    publication_id, self.channel, external_id="posted:recovered"
-                )
+            # 4) стабилизация ленты → базовое множество id перед отправкой
+            if not content.text.strip():
+                raise RuntimeError("vk_wall: без текста невозможно подтвердить публикацию в ленте")
+            posts = await self._stabilize_posts(page)
+            recovered_id = self._find_post(posts, content.text)
+            if recovered_id:
+                await self._store.mark_done(publication_id, self.channel, external_id=recovered_id)
                 return ChannelResult(
-                    self.channel, ResultStatus.DONE, external_id="posted:recovered", url=url
+                    self.channel, ResultStatus.SUBMITTED, external_id=recovered_id, url=url
                 )
 
             # 5) шаг 1: открыть форму → модалка
@@ -152,11 +160,16 @@ class VKWallBrowserAdapter:
             await page.locator(_NEXT_BUTTON_SELECTOR).click()
 
             # 9) шаг 2: финальная публикация (TODO: уточнить селектор кнопки)
-            external_id = await self._publish_step2(page, content.text)
+            external_id = await self._publish_step2(page, content.text, set(posts))
 
         await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на стену сообщества (свежий пост сверху): переход из UI после отправки.
-        return ChannelResult(self.channel, ResultStatus.DONE, external_id=external_id, url=url)
+        return ChannelResult(
+            self.channel,
+            ResultStatus.SUBMITTED,
+            external_id=external_id,
+            url=url,
+        )
 
     # ── внутренние методы ────────────────────────────────────────────────────
 
@@ -214,11 +227,11 @@ class VKWallBrowserAdapter:
                 timeout=_PHOTO_TIMEOUT,
             )
 
-    async def _publish_step2(self, page, text: str) -> str:
+    async def _publish_step2(self, page, text: str, known_ids: set[str]) -> str | None:
         """Шаг 2: финальный экран публикации.
 
         Нажимаем кнопку публикации (несколько кандидатов на случай A/B),
-        затем ждём закрытия модалки — надёжный признак успеха.
+        затем ждём новый пост с нашим текстом и ID в ленте.
         """
         for selector in (
             '[data-testid="posting_confirm_screen_submit"]',
@@ -231,49 +244,57 @@ class VKWallBrowserAdapter:
         else:
             await page.get_by_role("button", name="Опубликовать", exact=True).click()
 
-        return await self._wait_for_post(page, text)
-
-    async def _find_post(self, page, text: str) -> bool:
-        """Verify-before-retry: найти пост с данным текстом в ленте сообщества."""
-        if not text.strip():
-            return False
         try:
-            posts = await page.locator(_POST_IN_FEED_SELECTOR).all()
-            for post in posts[:10]:
-                try:
-                    post_text = await post.inner_text()
-                    if text.strip() in post_text:
-                        return True
-                except Exception:
-                    continue
+            return await self._wait_for_post(page, text, known_ids)
         except Exception:
-            pass
-        return False
+            return None  # клик выполнен; подтверждение доставки недоступно
 
-    async def _wait_for_post(self, page, text: str) -> str:
-        """Дождаться закрытия модалки постинга — надёжный признак успеха.
+    async def _stabilize_posts(self, page) -> dict[str, str]:
+        """Читать ленту, пока два подряд чтения не дадут одинаковый набор id.
 
-        Фолбэк: ищем текст поста в ленте (первые 50 символов).
-        Затем пробуем вытащить data-post-id из свежего поста.
+        Это эвристика наполнения снимка, а не гарантия загрузки всей истории.
         """
-        # Модалка исчезла = ВК принял пост
-        try:
-            await page.wait_for_selector(
-                _MODAL_SELECTOR, state="detached", timeout=_POST_APPEAR_TIMEOUT
-            )
-        except Exception:
-            # Если модалка уже закрылась раньше или не найдена — игнорируем
-            pass
+        prev_keys: frozenset[str] | None = None
+        for _ in range(_STABILIZE_POLLS):
+            await page.wait_for_timeout(_STABILIZE_PAUSE_MS)
+            curr = await self._read_posts(page)
+            curr_keys = frozenset(curr.keys())
+            if curr_keys == prev_keys:
+                return curr
+            prev_keys = curr_keys
+        return curr
 
-        # Попытка извлечь wall-id из первого поста в ленте
-        try:
-            post = page.locator("[data-post-id]").first
-            post_id = await post.get_attribute("data-post-id") or ""
+    async def _read_posts(self, page) -> dict[str, str]:
+        """Прочитать квитанции и текст из ленты; ошибка чтения не означает успех."""
+        posts = {}
+        for post in await page.locator(_POST_IN_FEED_SELECTOR).all():
+            post_id = await post.get_attribute("data-post-id")
             if post_id:
-                return f"wall{post_id}"
-        except Exception:
-            pass
-        return "posted"
+                posts[f"wall{post_id}"] = await post.inner_text()
+        return posts
+
+    @staticmethod
+    def _find_post(posts: dict[str, str], text: str) -> str | None:
+        for post_id, post_text in posts.items():
+            if text.strip() and " ".join(text.split()) == " ".join(post_text.split()):
+                return post_id
+        return None
+
+    async def _wait_for_post(self, page, text: str, known_ids: set[str]) -> str:
+        """Найти DOM-кандидата с точным текстом и ID вне снимка.
+
+        Исчезновение модалки, чужой старый пост и истёкший таймаут не квитанции.
+        Ошибка чтения обрабатывается вызывающим методом как submitted.
+        """
+        for _ in range(max(1, _POST_APPEAR_TIMEOUT // 500)):
+            posts = await self._read_posts(page)
+            post_id = self._find_post(
+                {key: value for key, value in posts.items() if key not in known_ids}, text
+            )
+            if post_id:
+                return post_id
+            await page.wait_for_timeout(500)
+        raise RuntimeError("vk_wall: пост не найден в ленте, доставка не подтверждена")
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека

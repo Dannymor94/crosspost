@@ -40,11 +40,62 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
 _PROFILES_ROOT_DEFAULT = "runtime/browser_profiles"
 _SCREENSHOT_ROOT_DEFAULT = "runtime/logs/screenshots"
+
+# Prevents WebRTC from leaking the real IP via non-proxied UDP when a proxy is set.
+# --disable-webrtc alone is insufficient (verified: 4 direct UDP packets still escape).
+_WEBRTC_DISABLE_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+
+
+def _parse_proxy(url: str) -> dict[str, str] | None:
+    """Parse proxy URL into a Playwright proxy dict, splitting out credentials.
+
+    For scheme://user:pass@host:port: {"server": ..., "username": ..., "password": ...}.
+    For scheme://host:port: {"server": url}.
+    Returns None for empty url.
+    Raises ValueError on malformed URL — message never contains the URL (no password leak).
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.username:
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            server = f"{parsed.scheme}://{host}{port}"
+            return {
+                "server": server,
+                "username": unquote(parsed.username),
+                "password": unquote(parsed.password or ""),
+            }
+        return {"server": url}
+    except Exception:
+        raise ValueError("proxy URL is malformed") from None
+
+
+def _get_proxy(channel: str) -> dict[str, str] | None:
+    """Resolve proxy for channel from its VALIDATORS declaration.
+
+    If the channel declares proxy_env_var but the env var is unset or empty,
+    raises RuntimeError — silent fallback to a direct connection is not allowed.
+    Returns None when the channel has no proxy_env_var (direct connection is fine).
+    """
+    from crosspost.channels.validators import VALIDATORS  # lazy: avoids circular import
+
+    v = VALIDATORS.get(channel)
+    proxy_env_var = v.proxy_env_var if v else ""
+    if not proxy_env_var:
+        return None
+    url = os.environ.get(proxy_env_var, "")
+    if not url:
+        raise RuntimeError(f"канал {channel!r} требует прокси — задайте переменную {proxy_env_var}")
+    return _parse_proxy(url)
+
 
 # Сентинел «сессию брать из файла» (CLI-режим). UI ВСЕГДА передаёт storage_state
 # явно (dict / JSON-строка / None) — из credentials профиля, не из общего файла.
@@ -161,14 +212,21 @@ async def open_page(
         storage_state = _coerce_storage_state(storage_state)
 
     lock = _lock_for(session_key)
+    proxy = _get_proxy(channel)
     async with lock:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=headless)
-            context = await browser.new_context(
-                storage_state=storage_state,
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-            )
+            launch_kwargs: dict[str, Any] = {"headless": headless}
+            if proxy:
+                launch_kwargs["args"] = _WEBRTC_DISABLE_ARGS
+            browser = await pw.chromium.launch(**launch_kwargs)
+            ctx_kwargs: dict[str, Any] = {
+                "storage_state": storage_state,
+                "locale": "ru-RU",
+                "timezone_id": "Europe/Moscow",
+            }
+            if proxy:
+                ctx_kwargs["proxy"] = proxy
+            context = await browser.new_context(**ctx_kwargs)
             page = await context.new_page()
             try:
                 yield page
@@ -211,14 +269,18 @@ async def login_context(
     p.mkdir(parents=True, exist_ok=True)
 
     lock = _lock_for(channel)
+    proxy = _get_proxy(channel)
     async with lock:
         async with async_playwright() as pw:
-            context = await pw.chromium.launch_persistent_context(
-                str(p),
-                headless=headless,
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-            )
+            lpc_kwargs: dict[str, Any] = {
+                "headless": headless,
+                "locale": "ru-RU",
+                "timezone_id": "Europe/Moscow",
+            }
+            if proxy:
+                lpc_kwargs["args"] = _WEBRTC_DISABLE_ARGS
+                lpc_kwargs["proxy"] = proxy
+            context = await pw.chromium.launch_persistent_context(str(p), **lpc_kwargs)
             page = context.pages[0] if context.pages else await context.new_page()
 
             async def save_state() -> Path:

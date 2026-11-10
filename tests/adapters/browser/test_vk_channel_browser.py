@@ -31,12 +31,25 @@ def _make_page(*, file_input_exists: bool = True) -> AsyncMock:
     page = AsyncMock()
     page.url = "https://vk.com/im/channels/-240033402?entrypoint=channel"
 
+    sent = False
+    typed_text = ""
+
+    async def type_text(text):
+        nonlocal typed_text
+        typed_text = text
+
+    async def send(*args, **kwargs):
+        nonlocal sent
+        sent = True
+
     def _locator(selector, **_kw):
         loc = AsyncMock()
         loc.first = AsyncMock()
         loc.first.click = AsyncMock()
         loc.first.fill = AsyncMock()
-        loc.first.type = AsyncMock()
+        loc.first.type = AsyncMock(side_effect=type_text)
+        if selector == 'button[aria-label="Отправить сообщение"]':
+            loc.first.click.side_effect = send
         loc.first.press = AsyncMock()
         loc.first.inner_text = AsyncMock(return_value="")
 
@@ -52,7 +65,18 @@ def _make_page(*, file_input_exists: bool = True) -> AsyncMock:
         loc.fill = AsyncMock()
         loc.type = AsyncMock()
         loc.press = AsyncMock()
-        loc.all = AsyncMock(return_value=[])
+
+        async def posts():
+            if sent and selector == ".PostsList__item[data-itemkey]":
+                return [
+                    AsyncMock(
+                        inner_text=AsyncMock(return_value=typed_text),
+                        get_attribute=AsyncMock(return_value="123"),
+                    )
+                ]
+            return []
+
+        loc.all = AsyncMock(side_effect=posts)
         # .nth() в Playwright синхронный и возвращает локатор — не корутину
         loc.nth = MagicMock(return_value=loc.first)
         return loc
@@ -116,7 +140,7 @@ async def test_skips_when_already_published(store, publication_id, sample_post):
     with patch("crosspost.adapters.browser.vk_channel.open_page") as mock_op:
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.SKIPPED
+    assert result.status is ResultStatus.SUBMITTED
     mock_op.assert_not_called()
 
 
@@ -141,7 +165,7 @@ async def test_publishes_text_only(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     assert await store.is_done(publication_id, "vk_channel")
 
     # временная ссылка «открыть канал» — на сам канал мессенджера (id нормализован)
@@ -168,7 +192,7 @@ async def test_publishes_with_photo_calls_set_input_files(store, publication_id,
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(sample_post, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     file_calls = [c for c in page.locator.call_args_list if "file" in str(c)]
     assert file_calls, "ожидали page.locator с input[type=file]"
 
@@ -201,7 +225,7 @@ async def test_clicks_send_button_not_enter(store, publication_id):
     with _patch_open_page(page), _patch_logged_in(True):
         result = await adapter.publish(content, publication_id=publication_id)
 
-    assert result.status is ResultStatus.DONE
+    assert result.status is ResultStatus.SUBMITTED
     send_calls = [c for c in page.locator.call_args_list if "Отправить сообщение" in str(c)]
     assert send_calls, "ожидали locator('button[aria-label=\"Отправить сообщение\"]')"
 
@@ -226,15 +250,16 @@ async def test_no_false_done_when_composer_not_cleared(store, publication_id, mo
         loc.first.count = AsyncMock(return_value=1)
         loc.count = AsyncMock(return_value=1)
         loc.nth = MagicMock(return_value=AsyncMock())
+        loc.all = AsyncMock(return_value=[])
         return loc
 
     page.locator = MagicMock(side_effect=_locator_stuck)
 
     with _patch_open_page(page), _patch_logged_in(True):
-        with pytest.raises(RuntimeError, match="не отправился"):
-            await adapter.publish(content, publication_id=publication_id)
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
 
-    assert not await store.is_done(publication_id, "vk_channel")
+    assert await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio
@@ -253,6 +278,77 @@ async def test_photo_upload_stuck_raises_clear_error(store, publication_id, samp
     # клик по заблокированной кнопке НЕ делаем (иначе Playwright висит 30с):
     # локатор кнопки мог быть создан для wait, но click() по нему не вызывался.
     assert not await store.is_done(publication_id, "vk_channel")
+
+
+@pytest.mark.asyncio
+async def test_verify_network_error_is_not_done(store, publication_id, monkeypatch):
+    """Reading the feed after clicking send fails: no delivery checkpoint."""
+    adapter = _make_adapter(store)
+    content = CanonicalContent(type=ContentType.POST, text="network failure", media_paths=[])
+    page = _make_page()
+    original_locator = page.locator.side_effect
+    submitted = False
+
+    async def send(*args, **kwargs):
+        nonlocal submitted
+        submitted = True
+
+    def locator(selector, **kwargs):
+        loc = original_locator(selector, **kwargs)
+        if selector == 'button[aria-label="Отправить сообщение"]':
+            loc.first.click.side_effect = send
+        if selector == ".PostsList__item[data-itemkey]":
+
+            async def posts():
+                if submitted:
+                    raise OSError("ERR_PROXY_CONNECTION_FAILED")
+                return []
+
+            loc.all.side_effect = posts
+        return loc
+
+    page.locator.side_effect = locator
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
+    assert submitted
+    assert await store.is_done(publication_id, "vk_channel")
+
+
+@pytest.mark.asyncio
+async def test_verify_element_detached_is_not_done(store, publication_id, monkeypatch):
+    """Живая страница и удалённый composer не подтверждают доставку."""
+    from crosspost.adapters.browser import vk_channel as mod
+
+    monkeypatch.setattr(mod, "_VERIFY_POLLS", 1)
+
+    adapter = _make_adapter(store)
+    content = CanonicalContent(type=ContentType.POST, text="composer пропал", media_paths=[])
+    page = _make_page()
+    page.evaluate = AsyncMock(return_value=1)  # страница жива
+
+    def _locator_detached(selector, **_kw):
+        loc = AsyncMock()
+        loc.first = AsyncMock()
+        loc.first.click = AsyncMock()
+        loc.first.type = AsyncMock()
+        # inner_text кидает (элемент ушёл из DOM), но страница жива
+        loc.first.inner_text = AsyncMock(
+            side_effect=RuntimeError("element is not attached to the DOM")
+        )
+        loc.first.count = AsyncMock(return_value=1)
+        loc.count = AsyncMock(return_value=1)
+        loc.nth = MagicMock(return_value=AsyncMock())
+        loc.all = AsyncMock(return_value=[])
+        return loc
+
+    page.locator = MagicMock(side_effect=_locator_detached)
+
+    with _patch_open_page(page), _patch_logged_in(True):
+        result = await adapter.publish(content, publication_id=publication_id)
+        assert result.status is ResultStatus.SUBMITTED
+
+    assert await store.is_done(publication_id, "vk_channel")
 
 
 @pytest.mark.asyncio

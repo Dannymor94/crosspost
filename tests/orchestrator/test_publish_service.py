@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,15 +124,15 @@ async def test_partial_success_one_fails(session):
     assert statuses == {"telegram": "done", "vk_wall": "failed"}
 
 
-async def test_yandex_submitted_not_done(session):
-    adapters = {
-        "yandex": _MockAdapter(
-            "yandex", result=ChannelResult("yandex", ResultStatus.SUBMITTED, "y1")
-        ),
-    }
-    svc = PublishService(_repo(session), _factory(adapters))
-    outcomes = await svc.publish(_post(), ["yandex"], publication_id="p1")
-    assert outcomes[0].status == "submitted"  # модерация ≠ опубликовано
+@pytest.mark.parametrize("channel", ["yandex", "vk_wall", "vk_channel"])
+async def test_submitted_is_preserved_and_not_retried(session, channel):
+    adapter = _MockAdapter(channel, result=ChannelResult(channel, ResultStatus.SUBMITTED))
+    svc = PublishService(_repo(session), _factory({channel: adapter}))
+    outcomes = await svc.publish(_post(), [channel], publication_id="p1")
+    assert outcomes[0].status == "submitted"
+    again = await svc.retry_channel(_post(), channel, publication_id="p1")
+    assert again.status == "submitted"
+    assert adapter.calls == 1
 
 
 # ── Ретрай одного канала ──────────────────────────────────────────────────────

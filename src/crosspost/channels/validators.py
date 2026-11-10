@@ -473,6 +473,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         platform="yandex",
         platform_title="Яндекс Бизнес",
         short_label="Бизнес",
+        proxy_env_var="YANDEX_PROXY_URL",
     ),
     "vk_wall": ChannelValidatorDef(
         kind="browser",
@@ -497,6 +498,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         platform="vk",
         platform_title="ВКонтакте",
         short_label="Стена",
+        proxy_env_var="VK_PROXY_URL",
     ),
     "vk_channel": ChannelValidatorDef(
         kind="browser",
@@ -523,6 +525,7 @@ VALIDATORS: dict[str, ChannelValidatorDef] = {
         platform="vk",
         platform_title="ВКонтакте",
         short_label="Канал",
+        proxy_env_var="VK_PROXY_URL",
     ),
 }
 

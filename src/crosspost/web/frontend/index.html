@@ -2721,7 +2721,7 @@ function ErrorConsole({ profiles, onGoToProfile }) {
 
 const OUTCOME_META = {
   done:          { cls: "success", label: "Опубликовано" },
-  submitted:     { cls: "warning", label: "На модерации" },
+  submitted:     { cls: "warning", label: "Отправлено, подтверждение недоступно" },
   attempting:    { cls: "info",    label: "Публикую…" },
   failed:        { cls: "error",   label: "Ошибка" },
   needs_relogin: { cls: "warning", label: "Нужен ре-логин" },
@@ -3694,7 +3694,7 @@ function _setsEqual(a, b) {
 }
 function _schedStatusNote(status) {
   if (status === "publishing") return "Публикуется — редактирование недоступно";
-  if (status === "done") return "Опубликовано";
+  if (status === "done") return "Отправка завершена — см. статусы каналов";
   if (status === "cancelled") return "Отменено";
   return status;
 }
@@ -3906,11 +3906,11 @@ function SchedItem({ base, s, onChanged }) {
       sendResult && h("div", { className: "sched-result" },
         (sendResult.results || []).map((r, i) => h("div", {
           key: i,
-          className: `sched-result-row ${r.status === "done" || r.status === "submitted" ? "ok" : "fail"}`,
+          className: `sched-result-row ${r.status === "done" ? "ok" : r.status === "submitted" ? "pending" : "fail"}`,
         },
           h("span", { className: "mono" }, r.target_name ? `${r.channel} · ${r.target_name}` : r.channel),
           " → ",
-          r.status === "done" || r.status === "submitted" ? "✓ опубликовано" : `✗ ${r.error || r.status}`,
+          r.status === "done" ? "✓ опубликовано" : r.status === "submitted" ? "Отправлено, подтверждение недоступно" : `✗ ${r.error || r.status}`,
         )),
       ),
     ),

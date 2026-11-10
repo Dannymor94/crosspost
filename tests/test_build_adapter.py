@@ -21,7 +21,6 @@ import pytest
 from crosspost import __main__ as cli
 from crosspost.adapters.api.telegram import TelegramAdapter
 from crosspost.adapters.api.vk import VKAdapter
-from crosspost.adapters.browser.vk import VKBrowserAdapter
 from crosspost.adapters.browser.yandex import YandexBrowserAdapter
 
 
@@ -85,12 +84,10 @@ async def test_builds_telegram_adapter_starts_and_persists_session(store, fake_c
     assert Path(fake_cfg["TG_SESSION_PATH"]).read_text() == "SAVED_STRING_SESSION"
 
 
-async def test_builds_vk_browser_adapter(store):
-    """'vk' → VKBrowserAdapter (браузерный тир, API заблокирован платформой)."""
-    adapter = await cli.build_adapter("vk", store)
-
-    assert isinstance(adapter, VKBrowserAdapter)
-    assert adapter.channel == "vk"
+async def test_vk_removed_raises_clear_error(store):
+    """build_adapter('vk') → ValueError with helpful message pointing to vk_wall."""
+    with pytest.raises(ValueError, match="vk_wall"):
+        await cli.build_adapter("vk", store)
 
 
 async def test_builds_vk_api_adapter(store, fake_vkbottle):

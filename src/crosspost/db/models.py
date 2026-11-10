@@ -60,7 +60,7 @@ class PublicationStatus(StrEnum):
     ATTEMPTING = "attempting"
     DONE = "done"
     FAILED = "failed"
-    SUBMITTED = "submitted"  # ушло на модерацию (Яндекс) — не путать с done
+    SUBMITTED = "submitted"  # отправлено без подтверждения — не путать с done
     NEEDS_RELOGIN = "needs_relogin"  # осела в мёртвом подключении
 
 

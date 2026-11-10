@@ -514,7 +514,7 @@ def _patch_browser_login(state_dict: dict, *, logged_in: bool = True):
     from crosspost.adapters.browser import base_browser as bb
     from crosspost.channels import browser_login as bl
 
-    async def fake_launch(headless=False):
+    async def fake_launch(headless=False, proxy_url=""):
         pw, browser, context, page = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
         context.storage_state = AsyncMock(return_value=state_dict)
         # После confirm probe навигирует сюда; URL решает, «вошёл» ли пользователь.
@@ -536,6 +536,9 @@ def _patch_browser_login(state_dict: dict, *, logged_in: bool = True):
         patch.object(bl, "_launch", fake_launch),
         patch.object(bb, "open_page", fake_open_page),
         patch.object(bb, "is_logged_in", fake_is_logged_in),
+        # _get_proxy is called by begin() before _launch; stub it out so web
+        # tests don't require proxy env vars to be set.
+        patch.object(bl, "_get_proxy", lambda ch: None),
     )
 
 
@@ -545,8 +548,8 @@ async def _browser_login(client: AsyncClient, pid: int, channel: str, state_dict
     for c in state_dict.get("cookies", []):
         c.setdefault("domain", ".vk.com")
     base = f"/api/profiles/{pid}/channels/{channel}/browser-login"
-    p_launch, p_open, p_logged = _patch_browser_login(state_dict)
-    with p_launch, p_open, p_logged:
+    p_launch, p_open, p_logged, p_proxy = _patch_browser_login(state_dict)
+    with p_launch, p_open, p_logged, p_proxy:
         rb = await client.post(f"{base}/begin")
         assert rb.status_code == 200, rb.text
         rc = await client.post(f"{base}/confirm")
@@ -649,8 +652,8 @@ async def test_browser_login_confirm_not_logged_in_returns_409(client: AsyncClie
     pid = r.json()["id"]
     base = f"/api/profiles/{pid}/channels/vk_wall/browser-login"
 
-    p_launch, p_open, p_logged = _patch_browser_login({"cookies": []}, logged_in=False)
-    with p_launch, p_open, p_logged:
+    p_launch, p_open, p_logged, p_proxy = _patch_browser_login({"cookies": []}, logged_in=False)
+    with p_launch, p_open, p_logged, p_proxy:
         assert (await client.post(f"{base}/begin")).status_code == 200
         rc = await client.post(f"{base}/confirm")
     assert rc.status_code == 409
@@ -667,6 +670,61 @@ async def test_browser_login_confirm_without_begin_400(client: AsyncClient) -> N
     pid = r.json()["id"]
     resp = await client.post(f"/api/profiles/{pid}/channels/vk_wall/browser-login/confirm")
     assert resp.status_code == 400
+
+
+async def test_browser_login_begin_proxy_missing_returns_400(client: AsyncClient) -> None:
+    """RuntimeError from _get_proxy (proxy required but env unset) → 400, not 500."""
+    from crosspost.channels import browser_login as bl
+
+    r = await client.post("/api/profiles", json={"name": "proxy-test"})
+    pid = r.json()["id"]
+
+    def _raise_proxy(ch: str):
+        raise RuntimeError(f"канал {ch!r} требует прокси — задайте переменную VK_PROXY_URL")
+
+    with patch.object(bl, "_get_proxy", _raise_proxy):
+        resp = await client.post(f"/api/profiles/{pid}/channels/vk_wall/browser-login/begin")
+
+    assert resp.status_code == 400
+    assert "VK_PROXY_URL" in resp.json()["detail"]
+
+
+async def test_browser_login_begin_unreachable_proxy_returns_400(
+    client: AsyncClient, monkeypatch
+) -> None:
+    """Proxy env set but unreachable → begin() raises RuntimeError → 400, no opening state."""
+    from crosspost.channels import browser_login as bl
+
+    monkeypatch.setenv("VK_PROXY_URL", "http://dead-proxy:3128")
+
+    r = await client.post("/api/profiles", json={"name": "proxy-fail"})
+    pid = r.json()["id"]
+
+    direct_calls: list[str] = []
+
+    async def fake_launch_proxy_fails(headless=False, proxy_url=""):
+        pw, browser, context, page = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+        context.storage_state = AsyncMock(return_value={})
+
+        async def _goto(url, **kwargs):
+            if proxy_url:
+                raise Exception("net::ERR_PROXY_CONNECTION_FAILED")
+            # Direct fallback must not happen.
+            direct_calls.append(url)
+
+        page.goto = _goto
+        return pw, browser, context, page
+
+    with (
+        patch.object(bl, "_launch", fake_launch_proxy_fails),
+        patch.object(bl, "_get_proxy", lambda ch: {"server": "http://dead-proxy:3128"}),
+    ):
+        resp = await client.post(f"/api/profiles/{pid}/channels/vk_wall/browser-login/begin")
+
+    assert resp.status_code == 400
+    assert "прокси" in resp.json()["detail"].lower()
+    assert not direct_calls, "browser went direct after proxy failed — not allowed"
+    assert (pid, "vk_wall") not in bl._SESSIONS
 
 
 async def test_connect_rejects_interactive_channel(client: AsyncClient) -> None:

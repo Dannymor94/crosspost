@@ -56,6 +56,10 @@ def _fake_playwright_for_login():
 @pytest.fixture(autouse=True)
 def profiles_root(monkeypatch, tmp_path):
     monkeypatch.setenv("BROWSER_PROFILES_DIR", str(tmp_path / "browser_profiles"))
+    # Channels with proxy_env_var require a proxy; set sensible defaults for
+    # tests that don't specifically test proxy behaviour.
+    monkeypatch.setenv("YANDEX_PROXY_URL", "http://proxy.test:3128")
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.test:3128")
     return tmp_path / "browser_profiles"
 
 
@@ -200,3 +204,166 @@ async def test_is_logged_in_url_reject_still_wins():
     page = _MarkerPage("https://vk.com/login", present=set())
     result = await bb.is_logged_in(page, reject_url_fragments=("vk.com/login",))
     assert result is False
+
+
+# ── proxy_url forwarding ──────────────────────────────────────────────────────
+
+
+async def test_open_page_passes_proxy_to_new_context(profiles_root, monkeypatch):
+    """VK_PROXY_URL set → new_context gets proxy dict."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example:3128")
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True, storage_state=None):
+            pass
+
+    kwargs = browser.new_context.call_args.kwargs
+    assert kwargs.get("proxy") == {"server": "http://proxy.example:3128"}
+
+
+async def test_open_page_no_proxy_kwarg_when_no_env_var(profiles_root, monkeypatch):
+    """Channel with no proxy_env_var (vk) → new_context has no proxy key."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk", headless=True, storage_state=None):
+            pass
+
+    assert "proxy" not in browser.new_context.call_args.kwargs
+
+
+# ── _parse_proxy ──────────────────────────────────────────────────────────────
+
+
+def test_parse_proxy_empty_returns_none():
+    assert bb._parse_proxy("") is None
+
+
+def test_parse_proxy_no_creds():
+    result = bb._parse_proxy("http://proxy.example:3128")
+    assert result == {"server": "http://proxy.example:3128"}
+
+
+def test_parse_proxy_with_credentials():
+    result = bb._parse_proxy("http://user:secret@proxy.example:3128")
+    assert result == {
+        "server": "http://proxy.example:3128",
+        "username": "user",
+        "password": "secret",
+    }
+
+
+def test_parse_proxy_password_not_in_server():
+    result = bb._parse_proxy("http://user:secret@proxy.example:3128")
+    assert result is not None
+    assert "secret" not in result["server"]
+
+
+def test_parse_proxy_urlencoded_credentials():
+    """URL-encoded creds (e.g. %40 for @) are decoded before passing to Playwright."""
+    result = bb._parse_proxy("http://user%40corp:p%40ss%3Aword@proxy.example:3128")
+    assert result is not None
+    assert result["username"] == "user@corp"
+    assert result["password"] == "p@ss:word"
+
+
+def test_parse_proxy_malformed_url_no_password_in_error(monkeypatch):
+    """If URL parsing raises internally, ValueError message contains no URL content."""
+
+    def _exploding_urlparse(url):
+        raise ValueError("Invalid IPv6 URL")
+
+    monkeypatch.setattr(bb, "urlparse", _exploding_urlparse)
+    with pytest.raises(ValueError) as exc_info:
+        bb._parse_proxy("http://user:s3cr3t@host:3128")
+    # Password must NOT appear in the error message.
+    assert "s3cr3t" not in str(exc_info.value)
+    assert "http" not in str(exc_info.value)
+
+
+# ── _get_proxy ────────────────────────────────────────────────────────────────
+
+
+def test_get_proxy_raises_when_proxy_env_var_declared_but_empty(monkeypatch):
+    """Channel declares proxy_env_var but env var is unset → RuntimeError."""
+    monkeypatch.delenv("VK_PROXY_URL", raising=False)
+    with pytest.raises(RuntimeError, match="VK_PROXY_URL"):
+        bb._get_proxy("vk_wall")
+
+
+def test_get_proxy_returns_none_for_channel_without_proxy_env_var():
+    """Channel with no proxy_env_var (e.g. 'vk') → None (direct connection ok)."""
+    result = bb._get_proxy("vk")
+    assert result is None
+
+
+def test_get_proxy_returns_dict_when_env_set(monkeypatch):
+    monkeypatch.setenv("YANDEX_PROXY_URL", "http://proxy:8080")
+    result = bb._get_proxy("yandex")
+    assert result == {"server": "http://proxy:8080"}
+
+
+# ── WebRTC disable args ───────────────────────────────────────────────────────
+
+
+async def test_open_page_webrtc_args_added_when_proxy(profiles_root, monkeypatch):
+    """VK_PROXY_URL → chromium.launch() gets WebRTC-disable arg."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy:3128")
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk_wall", headless=True, storage_state=None):
+            pass
+
+    launch_args = pw.chromium.launch.call_args.kwargs.get("args", [])
+    assert any("disable_non_proxied_udp" in a for a in launch_args)
+
+
+async def test_open_page_no_webrtc_args_without_proxy(profiles_root):
+    """Channel with no proxy_env_var → chromium.launch() gets no WebRTC args."""
+    pw, browser, context, page = _fake_playwright_for_publish()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.open_page("vk", headless=True, storage_state=None):
+            pass
+
+    launch_kwargs = pw.chromium.launch.call_args.kwargs
+    assert "args" not in launch_kwargs
+
+
+# ── login_context proxy ───────────────────────────────────────────────────────
+
+
+async def test_login_context_passes_proxy_to_launch_persistent_context(profiles_root, monkeypatch):
+    """YANDEX_PROXY_URL set → launch_persistent_context gets proxy + WebRTC args."""
+    monkeypatch.setenv("YANDEX_PROXY_URL", "http://proxy:8080")
+    pw, context, page = _fake_playwright_for_login()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.login_context("yandex", headless=True):
+            pass
+
+    kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
+    assert kwargs.get("proxy") == {"server": "http://proxy:8080"}
+    assert any("disable_non_proxied_udp" in a for a in kwargs.get("args", []))
+
+
+async def test_login_context_raises_when_proxy_required_but_missing(profiles_root, monkeypatch):
+    """login_context for yandex without YANDEX_PROXY_URL → RuntimeError."""
+    monkeypatch.delenv("YANDEX_PROXY_URL", raising=False)
+    with pytest.raises(RuntimeError, match="YANDEX_PROXY_URL"):
+        async with bb.login_context("yandex", headless=True):
+            pass
+
+
+async def test_login_context_no_proxy_for_channel_without_env_var(profiles_root):
+    """login_context for channel with no proxy_env_var → no proxy in context."""
+    pw, context, page = _fake_playwright_for_login()
+
+    with patch("playwright.async_api.async_playwright", MagicMock(return_value=_FakeAsyncPW(pw))):
+        async with bb.login_context("vk", headless=True):
+            pass
+
+    kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
+    assert "proxy" not in kwargs
