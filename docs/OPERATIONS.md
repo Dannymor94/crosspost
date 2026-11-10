@@ -10,12 +10,11 @@
 uv sync --all-extras                 # или: pip install -e ".[dev,browser,infra,crypto]"
 playwright install chromium          # для браузерных каналов
 mkdir -p runtime
-cp .env.example runtime/.env         # заполнить (см. §2); .env.example устарел — K-4
-make run                             # uvicorn crosspost.web.app:app --reload
+cp .env.example runtime/.env         # заполнить (см. §2)
+make run                             # uv run uvicorn crosspost.web.app:app --reload --port 8001
 ```
 
-Порт по умолчанию у uvicorn — 8000; исторически использовался 8001
-(`uvicorn crosspost.web.app:app --reload --port 8001`). Единая команда — T-105.
+Эквивалент: `python -m crosspost.web` (тот же порт и `--reload`).
 
 Без `--reload` изменения Python-кода не подхватываются.
 Если роуты отдают 404 или старое поведение, перезапустите сервер.
