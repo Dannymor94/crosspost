@@ -237,6 +237,48 @@ async def test_media_kept_until_all_channels_final(factory):
     assert bad.calls == 2
 
 
+async def test_submitted_channel_retains_media(factory, monkeypatch):
+    """Канал вернул SUBMITTED — медиа не удаляется (нужно для возможной переотправки)."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example.com")
+    pid = await _make_profile(factory, ["telegram", "vk_wall"], name="subm")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(factory, pid, past, ["telegram", "vk_wall"])
+
+    done_adapter = _MockAdapter(
+        "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "t1")
+    )
+    submitted_adapter = _MockAdapter(
+        "vk_wall", result=ChannelResult("vk_wall", ResultStatus.SUBMITTED)
+    )
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0)
+    with _patch_adapters({"telegram": done_adapter, "vk_wall": submitted_adapter}):
+        await ex.run_once()
+
+    rows = await _channel_rows(factory, pid, post_id)
+    assert str(rows["telegram"].status) == "done"
+    assert str(rows["vk_wall"].status) == "submitted"
+    # Пост завершён (все каналы терминальны), но медиа НЕ удалено — один канал submitted.
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
+    assert media_dir.exists(), "медиа должно сохраниться, пока есть submitted-канал"
+
+
+async def test_all_done_cleans_media(factory, monkeypatch):
+    """Все каналы DONE — медиа удаляется (submitted нет)."""
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example.com")
+    pid = await _make_profile(factory, ["telegram", "vk_wall"], name="alldone")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(factory, pid, past, ["telegram", "vk_wall"])
+
+    done1 = _MockAdapter("telegram", result=ChannelResult("telegram", ResultStatus.DONE, "t1"))
+    done2 = _MockAdapter("vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "w1"))
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0)
+    with _patch_adapters({"telegram": done1, "vk_wall": done2}):
+        await ex.run_once()
+
+    assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
+    assert not media_dir.exists(), "медиа должно быть удалено — все каналы done"
+
+
 # ── Пейсинг: несколько созревших постов идут с паузой ──────────────────────────
 
 

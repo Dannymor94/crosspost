@@ -70,6 +70,15 @@ def _make_preview_client() -> httpx.AsyncClient:
 
 
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
+# Статусы, при которых медиа можно удалять. SUBMITTED исключён: без квитанции медиа
+# хранится до TTL или ручного подтверждения (T-209).
+_MEDIA_SAFE_TO_DELETE = frozenset(
+    {
+        PublicationStatus.DONE.value,
+        PublicationStatus.FAILED.value,
+        PublicationStatus.NEEDS_RELOGIN.value,
+    }
+)
 
 # ── Preview block cache ───────────────────────────────────────────────────────
 # Process-level URL → (data_uri, expiry) cache.
@@ -681,8 +690,11 @@ async def publish_retry(
         outcome = await svc.retry_channel(run.content, sel, publication_id=publication_id)
 
     all_now = await pub_repo.list_statuses(publication_id)
-    if all(str(s.status) in _SUCCESS for s in all_now):
+    all_success_now = all(str(s.status) in _SUCCESS for s in all_now)
+    no_submitted_now = all(str(s.status) in _MEDIA_SAFE_TO_DELETE for s in all_now)
+    if no_submitted_now:
         media_store.cleanup_media(run.media_key)
+    if all_success_now:
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
@@ -1222,9 +1234,17 @@ async def _save_media(files, key: str) -> list[str]:
 
 
 async def _cleanup_if_final(session, profile_id: int, publication_id: str, outcomes) -> None:
-    """Если все каналы завершились успешно — чистим медиа, снимок и чекпоинты."""
-    if all(o.status in _SUCCESS for o in outcomes):
+    """Финализация ресурсов публикации.
+
+    Медиа: удаляется когда все каналы в DONE/FAILED/NEEDS_RELOGIN (нет SUBMITTED).
+    _RUNS и чекпоинты: только когда все SUCCESS (done/submitted) — пока есть FAILED,
+    retry ещё возможен, run должен быть доступен.
+    """
+    all_success = all(o.status in _SUCCESS for o in outcomes)
+    no_submitted = all(o.status in _MEDIA_SAFE_TO_DELETE for o in outcomes)
+    if no_submitted:
         media_store.cleanup_media(publication_id)
+    if all_success:
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 

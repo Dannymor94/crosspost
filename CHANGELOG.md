@@ -1,6 +1,14 @@
 # Changelog
 
-<<<<<<< HEAD
+## 2026-11-10 — медиа submitted-постов (T-209)
+
+- `executor.py` и `publish.py`: медиа не удаляется, пока хотя бы один канал в `submitted`.
+  Введена константа `_MEDIA_SAFE_TO_DELETE = {done, failed, needs_relogin}`.
+- `media/lifecycle.py`: реализован TTL-сброс submitted-медиа. Порог настраивается через
+  `SUBMITTED_MEDIA_TTL_DAYS` (по умолчанию 7 дней). Вызывается фоновой задачей (T-210).
+- Два новых теста в `tests/scheduler/test_executor.py`: submitted-канал удерживает медиа,
+  все-done — удаляет медиа.
+
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут

@@ -57,6 +57,15 @@ logger = logging.getLogger(__name__)
 
 # Терминальный успех: канал доставлен (или ушёл на модерацию) — не ретраим.
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
+# Статусы, при которых медиа можно удалять (доставка подтверждена или безвозвратно упала).
+# SUBMITTED исключён: пост отправлен без квитанции, медиа может понадобиться для retry/подтверждения.
+_MEDIA_SAFE_TO_DELETE = frozenset(
+    {
+        PublicationStatus.DONE.value,
+        PublicationStatus.FAILED.value,
+        PublicationStatus.NEEDS_RELOGIN.value,
+    }
+)
 
 SleepFn = Callable[[float], Awaitable[None]]
 
@@ -201,7 +210,10 @@ class ScheduledExecutor:
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
-            self._cleanup_media(post.media_paths)
+            # Удалять медиа только если ни один канал не в SUBMITTED.
+            # При наличии submitted медиа хранится до TTL (T-209).
+            if all(o.status in _MEDIA_SAFE_TO_DELETE for o in flow.outcomes):
+                self._cleanup_media(post.media_paths)
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
 
     def _ceiling_step(
