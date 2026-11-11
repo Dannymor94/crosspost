@@ -2607,3 +2607,123 @@ async def test_publish_error_redacts_signed_media_token(client, factory):
     st = await client.get(f"/api/profiles/{pid}/publish/{body['publication_id']}")
     stored = next(x for x in st.json() if x["channel"] == "telegram")
     assert fake_token not in (stored["error"] or "")
+
+
+# ── T-209: медиа-ретеншн при submitted / retryable failed ─────────────────────
+
+
+async def test_retry_failed_keeps_media(client, factory, tmp_path, monkeypatch):
+    """После ретрая, вернувшего FAILED, медиа не удаляется — канал ещё можно повторить."""
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    adapters = {
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "t1")
+        ),
+        "vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("vk fail")),
+    }
+    with _patch_adapters(adapters):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "x",
+                "channels": json.dumps(["telegram", "vk_wall"]),
+            },
+            files=_post_files(),
+        )
+    assert r.status_code == 200
+    pub_id = r.json()["publication_id"]
+
+    media_root = tmp_path / "media"
+
+    # Ретрай vk_wall — снова FAILED.
+    with _patch_adapters({"vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("vk fail 2"))}):
+        r2 = await client.post(f"/api/profiles/{pid}/publish/{pub_id}/retry/vk_wall")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "failed"
+
+    # Медиа должно оставаться — vk_wall FAILED, но повторим ещё.
+    if media_root.exists():
+        surviving = [d for d in media_root.iterdir() if d.is_dir()]
+        assert surviving, "медиа удалено после retryable failed — не должно"
+
+
+async def test_replace_media_with_submitted_channel_keeps_old(
+    client, factory, tmp_path, monkeypatch
+):
+    """Редактирование поста с submitted-каналом не удаляет старое медиа."""
+    from crosspost.db.models import PublicationStatus, ScheduledPost  # noqa: I001
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+    from sqlalchemy import update as _upd
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    old_key = "sched-subm-old"
+    old_dir = tmp_path / "media" / old_key
+    old_dir.mkdir(parents=True)
+    old_file = old_dir / "00_photo.jpg"
+    old_file.write_bytes(b"\xff\xd8\xff")
+
+    pubid = scheduled_publication_id(sched_id)
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(old_file)], status="failed")
+        )
+        await PublicationRepository(s, profile_id=pid).set_status(
+            pubid, "telegram", PublicationStatus.SUBMITTED
+        )
+        await s.commit()
+
+    with _patch_image_ctx():
+        r = await client.patch(
+            f"/api/profiles/{pid}/scheduled/{sched_id}",
+            json={"image": "https://example.com/new.jpg"},
+        )
+    assert r.status_code == 200
+
+    # Старое медиа сохранено — канал в submitted.
+    assert old_dir.exists(), "старое медиа удалено при наличии submitted-канала"
+
+
+async def test_cancel_with_submitted_channel_keeps_media(client, factory, tmp_path, monkeypatch):
+    """Отмена поста с submitted-каналом не удаляет медиа (T-209)."""
+    from crosspost.db.models import PublicationStatus, ScheduledPost  # noqa: I001
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.scheduler.executor import scheduled_publication_id
+    from sqlalchemy import update as _upd
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    media_key = "sched-cancel-subm"
+    media_dir = tmp_path / "media" / media_key
+    media_dir.mkdir(parents=True)
+    (media_dir / "00_photo.jpg").write_bytes(b"\xff\xd8\xff")
+
+    pubid = scheduled_publication_id(sched_id)
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(media_dir / "00_photo.jpg")], status="failed")
+        )
+        await PublicationRepository(s, profile_id=pid).set_status(
+            pubid, "telegram", PublicationStatus.SUBMITTED
+        )
+        await s.commit()
+
+    r = await client.delete(f"/api/profiles/{pid}/scheduled/{sched_id}")
+    assert r.status_code == 200
+
+    # Медиа сохранено — TTL-sweep удалит его позже.
+    assert media_dir.exists(), "медиа удалено при отмене поста с submitted-каналом"

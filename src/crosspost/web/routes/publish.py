@@ -70,15 +70,9 @@ def _make_preview_client() -> httpx.AsyncClient:
 
 
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
-# Статусы, при которых медиа можно удалять. SUBMITTED исключён: без квитанции медиа
-# хранится до TTL или ручного подтверждения (T-209).
-_MEDIA_SAFE_TO_DELETE = frozenset(
-    {
-        PublicationStatus.DONE.value,
-        PublicationStatus.FAILED.value,
-        PublicationStatus.NEEDS_RELOGIN.value,
-    }
-)
+# Медиа удаляются только когда ВСЕ каналы строго DONE: failed/submitted/needs_relogin
+# означают, что пользователь может ещё повторить или канал ещё не подтверждён.
+# В планировщике (executor.py) FAILED терминален (исчерпан потолок) — там другой набор.
 
 # ── Preview block cache ───────────────────────────────────────────────────────
 # Process-level URL → (data_uri, expiry) cache.
@@ -691,8 +685,11 @@ async def publish_retry(
 
     all_now = await pub_repo.list_statuses(publication_id)
     all_success_now = all(str(s.status) in _SUCCESS for s in all_now)
-    no_submitted_now = all(str(s.status) in _MEDIA_SAFE_TO_DELETE for s in all_now)
-    if no_submitted_now:
+    # Delete media only when ALL channels are strictly done — failed is retryable via UI.
+    all_strictly_done_now = all_success_now and all(
+        str(s.status) == PublicationStatus.DONE.value for s in all_now
+    )
+    if all_strictly_done_now:
         media_store.cleanup_media(run.media_key)
     if all_success_now:
         _RUNS.pop((profile_id, publication_id), None)
@@ -1052,10 +1049,15 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
     media_paths = list(post.media_paths or [])
     await pub_repo.cancel_scheduled(scheduled_id)
-    # Чистим медиа отменённого поста (каталог = родитель первого файла).
+    # Чистим медиа отменённого поста, только если нет submitted-каналов (T-209).
     if media_paths:
-        parent = Path(media_paths[0]).parent
-        media_store.cleanup_media(parent.name)
+        from crosspost.scheduler.executor import scheduled_publication_id  # noqa: PLC0415
+
+        pubid = scheduled_publication_id(scheduled_id)
+        has_submitted = await pub_repo.has_submitted_channel(pubid)
+        if not has_submitted:
+            parent = Path(media_paths[0]).parent
+            media_store.cleanup_media(parent.name)
     return {"cancelled": True}
 
 
@@ -1144,7 +1146,12 @@ async def _cleanup_old_media(
     scheduled_id: int,
     old_paths: list[str],
 ) -> None:
-    """Удалить каталоги старого медиа, только если они не shared с другим постом."""
+    """Удалить каталоги старого медиа, только если они не shared и нет submitted-каналов (T-209)."""
+    from crosspost.scheduler.executor import scheduled_publication_id  # noqa: PLC0415
+
+    pubid = scheduled_publication_id(scheduled_id)
+    if await pub_repo.has_submitted_channel(pubid):
+        return  # media retained until TTL (T-209)
     keys = {Path(p).parent.name for p in old_paths if p}
     for key in keys:
         try:
@@ -1236,13 +1243,17 @@ async def _save_media(files, key: str) -> list[str]:
 async def _cleanup_if_final(session, profile_id: int, publication_id: str, outcomes) -> None:
     """Финализация ресурсов публикации.
 
-    Медиа: удаляется когда все каналы в DONE/FAILED/NEEDS_RELOGIN (нет SUBMITTED).
+    Медиа: удаляется только когда ВСЕ каналы строго DONE. FAILED и NEEDS_RELOGIN
+    означают, что пользователь может ещё повторить — медиа сохраняется до TTL (T-209).
     _RUNS и чекпоинты: только когда все SUCCESS (done/submitted) — пока есть FAILED,
     retry ещё возможен, run должен быть доступен.
     """
     all_success = all(o.status in _SUCCESS for o in outcomes)
-    no_submitted = all(o.status in _MEDIA_SAFE_TO_DELETE for o in outcomes)
-    if no_submitted:
+    # Strict: delete media only when every channel confirmed delivery.
+    all_strictly_done = all_success and all(
+        str(o.status) == PublicationStatus.DONE.value for o in outcomes
+    )
+    if all_strictly_done:
         media_store.cleanup_media(publication_id)
     if all_success:
         _RUNS.pop((profile_id, publication_id), None)

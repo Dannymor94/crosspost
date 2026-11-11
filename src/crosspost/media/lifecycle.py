@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 from crosspost.web import media as media_store
 
-SUBMITTED_MEDIA_TTL_DAYS_DEFAULT = 7
+SUBMITTED_MEDIA_TTL_DAYS_DEFAULT = 14  # Yandex moderation takes up to 7 days; 14 gives margin
 
 
 def submitted_media_ttl_days() -> int:

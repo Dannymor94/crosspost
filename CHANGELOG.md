@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-11 — медиа submitted-постов, rev 2 (T-209, по ревью Codex)
+
+- **Класс дефекта: все пути удаления медиа проверяют submitted-каналы.**
+- `publish.py`: медиа удаляется ТОЛЬКО когда ВСЕ каналы строго `done` (убран
+  `_MEDIA_SAFE_TO_DELETE`; `failed` и `needs_relogin` во веб-контексте ретраемые —
+  медиа сохраняется). Пути: `_cleanup_if_final`, inline retry, `cancel_scheduled`,
+  `_cleanup_old_media` при замене медиа.
+- `executor.py`: константа `_MEDIA_SAFE_TO_DELETE` корректна (FAILED = исчерпан
+  потолок попыток), добавлен TTL-sweep (`_run_ttl_sweep`), запускается раз в час.
+- `media/lifecycle.py`: TTL по умолчанию 7 → 14 дней (Яндекс модерирует до 7 дней,
+  запас двукратный).
+- `publication_repo.py`: метод `has_submitted_channel(publication_id)`.
+- Три новых теста в `test_publish_api.py` на класс: retry FAILED, замена медиа,
+  отмена поста — все сохраняют медиа при наличии submitted-канала.
+- T-212 (P0, фаза 2): ручная переотправка submitted из UI — заведено в BACKLOG.
+
 ## 2026-11-10 — медиа submitted-постов (T-209)
 
 - `executor.py` и `publish.py`: медиа не удаляется, пока хотя бы один канал в `submitted`.

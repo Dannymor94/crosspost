@@ -137,6 +137,17 @@ class PublicationRepository:
         )
         return row.first() is not None
 
+    async def has_submitted_channel(self, publication_id: str) -> bool:
+        """True if any channel for this publication is in SUBMITTED state."""
+        row = await self._s.execute(
+            select(Publication.id).where(
+                Publication.profile_id == self._pid,
+                Publication.publication_id == publication_id,
+                Publication.status == PublicationStatus.SUBMITTED,
+            )
+        )
+        return row.first() is not None
+
     # ── Запланированные посты ─────────────────────────────────────────────────
 
     async def create_scheduled(
