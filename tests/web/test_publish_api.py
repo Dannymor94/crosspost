@@ -1712,8 +1712,12 @@ async def test_cleanup_skip_on_422(client, factory, tmp_path, monkeypatch):
     assert dirs_after == dirs_before
 
 
-async def test_cleanup_orphan_on_cas_409(client, factory, tmp_path, monkeypatch):
-    """CAS False (PUBLISHING → 409) → скачанный новый файл удалён, старый не тронут."""
+async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypatch):
+    """T-209 CAS path: скачанный новый файл НЕ удаляется при 409 (медиа сохраняется).
+
+    Mutation check: если вернуть _cleanup_paths_safe(new_media_paths) в PATCH,
+    новый dir будет удалён и тест упадёт.
+    """
     from sqlalchemy import update as _upd
 
     from crosspost.db.models import ScheduledPost
@@ -1736,6 +1740,10 @@ async def test_cleanup_orphan_on_cas_409(client, factory, tmp_path, monkeypatch)
         )
         await s.commit()
 
+    # Снимок до PATCH — чтобы знать какие dirs НОВЫЕ
+    media_root = tmp_path / "media"
+    dirs_before = {d.name for d in media_root.iterdir()}
+
     with _patch_image_ctx():
         r = await client.patch(
             f"/api/profiles/{pid}/scheduled/{sched_id}",
@@ -1745,15 +1753,10 @@ async def test_cleanup_orphan_on_cas_409(client, factory, tmp_path, monkeypatch)
 
     # Старый каталог нетронут
     assert old_dir.exists()
-    # Новые файлы не осиротели: ни один каталог кроме old_key и оригинального sched- поста
-    media_root = tmp_path / "media"
-    # Файл для нового изображения должен быть удалён
-    orphaned = [
-        d
-        for d in media_root.iterdir()
-        if d.name != old_key and d.stat().st_mtime > old_dir.stat().st_mtime and "sched-" in d.name
-    ]
-    assert not orphaned, f"Orphaned dirs found: {orphaned}"
+    # T-209: новый скачанный файл (появившийся при PATCH) должен ОСТАТЬСЯ
+    dirs_after = {d.name for d in media_root.iterdir()}
+    new_retained = dirs_after - dirs_before
+    assert new_retained, "Новый скачанный файл удалён при CAS 409 — не должно (T-209)"
 
 
 async def test_cleanup_shared_reference_not_deleted(client, factory, tmp_path, monkeypatch):
@@ -2688,43 +2691,25 @@ async def test_t209_reject_retains_media(client, factory, tmp_path, monkeypatch)
     assert media_dir.exists(), "медиа удалено при reject — не должно (T-209)"
 
 
-async def test_t209_publish_now_all_done_retains_media(factory, tmp_path, monkeypatch):
-    """T-209 _cleanup_if_final path: медиа сохраняется после publish_now с DONE.
+async def test_t209_direct_publish_all_done_retains_media(client, factory, tmp_path, monkeypatch):
+    """T-209 _cleanup_if_final path: медиа не удаляется после прямой публикации (все done).
 
-    Mutation check: если вернуть cleanup_media в _cleanup_if_final,
-    media_dir будет удалён и тест упадёт.
+    Mutation check: если вернуть cleanup_media(publication_id) в _cleanup_if_final,
+    media_dir(publication_id) будет удалён и тест упадёт.
     """
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
-
     pid = await _make_profile_with_live(factory, ["telegram"])
-    ex = _FakeExecutor(factory, {"telegram": ("done", None)})
-    c = await _client_with_executor(factory, ex)
-
-    async with c:
-        sched_id = await _schedule_one(c, pid, ["telegram"])
-
-        media_key = "sched-pubnow-t209"
-        media_dir = tmp_path / "media" / media_key
-        media_dir.mkdir(parents=True)
-        media_file = media_dir / "00_photo.jpg"
-        media_file.write_bytes(b"\xff\xd8\xff")
-
-        async with factory() as s:
-            from sqlalchemy import update as _upd  # noqa: PLC0415
-
-            from crosspost.db.models import ScheduledPost  # noqa: PLC0415
-
-            await s.execute(
-                _upd(ScheduledPost)
-                .where(ScheduledPost.id == sched_id)
-                .values(media_paths=[str(media_file)])
-            )
-            await s.commit()
-
-        r = await c.post(f"/api/profiles/{pid}/scheduled/{sched_id}/publish-now")
+    with _patch_adapters({"telegram": _MockAdapter("telegram")}):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram"])},
+            files=_post_files(),
+        )
     assert r.status_code == 200
-
-    assert media_dir.exists(), "медиа удалено после publish_now DONE — не должно (T-209)"
+    pub_id = r.json()["publication_id"]
+    assert (tmp_path / "media" / pub_id).exists(), (
+        "медиа удалено после publish_now DONE — не должно (T-209)"
+    )
 
 
 async def test_t209_retry_all_done_retains_media(client, factory, tmp_path, monkeypatch):

@@ -1013,9 +1013,7 @@ async def reschedule(
         rewind_failed=True,
     )
     if not updated:
-        # Orphaned new media: CAS не прошёл — удаляем свежескачанный файл до 409.
-        if new_media_paths:
-            _cleanup_paths_safe(new_media_paths)
+        # T-209: orphaned new media not deleted — retained indefinitely.
         raise HTTPException(status_code=409, detail="Пост уже исполнен или обрабатывается")
 
     # T-209: old media not deleted on replace — retained indefinitely until T-214.
