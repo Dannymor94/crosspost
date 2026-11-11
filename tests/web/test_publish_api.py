@@ -2760,3 +2760,39 @@ async def test_t209_retry_all_done_retains_media(client, factory, tmp_path, monk
     # Медиа должно оставаться — T-209 отключила cleanup_if_final.
     surviving = [d for d in media_root.iterdir() if d.is_dir()]
     assert surviving, "медиа удалено после retry DONE — не должно (T-209)"
+
+
+async def test_t209_failed_upload_does_not_delete_existing_media(
+    client, factory, tmp_path, monkeypatch
+):
+    """Откат неудавшейся загрузки не трогает медиа существующих публикаций.
+
+    Граница T-209: unlink частично записанного файла при превышении лимита —
+    это rollback незавершённой загрузки, не удаление медиа публикации.
+    Медиа других публикаций должно быть нетронуто.
+    """
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    # Имитируем существующее медиа другой публикации
+    existing_key = "existing-pub-media"
+    existing_dir = tmp_path / "media" / existing_key
+    existing_dir.mkdir(parents=True)
+    existing_file = existing_dir / "00_photo.jpg"
+    existing_file.write_bytes(b"\xff\xd8\xff" * 100)
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+
+    # Загружаем файл, превышающий лимит (патчим лимит до 1 байта)
+    import crosspost.web.media as _media_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(_media_mod, "_IMAGE_MAX_BYTES", 1)
+
+    r = await client.post(
+        f"/api/profiles/{pid}/publish",
+        data={"content_type": "post", "text": "hi", "channels": json.dumps(["telegram"])},
+        files=_post_files(),
+    )
+    assert r.status_code == 422  # MediaUploadError → 422
+
+    # Существующее медиа другой публикации не тронуто
+    assert existing_file.exists(), "медиа другой публикации удалено при откате загрузки — не должно"
