@@ -67,8 +67,6 @@ _MEDIA_SAFE_TO_DELETE = frozenset(
     }
 )
 
-_TTL_SWEEP_INTERVAL = timedelta(hours=1)
-
 SleepFn = Callable[[float], Awaitable[None]]
 
 
@@ -101,7 +99,6 @@ class ScheduledExecutor:
         self._poll = max(0.0, poll_seconds)
         self._browser_cooldown = max(0.0, browser_session_cooldown)
         self._sleep = sleep
-        self._last_ttl_sweep: datetime | None = None
 
     # ── Конфигурация ──────────────────────────────────────────────────────────
 
@@ -161,44 +158,31 @@ class ScheduledExecutor:
                 await self._sleep(self._pacing)  # разнос отправок (анти-бан)
             await self._process_post(post_id, now=moment)
             processed.append(post_id)
-
-        if self._last_ttl_sweep is None or moment - self._last_ttl_sweep >= _TTL_SWEEP_INTERVAL:
-            await self._run_ttl_sweep(moment)
-            self._last_ttl_sweep = moment
-
         return processed
 
     # ── TTL-чистка submitted-медиа (T-209) ───────────────────────────────────
 
-    async def _run_ttl_sweep(self, now: datetime) -> None:
-        """Удалить медиа submitted-каналов, у которых истёк TTL."""
-        from crosspost.media.lifecycle import submitted_media_ttl_days  # noqa: PLC0415,I001
-        from sqlalchemy import select as sa_select  # noqa: PLC0415
+    async def run_ttl_sweep(self, now: datetime) -> int:
+        """Удалить медиа submitted-каналов, у которых истёк TTL по submitted_at.
 
-        ttl_days = submitted_media_ttl_days()
-        cutoff = now - timedelta(days=ttl_days)
+        Не вызывается автоматически из run_once — запускается владельцем вручную
+        или отдельным CLI-скриптом после проверки корректности (T-212).
+        Возвращает число удалённых ключей.
+        """
+        from crosspost.media.lifecycle import submitted_media_ttl_days  # noqa: PLC0415
+
+        cutoff = now - timedelta(days=submitted_media_ttl_days())
         async with self._factory() as session:
-            result = await session.execute(
-                sa_select(Publication.publication_id)
-                .where(Publication.status == PublicationStatus.SUBMITTED)
-                .where(Publication.updated_at < cutoff)
-                .distinct()
-            )
-            expired_ids = [row[0] for row in result.all()]
+            keys = await PublicationRepository.get_expired_submitted_media(session, cutoff)
 
-        for pub_id in expired_ids:
+        deleted = 0
+        for key in keys:
             try:
-                if pub_id.startswith("schedpost-"):
-                    sched_id = int(pub_id.removeprefix("schedpost-"))
-                    async with self._factory() as session:
-                        post = await session.get(ScheduledPost, sched_id)
-                    if post and post.media_paths:
-                        key = Path(post.media_paths[0]).parent.name
-                        media_store.cleanup_media(key)
-                else:
-                    media_store.cleanup_media(pub_id)
+                media_store.cleanup_media(key)
+                deleted += 1
             except Exception:  # noqa: BLE001
-                logger.warning("ttl_sweep: failed to clean pub_id=%s", pub_id)
+                logger.warning("ttl_sweep: failed to clean media_key=%s", key)
+        return deleted
 
     # ── Обработка одного поста ────────────────────────────────────────────────
 
@@ -250,10 +234,17 @@ class ScheduledExecutor:
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
-            # Удалять медиа только если ни один канал не в SUBMITTED.
-            # При наличии submitted медиа хранится до TTL (T-209).
+            # Persist media_key on all publication rows so TTL sweep can find media
+            # even if the scheduled_post row is later hard-deleted (cancel).
+            if post.media_paths:
+                media_key = Path(post.media_paths[0]).parent.name
+                await pub_repo.associate_media_key(pubid, media_key)
+            # Удалять медиа только если ни один канал не в SUBMITTED (T-209).
+            # В executor FAILED терминален (потолок исчерпан) — _MEDIA_SAFE_TO_DELETE корректен.
             if all(o.status in _MEDIA_SAFE_TO_DELETE for o in flow.outcomes):
-                self._cleanup_media(post.media_paths)
+                await self._cleanup_media_checked(
+                    session, post.id, post.profile_id, post.media_paths
+                )
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
 
     def _ceiling_step(
@@ -409,11 +400,19 @@ class ScheduledExecutor:
             media_paths=[Path(p) for p in (post.media_paths or [])],
         )
 
-    def _cleanup_media(self, media_paths: list) -> None:
-        """Удалить каталоги медиа поста (sched-<uuid>) — все каналы финализированы."""
+    async def _cleanup_media_checked(
+        self,
+        session: AsyncSession,
+        post_id: int,
+        profile_id: int,
+        media_paths: list,
+    ) -> None:
+        """Delete media dirs — only those not shared with another scheduled post."""
+        pub_repo = PublicationRepository(session, profile_id=profile_id)
         keys = {Path(p).parent.name for p in (media_paths or [])}
         for key in keys:
-            media_store.cleanup_media(key)
+            if not await pub_repo.media_key_shared(post_id, key):
+                media_store.cleanup_media(key)
 
     async def _cleanup_checkpoints(self, session, profile_id: int, publication_id: str) -> None:
         """Удалить чекпоинты шагов после финализации (все каналы терминальны)."""

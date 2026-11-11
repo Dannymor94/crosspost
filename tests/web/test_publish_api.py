@@ -2613,7 +2613,12 @@ async def test_publish_error_redacts_signed_media_token(client, factory):
 
 
 async def test_retry_failed_keeps_media(client, factory, tmp_path, monkeypatch):
-    """После ретрая, вернувшего FAILED, медиа не удаляется — канал ещё можно повторить."""
+    """После ретрая, вернувшего FAILED, медиа не удаляется — канал ещё можно повторить.
+
+    Mutation check: без защиты от retryable FAILED в _cleanup_if_final медиа
+    удалялось бы при наличии хотя бы одного DONE-канала. Тест должен упасть,
+    если убрать проверку all_strictly_done.
+    """
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
     pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
@@ -2636,7 +2641,11 @@ async def test_retry_failed_keeps_media(client, factory, tmp_path, monkeypatch):
     assert r.status_code == 200
     pub_id = r.json()["publication_id"]
 
+    # Убеждаемся, что медиа создано при публикации.
     media_root = tmp_path / "media"
+    assert media_root.exists(), "медиа-директория не создана при публикации"
+    dirs_before = [d for d in media_root.iterdir() if d.is_dir()]
+    assert dirs_before, "нет медиа-каталогов после публикации"
 
     # Ретрай vk_wall — снова FAILED.
     with _patch_adapters({"vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("vk fail 2"))}):
@@ -2644,16 +2653,19 @@ async def test_retry_failed_keeps_media(client, factory, tmp_path, monkeypatch):
     assert r2.status_code == 200
     assert r2.json()["status"] == "failed"
 
-    # Медиа должно оставаться — vk_wall FAILED, но повторим ещё.
-    if media_root.exists():
-        surviving = [d for d in media_root.iterdir() if d.is_dir()]
-        assert surviving, "медиа удалено после retryable failed — не должно"
+    # Медиа должно оставаться — vk_wall FAILED, но ещё можно повторить.
+    surviving = [d for d in media_root.iterdir() if d.is_dir()]
+    assert surviving, "медиа удалено после retryable FAILED — не должно"
 
 
-async def test_replace_media_with_submitted_channel_keeps_old(
+async def test_replace_media_with_submitted_channel_returns_409(
     client, factory, tmp_path, monkeypatch
 ):
-    """Редактирование поста с submitted-каналом не удаляет старое медиа."""
+    """PATCH с новым медиа при submitted-канале возвращает 409 и не трогает старое медиа.
+
+    Mutation check: без 409-гарда в update_scheduled PATCH проходит (200) и старый
+    media_key теряется (orphan). Тест упадёт при удалении проверки has_submitted_channel.
+    """
     from crosspost.db.models import PublicationStatus, ScheduledPost  # noqa: I001
     from crosspost.db.publication_repo import PublicationRepository
     from crosspost.scheduler.executor import scheduled_publication_id
@@ -2687,14 +2699,19 @@ async def test_replace_media_with_submitted_channel_keeps_old(
             f"/api/profiles/{pid}/scheduled/{sched_id}",
             json={"image": "https://example.com/new.jpg"},
         )
-    assert r.status_code == 200
+    # 409 — замена медиа заблокирована (иначе старый media_key становится orphan).
+    assert r.status_code == 409, f"ожидали 409, получили {r.status_code}: {r.text}"
 
-    # Старое медиа сохранено — канал в submitted.
-    assert old_dir.exists(), "старое медиа удалено при наличии submitted-канала"
+    # Старое медиа не затронуто — запрос был отклонён.
+    assert old_dir.exists(), "старое медиа удалено несмотря на отклонённый PATCH"
 
 
 async def test_cancel_with_submitted_channel_keeps_media(client, factory, tmp_path, monkeypatch):
-    """Отмена поста с submitted-каналом не удаляет медиа (T-209)."""
+    """Отмена поста с submitted-каналом не удаляет медиа (T-209).
+
+    Mutation check: без проверки has_submitted_channel в cancel_scheduled медиа
+    удалялось бы при DELETE. Тест упадёт при удалении этой проверки.
+    """
     from crosspost.db.models import PublicationStatus, ScheduledPost  # noqa: I001
     from crosspost.db.publication_repo import PublicationRepository
     from crosspost.scheduler.executor import scheduled_publication_id
@@ -2708,14 +2725,15 @@ async def test_cancel_with_submitted_channel_keeps_media(client, factory, tmp_pa
     media_key = "sched-cancel-subm"
     media_dir = tmp_path / "media" / media_key
     media_dir.mkdir(parents=True)
-    (media_dir / "00_photo.jpg").write_bytes(b"\xff\xd8\xff")
+    media_file = media_dir / "00_photo.jpg"
+    media_file.write_bytes(b"\xff\xd8\xff")
 
     pubid = scheduled_publication_id(sched_id)
     async with factory() as s:
         await s.execute(
             _upd(ScheduledPost)
             .where(ScheduledPost.id == sched_id)
-            .values(media_paths=[str(media_dir / "00_photo.jpg")], status="failed")
+            .values(media_paths=[str(media_file)], status="failed")
         )
         await PublicationRepository(s, profile_id=pid).set_status(
             pubid, "telegram", PublicationStatus.SUBMITTED
@@ -2725,5 +2743,42 @@ async def test_cancel_with_submitted_channel_keeps_media(client, factory, tmp_pa
     r = await client.delete(f"/api/profiles/{pid}/scheduled/{sched_id}")
     assert r.status_code == 200
 
-    # Медиа сохранено — TTL-sweep удалит его позже.
+    # Медиа сохранено — TTL-sweep удалит его позже по submitted_at.
     assert media_dir.exists(), "медиа удалено при отмене поста с submitted-каналом"
+    assert media_file.exists(), "медиа-файл удалён при отмене поста с submitted-каналом"
+
+
+async def test_cancel_without_submitted_channel_cleans_media(
+    client, factory, tmp_path, monkeypatch
+):
+    """Отмена поста БЕЗ submitted-каналов удаляет медиа (контр-мутация).
+
+    Проверяет, что защита не блокирует нормальную чистку при отсутствии submitted.
+    """
+    from crosspost.db.models import ScheduledPost  # noqa: I001
+    from sqlalchemy import update as _upd
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    media_key = "sched-cancel-nsubm"
+    media_dir = tmp_path / "media" / media_key
+    media_dir.mkdir(parents=True)
+    media_file = media_dir / "00_photo.jpg"
+    media_file.write_bytes(b"\xff\xd8\xff")
+
+    async with factory() as s:
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(media_file)], status="failed")
+        )
+        await s.commit()
+
+    r = await client.delete(f"/api/profiles/{pid}/scheduled/{sched_id}")
+    assert r.status_code == 200
+
+    # Нет submitted — медиа должно быть очищено.
+    assert not media_dir.exists(), "медиа не удалено при отмене поста без submitted-каналов"

@@ -230,6 +230,12 @@ class Publication(Base):
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Moment this channel entered SUBMITTED state. Set explicitly in set_status (not via
+    # onupdate, which does not fire for raw sqlite INSERT … ON CONFLICT DO UPDATE).
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Media directory key associated with this publication — survives scheduled_post deletion,
+    # allowing TTL sweep to find and clean orphaned media.
+    media_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now()
     )

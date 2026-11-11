@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-11 — медиа submitted-постов, rev 3 (T-209, второе ревью Codex)
+
+- **submitted_at:** новый столбец `Publication.submitted_at` — время перехода канала
+  в SUBMITTED (явно записывается в `set_status`, т.к. raw SQLite upsert не активирует
+  `onupdate`). TTL sweep использует `submitted_at`, а не `updated_at`.
+- **media_key:** новый столбец `Publication.media_key` — ключ медиа-директории,
+  переживающий hard-DELETE строки `scheduled_posts`. Позволяет TTL sweep найти медиа
+  после отмены поста.
+- **Миграция:** `t209_publication_media_tracking` (batch_alter_table, idempotent).
+- **Sharing check во всех путях удаления:** `media_key_shared()` проверяется в executor
+  (`_cleanup_media_checked`), `cancel_scheduled` и `reject_post`.
+- **409 при PATCH с submitted-каналом:** `update_scheduled` возвращает 409 вместо замены
+  медиа, когда есть submitted-канал (иначе старый media_key становится orphan).
+- **TTL sweep:** `run_ttl_sweep(now)` — публичный метод, вызывается вручную/CLI (T-212).
+  Не запускается из `run_once` до верификации.
+- **Mutation-killing тесты:** переписаны 3 теста + добавлены 5 новых (submitted_at,
+  ttl_sweep expired, ttl_sweep keeps fresh, cancel без submitted чистит медиа,
+  409 при PATCH).
+- `tests/db/test_migrations.py`: обновлён expected revision до t209_publication_media_tracking.
+
 ## 2026-11-11 — медиа submitted-постов, rev 2 (T-209, по ревью Codex)
 
 - **Класс дефекта: все пути удаления медиа проверяют submitted-каналы.**

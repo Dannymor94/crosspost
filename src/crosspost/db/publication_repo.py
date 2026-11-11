@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy import delete, select
@@ -48,21 +48,31 @@ class PublicationRepository:
         external_id: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Upsert поканального статуса (profile_id, publication_id, channel, target)."""
+        """Upsert поканального статуса (profile_id, publication_id, channel, target).
+
+        При переходе в SUBMITTED явно пишет submitted_at — raw SQL upsert не активирует
+        onupdate SQLAlchemy, поэтому момент перехода отслеживается в явном поле.
+        """
+        insert_vals: dict = {
+            "profile_id": self._pid,
+            "publication_id": publication_id,
+            "channel": channel,
+            "target": target,
+            "status": status,
+            "external_id": external_id,
+            "error": error,
+        }
+        update_vals: dict = {"status": status, "external_id": external_id, "error": error}
+        if status == PublicationStatus.SUBMITTED:
+            now = datetime.now(UTC).replace(tzinfo=None)
+            insert_vals["submitted_at"] = now
+            update_vals["submitted_at"] = now
         stmt = (
             sqlite_insert(Publication)
-            .values(
-                profile_id=self._pid,
-                publication_id=publication_id,
-                channel=channel,
-                target=target,
-                status=status,
-                external_id=external_id,
-                error=error,
-            )
+            .values(**insert_vals)
             .on_conflict_do_update(
                 index_elements=["profile_id", "publication_id", "channel", "target"],
-                set_={"status": status, "external_id": external_id, "error": error},
+                set_=update_vals,
             )
         )
         await self._s.execute(stmt)
@@ -147,6 +157,22 @@ class PublicationRepository:
             )
         )
         return row.first() is not None
+
+    async def associate_media_key(self, publication_id: str, media_key: str) -> None:
+        """Persist the media directory key on all publication rows for this publication_id.
+
+        Called after publishing so the TTL sweep can find the media even if the
+        corresponding scheduled_post row is later hard-deleted (cancel).
+        """
+        await self._s.execute(
+            sql_update(Publication)
+            .where(
+                Publication.profile_id == self._pid,
+                Publication.publication_id == publication_id,
+            )
+            .values(media_key=media_key)
+        )
+        await self._s.commit()
 
     # ── Запланированные посты ─────────────────────────────────────────────────
 
@@ -409,6 +435,24 @@ class PublicationRepository:
             .limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def get_expired_submitted_media(session: AsyncSession, cutoff: datetime) -> list[str]:
+        """Return distinct media_keys for SUBMITTED channels whose submitted_at < cutoff.
+
+        Static — not profile-scoped; sweeps across all profiles. Only returns rows
+        where media_key is set (associate_media_key was called after publishing).
+        """
+        result = await session.execute(
+            select(Publication.media_key)
+            .where(
+                Publication.status == PublicationStatus.SUBMITTED,
+                Publication.submitted_at < cutoff,
+                Publication.media_key.is_not(None),
+            )
+            .distinct()
+        )
+        return [row[0] for row in result.all()]
 
     async def cancel_scheduled(self, scheduled_id: int) -> bool:
         """Удалить запланированный пост профиля. True если что-то удалено."""

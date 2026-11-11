@@ -279,6 +279,117 @@ async def test_all_done_cleans_media(factory, monkeypatch):
     assert not media_dir.exists(), "медиа должно быть удалено — все каналы done"
 
 
+# ── TTL sweep: submitted_at и run_ttl_sweep ────────────────────────────────────
+
+
+async def test_submitted_at_set_on_submitted_transition(factory, monkeypatch):
+    """set_status записывает submitted_at при переходе в SUBMITTED.
+
+    Mutation check: без явного set submitted_at = now() в set_status столбец
+    остаётся NULL и TTL sweep не может найти просроченное медиа.
+    Тест упадёт при удалении блока `if status == PublicationStatus.SUBMITTED`.
+    """
+    from sqlalchemy import select
+
+    from crosspost.db.models import Publication
+
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example.com")
+    pid = await _make_profile(factory, ["telegram"], name="submat")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, _ = await _seed_post(factory, pid, past, ["telegram"])
+
+    submitted_adapter = _MockAdapter(
+        "telegram", result=ChannelResult("telegram", ResultStatus.SUBMITTED)
+    )
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0)
+    with _patch_adapters({"telegram": submitted_adapter}):
+        await ex.run_once()
+
+    pubid = scheduled_publication_id(post_id)
+    async with factory() as s:
+        row = await s.scalar(
+            select(Publication).where(
+                Publication.publication_id == pubid,
+                Publication.channel == "telegram",
+            )
+        )
+    assert row is not None
+    assert row.submitted_at is not None, "submitted_at не установлен при переходе в SUBMITTED"
+
+
+async def test_ttl_sweep_deletes_expired_submitted_media(factory, monkeypatch, tmp_path):
+    """run_ttl_sweep удаляет медиа, у которого submitted_at старше cutoff.
+
+    Mutation check: без TTL sweep или без проверки submitted_at медиа не удаляется.
+    Тест упадёт если:
+    - run_ttl_sweep не вызывает cleanup_media
+    - фильтр по submitted_at < cutoff не работает
+    """
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example.com")
+    pid = await _make_profile(factory, ["telegram"], name="ttl-exp")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(factory, pid, past, ["telegram"], media_key="ttl-old")
+
+    submitted_adapter = _MockAdapter(
+        "telegram", result=ChannelResult("telegram", ResultStatus.SUBMITTED)
+    )
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0)
+    with _patch_adapters({"telegram": submitted_adapter}):
+        await ex.run_once()
+
+    # Убеждаемся, что submitted_at записан и медиа_key ассоциирован.
+    pubid = scheduled_publication_id(post_id)
+    from sqlalchemy import update as _upd
+
+    from crosspost.db.models import Publication
+
+    async with factory() as s:
+        # Вручную ставим submitted_at в далёкое прошлое, чтобы TTL истёк.
+        cutoff = datetime.now() - timedelta(days=15)
+        await s.execute(
+            _upd(Publication)
+            .where(Publication.publication_id == pubid)
+            .values(
+                submitted_at=cutoff - timedelta(days=1),
+                media_key="ttl-old",
+            )
+        )
+        await s.commit()
+
+    assert media_dir.exists(), "медиа должно быть до sweep"
+
+    deleted = await ex.run_ttl_sweep(datetime.now())
+    assert deleted >= 1, f"sweep удалил {deleted} ключей, ожидали ≥1"
+    assert not media_dir.exists(), "медиа должно быть удалено после TTL sweep"
+
+
+async def test_ttl_sweep_keeps_recent_submitted_media(factory, monkeypatch, tmp_path):
+    """run_ttl_sweep НЕ удаляет свежее медиа (submitted_at < 14 дней назад).
+
+    Mutation check: без фильтра cutoff sweep удалял бы всё submitted медиа.
+    """
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+    monkeypatch.setenv("VK_PROXY_URL", "http://proxy.example.com")
+    pid = await _make_profile(factory, ["telegram"], name="ttl-fresh")
+    past = datetime.now() - timedelta(minutes=1)
+    post_id, media_dir = await _seed_post(factory, pid, past, ["telegram"], media_key="ttl-fresh")
+
+    submitted_adapter = _MockAdapter(
+        "telegram", result=ChannelResult("telegram", ResultStatus.SUBMITTED)
+    )
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0)
+    with _patch_adapters({"telegram": submitted_adapter}):
+        await ex.run_once()
+
+    # submitted_at свежий (только что) — TTL ещё не истёк.
+    deleted = await ex.run_ttl_sweep(datetime.now())
+    assert deleted == 0, f"sweep удалил {deleted} ключей, не должен был"
+    assert media_dir.exists(), "свежее медиа удалено sweep — не должно"
+
+
 # ── Пейсинг: несколько созревших постов идут с паузой ──────────────────────────
 
 

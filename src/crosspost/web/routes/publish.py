@@ -620,6 +620,13 @@ async def publish_now(
         article_title=title or None,
         link_phrase=link_phrase or None,
     )
+    # Persist media_key so TTL sweep can find media even if publications rows outlive
+    # the in-memory _RUNS entry.
+    if media_paths:
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        media_key_val = _Path(media_paths[0]).parent.name
+        await pub_repo.associate_media_key(publication_id, media_key_val)
     await _cleanup_if_final(session, profile_id, publication_id, outcomes)
     await _log_outcomes(LogRepository(session), profile_id, outcomes, publication_id)
     names = await _target_names(session, profile_id, [o.target for o in outcomes])
@@ -998,6 +1005,18 @@ async def reschedule(
         if when < datetime.now() - timedelta(seconds=60):
             raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
 
+    # Если запрашивается замена медиа — проверяем, нет ли submitted-каналов (T-209).
+    # При наличии submitted старый ключ медиа будет потерян после обновления media_paths → orphan.
+    if body.image is not None:
+        from crosspost.scheduler.executor import scheduled_publication_id  # noqa: PLC0415
+
+        pubid_check = scheduled_publication_id(scheduled_id)
+        if await pub_repo.has_submitted_channel(pubid_check):
+            raise HTTPException(
+                status_code=409,
+                detail="Нельзя заменить медиа: канал в submitted. Переотправьте канал (T-212).",
+            )
+
     # Разрешаем медиа ДО CAS: если источник невалиден — 422 без записи в БД.
     new_media_paths: list[str] | None = None
     if body.image is not None:
@@ -1049,15 +1068,16 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
     media_paths = list(post.media_paths or [])
     await pub_repo.cancel_scheduled(scheduled_id)
-    # Чистим медиа отменённого поста, только если нет submitted-каналов (T-209).
+    # Чистим медиа отменённого поста только если нет submitted-каналов и нет sharing (T-209).
     if media_paths:
         from crosspost.scheduler.executor import scheduled_publication_id  # noqa: PLC0415
 
         pubid = scheduled_publication_id(scheduled_id)
         has_submitted = await pub_repo.has_submitted_channel(pubid)
         if not has_submitted:
-            parent = Path(media_paths[0]).parent
-            media_store.cleanup_media(parent.name)
+            key = Path(media_paths[0]).parent.name
+            if not await pub_repo.media_key_shared(scheduled_id, key):
+                media_store.cleanup_media(key)
     return {"cancelled": True}
 
 
@@ -1365,10 +1385,12 @@ async def reject_post(
     if not ok:
         raise HTTPException(status_code=409, detail="Пост не найден или уже не на проверке")
 
-    # Чистим медиа отклонённого поста (каталог = родитель первого файла).
+    # Чистим медиа отклонённого поста — reject только у PENDING_APPROVAL, нет sharing риска.
+    # Но на всякий случай проверяем sharing (инвариант класса T-209).
     if media_paths:
-        parent = Path(media_paths[0]).parent
-        media_store.cleanup_media(parent.name)
+        key = Path(media_paths[0]).parent.name
+        if not await pub_repo.media_key_shared(scheduled_id, key):
+            media_store.cleanup_media(key)
 
     return {"rejected": True}
 
