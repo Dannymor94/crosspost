@@ -1623,8 +1623,12 @@ def _patch_image_ctx(img_bytes=None):
     return stack
 
 
-async def test_cleanup_old_media_after_replace(client, factory, tmp_path, monkeypatch):
-    """Старый файл удалён после успешной замены; новый присутствует; пост указывает на новый."""
+async def test_patch_image_old_media_retained(client, factory, tmp_path, monkeypatch):
+    """T-209: старое медиа НЕ удаляется после замены изображения через PATCH.
+
+    Mutation check: если вернуть _cleanup_old_media в update_scheduled,
+    old_dir будет удалён и тест упадёт на assert old_dir.exists().
+    """
     from crosspost.db.scheduler_repo import SchedulerRepository
 
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
@@ -1632,7 +1636,6 @@ async def test_cleanup_old_media_after_replace(client, factory, tmp_path, monkey
     pid = await _make_profile_with_live(factory, ["telegram"])
     sched_id = await _create_scheduled(client, pid)
 
-    # Подменяем media_paths поста на реальный файл в tmp
     old_key = "sched-old"
     old_dir = tmp_path / "media" / old_key
     old_dir.mkdir(parents=True)
@@ -1657,9 +1660,9 @@ async def test_cleanup_old_media_after_replace(client, factory, tmp_path, monkey
         )
     assert r.status_code == 200
 
-    # Старый каталог должен быть удалён
-    assert not old_dir.exists()
-    # Пост указывает на новый файл
+    # T-209: старый каталог сохранён — чистка отключена до T-214.
+    assert old_dir.exists(), "старое медиа удалено после PATCH — должно быть сохранено (T-209)"
+    # Пост указывает на новый файл.
     async with factory() as s:
         post = await SchedulerRepository(s).get(sched_id)
     assert len(post.media_paths) == 1
@@ -2607,3 +2610,168 @@ async def test_publish_error_redacts_signed_media_token(client, factory):
     st = await client.get(f"/api/profiles/{pid}/publish/{body['publication_id']}")
     stored = next(x for x in st.json() if x["channel"] == "telegram")
     assert fake_token not in (stored["error"] or "")
+
+
+# ── T-209: медиа не удаляется автоматически ни на одном пути ─────────────────
+
+
+async def test_t209_cancel_retains_media(client, factory, tmp_path, monkeypatch):
+    """T-209 cancel path: медиа сохраняется после DELETE /scheduled/{id}.
+
+    Mutation check: если вернуть cleanup_media в cancel_scheduled,
+    media_dir будет удалён и тест упадёт.
+    """
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    media_key = "sched-cancel-t209"
+    media_dir = tmp_path / "media" / media_key
+    media_dir.mkdir(parents=True)
+    media_file = media_dir / "00_photo.jpg"
+    media_file.write_bytes(b"\xff\xd8\xff")
+
+    async with factory() as s:
+        from sqlalchemy import update as _upd  # noqa: PLC0415
+
+        from crosspost.db.models import ScheduledPost  # noqa: PLC0415
+
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(media_file)])
+        )
+        await s.commit()
+
+    r = await client.delete(f"/api/profiles/{pid}/scheduled/{sched_id}")
+    assert r.status_code == 200
+
+    assert media_dir.exists(), "медиа удалено при cancel — не должно (T-209)"
+
+
+async def test_t209_reject_retains_media(client, factory, tmp_path, monkeypatch):
+    """T-209 reject path: медиа сохраняется после POST /reject.
+
+    Mutation check: если вернуть cleanup_media в reject_post,
+    media_dir будет удалён и тест упадёт.
+    """
+    from crosspost.db.models import ScheduledPost, ScheduledPostStatus  # noqa: I001
+
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sched_id = await _create_scheduled(client, pid)
+
+    media_key = "sched-reject-t209"
+    media_dir = tmp_path / "media" / media_key
+    media_dir.mkdir(parents=True)
+    media_file = media_dir / "00_photo.jpg"
+    media_file.write_bytes(b"\xff\xd8\xff")
+
+    async with factory() as s:
+        from sqlalchemy import update as _upd  # noqa: PLC0415
+
+        await s.execute(
+            _upd(ScheduledPost)
+            .where(ScheduledPost.id == sched_id)
+            .values(media_paths=[str(media_file)], status=ScheduledPostStatus.PENDING_APPROVAL)
+        )
+        await s.commit()
+
+    r = await client.post(
+        f"/api/profiles/{pid}/scheduled/{sched_id}/reject",
+        json={"reason": "не подходит"},
+    )
+    assert r.status_code == 200
+
+    assert media_dir.exists(), "медиа удалено при reject — не должно (T-209)"
+
+
+async def test_t209_publish_now_all_done_retains_media(factory, tmp_path, monkeypatch):
+    """T-209 _cleanup_if_final path: медиа сохраняется после publish_now с DONE.
+
+    Mutation check: если вернуть cleanup_media в _cleanup_if_final,
+    media_dir будет удалён и тест упадёт.
+    """
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ex = _FakeExecutor(factory, {"telegram": ("done", None)})
+    c = await _client_with_executor(factory, ex)
+
+    async with c:
+        sched_id = await _schedule_one(c, pid, ["telegram"])
+
+        media_key = "sched-pubnow-t209"
+        media_dir = tmp_path / "media" / media_key
+        media_dir.mkdir(parents=True)
+        media_file = media_dir / "00_photo.jpg"
+        media_file.write_bytes(b"\xff\xd8\xff")
+
+        async with factory() as s:
+            from sqlalchemy import update as _upd  # noqa: PLC0415
+
+            from crosspost.db.models import ScheduledPost  # noqa: PLC0415
+
+            await s.execute(
+                _upd(ScheduledPost)
+                .where(ScheduledPost.id == sched_id)
+                .values(media_paths=[str(media_file)])
+            )
+            await s.commit()
+
+        r = await c.post(f"/api/profiles/{pid}/scheduled/{sched_id}/publish-now")
+    assert r.status_code == 200
+
+    assert media_dir.exists(), "медиа удалено после publish_now DONE — не должно (T-209)"
+
+
+async def test_t209_retry_all_done_retains_media(client, factory, tmp_path, monkeypatch):
+    """T-209 inline retry path: медиа сохраняется после retry, завершившего все каналы.
+
+    Mutation check: если вернуть cleanup_media в retry_channel (после all_now = SUCCESS),
+    media_dir будет удалён и тест упадёт.
+    """
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    adapters = {
+        "telegram": _MockAdapter(
+            "telegram", result=ChannelResult("telegram", ResultStatus.DONE, "t1")
+        ),
+        "vk_wall": _MockAdapter("vk_wall", raises=RuntimeError("vk fail")),
+    }
+    with _patch_adapters(adapters):
+        r = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "x",
+                "channels": json.dumps(["telegram", "vk_wall"]),
+            },
+            files=_post_files(),
+        )
+    assert r.status_code == 200
+    pub_id = r.json()["publication_id"]
+
+    media_root = tmp_path / "media"
+    assert media_root.exists(), "медиа не создано при публикации"
+    dirs_before = [d for d in media_root.iterdir() if d.is_dir()]
+    assert dirs_before, "нет медиа-каталогов после публикации"
+
+    # Ретрай vk_wall — успешно, все каналы теперь done.
+    with _patch_adapters(
+        {
+            "vk_wall": _MockAdapter(
+                "vk_wall", result=ChannelResult("vk_wall", ResultStatus.DONE, "v1")
+            )
+        }
+    ):
+        r2 = await client.post(f"/api/profiles/{pid}/publish/{pub_id}/retry/vk_wall")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "done"
+
+    # Медиа должно оставаться — T-209 отключила cleanup_if_final.
+    surviving = [d for d in media_root.iterdir() if d.is_dir()]
+    assert surviving, "медиа удалено после retry DONE — не должно (T-209)"
