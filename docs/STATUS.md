@@ -63,7 +63,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 1116 passed, 0 failed (`uv run pytest -q`) |
+| `pytest -q` | 1133 passed, 0 failed (`uv run pytest -q`) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
@@ -80,7 +80,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | K-4 | ~~`.env.example` не соответствует коду~~ — исправлено в T-104 | T-104 ✅ |
 | K-5 | ~~`web/__main__.py` отсутствовал; `make run` без порта~~ — исправлено в T-105 | T-105 ✅ |
 | K-6 | ~~Две системы миграций~~ — запуск и CLI используют Alembic; старые БД обновляются до `head`, включая сохранение `CASCADE` после старого ручного rebuild; схема всех таблиц сверяется с моделями | T-201 ✅ |
-| K-7 | Не реализованы health-check сессий, релогин-флоу, circuit breaker (`sessions/*.py`, `orchestrator/breaker.py` — заглушки) | T-202, T-203 |
+| K-7 | Не реализован circuit breaker (`orchestrator/breaker.py` — заглушка) | T-203 |
 | K-8 | ~~Решение о российском прокси для ВК и Яндекса не реализовано для браузерного тира~~ — реализовано в T-204 | T-204 ✅ |
 | K-9 | Мёртвые заглушки: `adapters/browser/instagram.py`, `sessions/vault.py`, `orchestrator/dispatcher.py`, `queue.py`, `media/lifecycle.py` | T-205 |
 | K-10 | ~~`TG_API_ID` vs `TELEGRAM_API_ID`~~ — исправлено в T-106; `TG_API_ID` — deprecated alias с предупреждением | T-106 ✅ |

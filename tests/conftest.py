@@ -65,6 +65,9 @@ _PROJECT_ENV_KEYS: tuple[str, ...] = (
     "YANDEX_ORG_ID",
     # cli
     "CROSSPOST_PASSWORD",
+    # health check
+    "HEALTH_CHECK_ENABLED",
+    "HEALTH_CHECK_POLL_SECONDS",
 )
 
 

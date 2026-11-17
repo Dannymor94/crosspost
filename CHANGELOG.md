@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-18 — Health-check сессий и fail-closed dispatch (T-202)
+
+- `sessions/health.py`: `HealthChecker` — фоновый asyncio.Task, периодически проверяет LIVE-подключения
+  по всем профилям. Временные ошибки сети/прокси → состояние сохраняется. Явный `alive=False` →
+  `needs_relogin`. BANNED никогда не перезаписывается. Одна поломка не прерывает остальные профили/каналы.
+- `orchestrator/adapter_factory.py`: fail-closed — `needs_relogin` или `banned` → `build_profile_adapter`
+  возвращает None без попытки публикации; `publish_service` запишет `NEEDS_RELOGIN`.
+- `web/app.py`: `HealthChecker` запускается в lifespan вместе с планировщиком;
+  управляется флагом `HEALTH_CHECK_ENABLED` (по умолчанию `true`), интервал `HEALTH_CHECK_POLL_SECONDS` (по умолчанию 300 с).
+- Тесты (17 новых): мёртвая сессия, временный сбой, бан, fail-closed dispatch, изоляция профилей,
+  общая сессия VK, завершение таска по отмене, изоляция ошибок.
+- Итог: 1133 passed, 0 failed.
+
 <<<<<<< HEAD
 ## 2026-11-05 — контракт VK (T-208)
 
