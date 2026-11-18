@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
+
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 
 @dataclass(frozen=True)
@@ -71,35 +73,36 @@ def _db_references(
     if not db_path.is_file():
         raise FileNotFoundError(f"SQLite database does not exist: {db_path}")
     # SQLite mode=ro is intentional: the diagnostic must never create/migrate a DB.
-    sqlite_uri = f"file:{quote(str(db_path), safe='/')}?mode=ro"
-    conn = sqlite3.connect(sqlite_uri, uri=True)
+    sqlite_url = f"sqlite+pysqlite:///file:{quote(str(db_path), safe='/')}?mode=ro&uri=true"
+    engine = create_engine(sqlite_url)
     references: dict[str, set[str]] = defaultdict(set)
     scheduled_keys: set[str] = set()
     unmatched: list[str] = []
     try:
-        conn.execute("BEGIN")  # consistent read snapshot across both tables
-        for scheduled_id, profile_id, serialized in conn.execute(
-            "SELECT id, profile_id, media_paths FROM scheduled_posts"
-        ):
-            paths = json.loads(serialized) if serialized is not None else []
-            if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
-                raise ValueError(f"Invalid media_paths in scheduled post {scheduled_id}")
-            for path in paths:
-                key = _media_key(path, root)
-                if key is None:
-                    unmatched.append(f"scheduled:{profile_id}/{scheduled_id}: {path}")
-                    continue
-                references[key].add(f"scheduled:{profile_id}/{scheduled_id}")
-                scheduled_keys.add(key)
-        for profile_id, publication_id in conn.execute(
-            "SELECT DISTINCT profile_id, publication_id FROM publications"
-        ):
-            # For immediate web uploads the directory is named publication_id.
-            # Scheduled rows use a different key ('sched-<uuid>'), so their
-            # surviving publication rows cannot reconstruct a deleted link.
-            references[str(publication_id)].add(f"publication:{profile_id}/{publication_id}")
+        with engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN")  # consistent read snapshot across both tables
+            for scheduled_id, profile_id, serialized in conn.exec_driver_sql(
+                "SELECT id, profile_id, media_paths FROM scheduled_posts"
+            ):
+                paths = json.loads(serialized) if serialized is not None else []
+                if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
+                    raise ValueError(f"Invalid media_paths in scheduled post {scheduled_id}")
+                for path in paths:
+                    key = _media_key(path, root)
+                    if key is None:
+                        unmatched.append(f"scheduled:{profile_id}/{scheduled_id}: {path}")
+                        continue
+                    references[key].add(f"scheduled:{profile_id}/{scheduled_id}")
+                    scheduled_keys.add(key)
+            for profile_id, publication_id in conn.exec_driver_sql(
+                "SELECT DISTINCT profile_id, publication_id FROM publications"
+            ):
+                # For immediate web uploads the directory is named publication_id.
+                # Scheduled rows use a different key ('sched-<uuid>'), so their
+                # surviving publication rows cannot reconstruct a deleted link.
+                references[str(publication_id)].add(f"publication:{profile_id}/{publication_id}")
     finally:
-        conn.close()
+        engine.dispose()
     return references, scheduled_keys, tuple(sorted(unmatched))
 
 
@@ -181,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--top must be non-negative")
     try:
         report = audit_media(args.media_dir, args.db_url)
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (OSError, SQLAlchemyError, ValueError) as exc:
         parser.exit(2, f"Media audit failed (nothing modified): {exc}\n")
     if args.json:
         print(json.dumps(asdict(report), indent=2, sort_keys=True, ensure_ascii=False))
