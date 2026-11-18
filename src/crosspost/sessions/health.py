@@ -6,7 +6,10 @@
 Отличие от validate_connection (разовая ре-валидация):
   • исключение из validator.fn = временный сбой → состояние сохраняется;
   • BANNED → никогда не трогаем;
-  • NEEDS_RELOGIN → пропускаем (уже помечено, ждёт действия пользователя).
+  • NEEDS_RELOGIN → пропускаем (уже помечено, ждёт действия пользователя);
+  • confirmed_dead=False из ValidatorResult → временный сбой → состояние сохраняется;
+  • confirmed_dead=True → атомарный CAS (set_needs_relogin_if_live) → не перезапишет BANNED;
+  • каналы с одинаковым session_key проверяются ОДНИМ запросом (vk_wall + vk_channel → 1 проба).
 
 Запускается как asyncio.Task в lifespan приложения.
 """
@@ -80,48 +83,113 @@ class HealthChecker:
                 logger.exception("health check failed for profile %s", profile.id)
 
     async def _check_profile(self, repo: ProfileRepository, profile_id: int) -> None:
+        """Сгруппировать LIVE-каналы по session_key, проверить каждую группу один раз."""
         connections = await repo.get_connections(profile_id)
+
+        # Group LIVE channels by session_key to avoid redundant probes (e.g. vk_wall + vk_channel).
+        # ponytail: dict preserves insertion order → deterministic probe order
+        session_groups: dict[str, list[str]] = {}
         for conn in connections:
             if conn.state != ConnectionState.LIVE:
-                continue  # BANNED and NEEDS_RELOGIN are skipped
+                continue
+            validator = VALIDATORS.get(conn.channel)
+            if validator is None or not validator.enabled:
+                continue
+            sk = validator.session_channel or conn.channel
+            session_groups.setdefault(sk, []).append(conn.channel)
+
+        for session_key, channels in session_groups.items():
             try:
-                await self._check_one(repo, profile_id, conn.channel)
+                await self._check_session(repo, profile_id, session_key, channels)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 logger.exception(
-                    "health check failed for profile %s channel %s", profile_id, conn.channel
+                    "health check failed for profile %s session_key %s", profile_id, session_key
                 )
 
-    async def _check_one(self, repo: ProfileRepository, profile_id: int, channel: str) -> None:
-        validator = VALIDATORS.get(channel)
-        if validator is None or not validator.enabled:
+    async def _check_session(
+        self,
+        repo: ProfileRepository,
+        profile_id: int,
+        session_key: str,
+        affected_channels: list[str],
+    ) -> None:
+        """Probe session_key once; apply confirmed-dead result to all affected_channels.
+
+        Uses the session_key channel's validator (primary probe owner).
+        Falls back to the first affected channel's validator if session_key has no entry.
+        """
+        primary_validator = VALIDATORS.get(session_key)
+        if primary_validator is None:
+            primary_validator = VALIDATORS.get(affected_channels[0])
+        if primary_validator is None or not primary_validator.enabled:
             return
 
-        session_key = validator.session_channel or channel
-        credential = await repo.get_credential(profile_id, session_key, validator.credential_kind)
+        credential = await repo.get_credential(
+            profile_id, session_key, primary_validator.credential_kind
+        )
+        # credential may be None for browser validators (they handle empty storageState)
 
         try:
-            raw = await validator.fn(credential)
+            raw = await primary_validator.fn(credential)
         except Exception as exc:
-            # Transient error (network, timeout, proxy) — preserve current state
+            # Transient error — preserve state; log safe category (never log str(exc))
+            exc_type = type(exc).__name__
             logger.warning(
-                "health check %s/%s: transient error, state preserved: %s",
+                "health check %s/%s: transient error (%s), state preserved",
                 profile_id,
-                channel,
-                exc,
+                session_key,
+                exc_type,
             )
+            for ch in affected_channels:
+                repo._s.add(
+                    Log(
+                        profile_id=profile_id,
+                        channel=ch,
+                        level="INFO",
+                        message=f"health check: transient error ({exc_type}), state preserved",
+                    )
+                )
+            await repo._s.commit()
             return
 
         alive = raw.alive if isinstance(raw, ValidatorResult) else bool(raw)
-        if not alive:
-            logger.warning("health check: %s/%s → needs_relogin", profile_id, channel)
-            await repo.upsert_connection(profile_id, channel, ConnectionState.NEEDS_RELOGIN)
-            log = Log(
-                profile_id=profile_id,
-                channel=channel,
-                level="WARNING",
-                message="health check: подключение недействительно → needs_relogin",
+        confirmed_dead = (
+            (isinstance(raw, ValidatorResult) and raw.confirmed_dead) if not alive else False
+        )
+
+        if not alive and not confirmed_dead:
+            # Transient/unknown result — preserve state, write diagnostic log
+            logger.info(
+                "health check %s/%s: transient/unknown result, state preserved",
+                profile_id,
+                session_key,
             )
-            repo._s.add(log)
+            for ch in affected_channels:
+                repo._s.add(
+                    Log(
+                        profile_id=profile_id,
+                        channel=ch,
+                        level="INFO",
+                        message="health check: transient/unknown result, state preserved",
+                    )
+                )
+            await repo._s.commit()
+            return
+
+        if confirmed_dead:
+            logger.warning("health check: %s/%s → confirmed auth failure", profile_id, session_key)
+            for ch in affected_channels:
+                # CAS: only update if still LIVE — won't overwrite BANNED or a concurrent relogin
+                applied = await repo.set_needs_relogin_if_live(profile_id, ch)
+                if applied:
+                    repo._s.add(
+                        Log(
+                            profile_id=profile_id,
+                            channel=ch,
+                            level="WARNING",
+                            message="health check: confirmed auth failure → needs_relogin",
+                        )
+                    )
             await repo._s.commit()

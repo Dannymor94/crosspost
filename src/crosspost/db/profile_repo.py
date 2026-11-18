@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from cryptography.fernet import Fernet
 from sqlalchemy import delete, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,6 +184,24 @@ class ProfileRepository:
             )
         )
         await self._s.commit()
+
+    async def set_needs_relogin_if_live(self, profile_id: int, channel: str) -> bool:
+        """Atomically set state=needs_relogin only if current state=live.
+
+        Returns True if the update was applied (CAS succeeded).
+        Returns False if connection was already banned/needs_relogin — state unchanged.
+        """
+        result = await self._s.execute(
+            sa_update(Connection)
+            .where(
+                Connection.profile_id == profile_id,
+                Connection.channel == channel,
+                Connection.state == ConnectionState.LIVE,
+            )
+            .values(state=ConnectionState.NEEDS_RELOGIN)
+        )
+        await self._s.commit()
+        return result.rowcount > 0  # type: ignore[attr-defined]
 
     async def delete_connection(self, profile_id: int, channel: str) -> None:
         """Удалить строку подключения (profile_id, channel) → канал станет «не подключён».
