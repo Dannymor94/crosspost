@@ -224,7 +224,9 @@ def verify(snapshot: Path) -> dict:
 def restore(snapshot: Path, destination: Path) -> Path:
     verify(snapshot)  # No writes before key, checksum, schema, and integrity checks.
     if destination.exists() or destination.is_symlink():
-        raise BackupError("restore target already exists; restore to a new path with service stopped")
+        raise BackupError(
+            "restore target already exists; restore to a new path with service stopped"
+        )
     directory = _private_dir(destination.parent)
     if not directory.samefile(destination.parent):
         raise BackupError("unexpected restore directory")
@@ -249,8 +251,10 @@ def _rotate(directory: Path, keep: int, fingerprint: str) -> None:
         if item.is_symlink() or not ARCHIVE_RE.fullmatch(item.name):
             continue
         try:
-            meta = _load_manifest(item)
-        except BackupError:
+            # Never evict older valid snapshots because a newer archive is corrupt.
+            # Missing/invalid pairs remain for explicit operator inspection.
+            meta = verify(item)
+        except (BackupError, OSError, sqlite3.Error):
             continue
         if meta["file"] == item.name and meta["vault_key_fingerprint_sha256"] == fingerprint:
             try:
