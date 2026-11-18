@@ -37,13 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from crosspost.content.article_link import DEFAULT_LINK_PHRASE, LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent, ContentType
 from crosspost.db.log_repo import LogRepository
-from crosspost.db.models import Publication, PublicationStatus, ScheduledPost
+from crosspost.db.models import BreakerState, Publication, PublicationStatus, ScheduledPost
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
 from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
+from crosspost.orchestrator.breaker import CircuitBreakerRepository
 from crosspost.orchestrator.publish_service import (
     ChannelOutcome,
     PublishService,
@@ -82,6 +83,8 @@ class ScheduledExecutor:
         pacing_seconds: float = 5.0,
         poll_seconds: float = 30.0,
         browser_session_cooldown: float = 0.0,
+        breaker_threshold: int = 3,
+        breaker_cooldown_seconds: float = 300.0,
         sleep: SleepFn = asyncio.sleep,
     ) -> None:
         self._factory = session_factory
@@ -89,6 +92,8 @@ class ScheduledExecutor:
         self._pacing = max(0.0, pacing_seconds)
         self._poll = max(0.0, poll_seconds)
         self._browser_cooldown = max(0.0, browser_session_cooldown)
+        self._breaker_threshold = max(1, breaker_threshold)
+        self._breaker_cooldown = max(0.0, breaker_cooldown_seconds)
         self._sleep = sleep
 
     # ── Конфигурация ──────────────────────────────────────────────────────────
@@ -104,6 +109,8 @@ class ScheduledExecutor:
             browser_session_cooldown=float(
                 os.environ.get("BROWSER_SESSION_COOLDOWN_SECONDS", "300")
             ),
+            breaker_threshold=int(os.environ.get("BREAKER_FAILURE_THRESHOLD", "3")),
+            breaker_cooldown_seconds=float(os.environ.get("BREAKER_COOLDOWN_SECONDS", "300")),
         )
 
     # ── Публичный API ─────────────────────────────────────────────────────────
@@ -174,11 +181,19 @@ class ScheduledExecutor:
             service = self._make_service(profile_repo, pub_repo, post.profile_id)
             log_repo = LogRepository(session)
             cooldown = BrowserCooldown(session, cooldown_seconds=self._browser_cooldown)
+            breaker_repo = CircuitBreakerRepository(session)
 
             # Единый секвенсор связки статья→каналы. Различие с publish-now —
             # ТОЛЬКО политика ретраев, инъектируемая как step (здесь — с потолком).
             step = self._ceiling_step(
-                pub_repo, service, log_repo, post.profile_id, pubid, cooldown, moment
+                pub_repo,
+                service,
+                log_repo,
+                post.profile_id,
+                pubid,
+                cooldown,
+                moment,
+                breaker_repo,
             )
             fail_closed = self._fail_closed(pub_repo, log_repo, post.profile_id, pubid)
 
@@ -213,6 +228,7 @@ class ScheduledExecutor:
         pubid: str,
         cooldown: BrowserCooldown,
         now: datetime,
+        breaker_repo: CircuitBreakerRepository | None = None,
     ):
         """step с ретрай-потолком: инкапсулирует bump_attempt/потолок/логирование.
 
@@ -251,6 +267,34 @@ class ScheduledExecutor:
                 deferred_outcome = ChannelOutcome(channel, "deferred", target=target)
                 return StepResult(StepState.PENDING, deferred_outcome, None)
 
+            # Circuit breaker gate — defers without consuming a retry attempt.
+            if breaker_repo is not None:
+                bstate = await breaker_repo.get_state(profile_id, channel, now=now)
+                if bstate == BreakerState.OPEN:
+                    label = f"{channel}·{target}" if target else channel
+                    await log_repo.add(
+                        profile_id,
+                        channel=channel,
+                        publication_id=pubid,
+                        level="INFO",
+                        message=f"scheduler: {label} → deferred (circuit breaker open)",
+                    )
+                    return StepResult(
+                        StepState.PENDING,
+                        ChannelOutcome(channel, "deferred", target=target),
+                        None,
+                    )
+                if bstate == BreakerState.HALF_OPEN:
+                    acquired = await breaker_repo.try_acquire_half_open(
+                        profile_id, channel, now=now, cooldown_seconds=self._breaker_cooldown
+                    )
+                    if not acquired:
+                        return StepResult(
+                            StepState.PENDING,
+                            ChannelOutcome(channel, "deferred", target=target),
+                            None,
+                        )
+
             if dispatched[0] > 0 and self._pacing > 0:
                 await self._sleep(self._pacing)  # разнос отправок между целями
             dispatched[0] += 1
@@ -262,6 +306,19 @@ class ScheduledExecutor:
             await pub_repo.bump_attempt(pubid, channel, target=target)
             outcome = await service.retry_channel(content, sel, publication_id=pubid)
             await self._log_outcome(log_repo, profile_id, sel, pubid, outcome)
+
+            # Update circuit breaker after attempt.
+            if breaker_repo is not None:
+                if outcome.status in _SUCCESS:
+                    await breaker_repo.record_success(profile_id, channel)
+                else:
+                    await breaker_repo.record_failure(
+                        profile_id,
+                        channel,
+                        now=now,
+                        threshold=self._breaker_threshold,
+                        cooldown_seconds=self._breaker_cooldown,
+                    )
 
             if outcome.status in _SUCCESS:
                 return StepResult(StepState.DONE, outcome, outcome.external_id)

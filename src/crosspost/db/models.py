@@ -77,6 +77,12 @@ class ScheduledPostStatus(StrEnum):
 SCHEDULED_TERMINAL = (ScheduledPostStatus.DONE, ScheduledPostStatus.FAILED)
 
 
+class BreakerState(StrEnum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
 class Role(StrEnum):
     ADMIN = "admin"  # владелец: видит и оперирует ВСЕ профили
     CLIENT = "client"  # клиент: привязан к ОДНОМУ профилю, видит только его
@@ -356,6 +362,35 @@ class Log(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile", back_populates="logs")
+
+
+class CircuitBreaker(Base):
+    """Персистентный circuit breaker на (profile, channel). T-203.
+
+    Состояния: closed (нормально) → open (пауза до open_until) → half_open (проба).
+    failure_count — счётчик подряд идущих неудач; сбрасывается при успехе.
+    open_until — naive UTC: момент, после которого переходим в half_open.
+    Нет FK-каскада? Нет — ссылается на profiles.id с CASCADE, как остальные.
+    """
+
+    __tablename__ = "circuit_breakers"
+    __table_args__ = (UniqueConstraint("profile_id", "channel", name="uq_circuit_breaker"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[BreakerState] = mapped_column(
+        String(16), default=BreakerState.CLOSED, nullable=False
+    )
+    failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    open_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=lambda: datetime.now(), onupdate=lambda: datetime.now()
+    )
+
+    profile: Mapped[Profile] = relationship("Profile")
 
 
 class ProfileSetting(Base):
