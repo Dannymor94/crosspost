@@ -132,7 +132,13 @@ def test_rotation_keeps_only_tool_owned_pairs_and_ignores_strays(tmp_path, key):
 def test_missing_or_unrecognized_db_never_creates_backup(tmp_path, key):
     backup_dir = tmp_path / "backups"
     missing = _run(
-        tmp_path, key, "backup", "--db", str(tmp_path / "missing.sqlite3"), "--dest", str(backup_dir)
+        tmp_path,
+        key,
+        "backup",
+        "--db",
+        str(tmp_path / "missing.sqlite3"),
+        "--dest",
+        str(backup_dir),
     )
     assert missing.returncode == 2
     assert not backup_dir.exists()
@@ -180,4 +186,16 @@ def test_uncommitted_wal_transaction_not_in_snapshot(tmp_path, key):
     live.rollback()
     with sqlite3.connect(snapshot) as saved:
         assert saved.execute("SELECT name FROM profiles").fetchall() == [("existing-client",)]
+    live.close()
+
+def test_rotation_does_not_count_corrupt_newer_archive(tmp_path, key):
+    db, live = _database(tmp_path)
+    oldest = _backup(tmp_path, key, db, keep=2)
+    bad_newer = _backup(tmp_path, key, db, keep=2)
+    with bad_newer.open("ab") as out:
+        out.write(b"tampered")
+    newest = _backup(tmp_path, key, db, keep=2)
+    assert oldest.exists()  # only newest + oldest are valid and count toward retention
+    assert newest.exists()
+    assert bad_newer.exists()  # bad archive is not silently deleted; operator investigates
     live.close()
