@@ -116,6 +116,7 @@ async def test_store_calls_do_not_block_event_loop(tmp_path):
 async def test_factory_wires_sqlalchemy_store_not_inmemory():
     repo = MagicMock()
     repo.get_credential = AsyncMock(return_value="TELEGRAPH-TOKEN")
+    repo.get_connection = AsyncMock(return_value=None)  # no connection record → pass through
     repo.session = MagicMock()  # CheckpointStore only stores the session at init
     repo.vault = MagicMock()
 

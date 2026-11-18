@@ -15,8 +15,11 @@ Credentials хранятся как шифртекст (vault из слоя 0.2)
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, select
+from sqlalchemy import delete, not_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -135,12 +138,13 @@ class ProfileRepository:
         blob в БД — всегда шифртекст.
         """
         blob = encrypt_blob(self._vault, plaintext)
+        now = datetime.now(UTC)
         stmt = (
             sqlite_insert(Credential)
-            .values(profile_id=profile_id, channel=channel, kind=kind, blob=blob)
+            .values(profile_id=profile_id, channel=channel, kind=kind, blob=blob, updated_at=now)
             .on_conflict_do_update(
                 index_elements=["profile_id", "channel", "kind"],
-                set_={"blob": blob},
+                set_={"blob": blob, "updated_at": now},
             )
         )
         await self._s.execute(stmt)
@@ -168,6 +172,50 @@ class ProfileRepository:
             return None
         return decrypt_blob(self._vault, row[0])
 
+    async def get_credential_with_blob(
+        self,
+        profile_id: int,
+        channel: str,
+        kind: CredentialKind,
+    ) -> tuple[str | None, str | None]:
+        """Return (plaintext, raw_encrypted_blob). Both None if absent. Single consistent read.
+
+        raw_encrypted_blob is the Fernet ciphertext stored in the DB.
+        Use as CAS fingerprint — never log it.
+        """
+        result = await self._s.execute(
+            select(Credential.blob).where(
+                Credential.profile_id == profile_id,
+                Credential.channel == channel,
+                Credential.kind == kind,
+            )
+        )
+        row = result.first()
+        if row is None:
+            return None, None
+        raw_blob: str = row[0]
+        return decrypt_blob(self._vault, raw_blob), raw_blob
+
+    async def get_credential_updated_at(
+        self,
+        profile_id: int,
+        channel: str,
+        kind: CredentialKind,
+    ) -> datetime | None:
+        """Return updated_at for a credential row, normalized to naive UTC. None if absent."""
+        result = await self._s.execute(
+            select(Credential.updated_at).where(
+                Credential.profile_id == profile_id,
+                Credential.channel == channel,
+                Credential.kind == kind,
+            )
+        )
+        row = result.first()
+        if row is None or row[0] is None:
+            return None
+        dt: datetime = row[0]
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
     async def delete_credential(
         self,
         profile_id: int,
@@ -183,6 +231,45 @@ class ProfileRepository:
             )
         )
         await self._s.commit()
+
+    async def set_needs_relogin_if_live(
+        self,
+        profile_id: int,
+        channel: str,
+        *,
+        session_key: str | None = None,
+        credential_kind: CredentialKind | None = None,
+        credential_blob_snapshot: str | None = None,
+    ) -> bool:
+        """Atomically set state=needs_relogin only if state=live AND credential blob matches.
+
+        Single SQL statement — no separate SELECT+UPDATE race.
+        credential_blob_snapshot=None means no credential existed at probe start;
+        the NOT EXISTS fence blocks the write if one was added in the meantime.
+        Returns True if exactly one row was updated (CAS succeeded).
+        """
+        where_clauses: list = [
+            Connection.profile_id == profile_id,
+            Connection.channel == channel,
+            Connection.state == ConnectionState.LIVE,
+        ]
+        if session_key is not None and credential_kind is not None:
+            cred_base = select(Credential.blob).where(
+                Credential.profile_id == profile_id,
+                Credential.channel == session_key,
+                Credential.kind == credential_kind,
+            )
+            if credential_blob_snapshot is not None:
+                where_clauses.append(
+                    cred_base.where(Credential.blob == credential_blob_snapshot).exists()
+                )
+            else:
+                where_clauses.append(not_(cred_base.exists()))
+        result = await self._s.execute(
+            sa_update(Connection).where(*where_clauses).values(state=ConnectionState.NEEDS_RELOGIN)
+        )
+        await self._s.commit()
+        return result.rowcount > 0  # type: ignore[attr-defined]
 
     async def delete_connection(self, profile_id: int, channel: str) -> None:
         """Удалить строку подключения (profile_id, channel) → канал станет «не подключён».
