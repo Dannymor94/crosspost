@@ -70,7 +70,9 @@ class TestMediaAudit(unittest.TestCase):
         self._add_publication(7, "pub-abc")
         report = audit_media(self.root, self.db_url)
         self.assertEqual(report.orphan_candidates, ())
-        self.assertEqual(report.directories[0].referenced_by, ("publication:7/pub-abc",))
+        self.assertEqual(
+            report.directories[0].referenced_by, ("publication:7/pub-abc",)
+        )
 
     def test_scheduled_id_is_not_a_media_key_after_hard_delete(self) -> None:
         self._file("sched-old", "pic.jpg", b"data")
@@ -136,7 +138,9 @@ class TestMediaAudit(unittest.TestCase):
         stdout = io.StringIO()
         before = self.db_file.stat().st_mtime_ns
         with contextlib.redirect_stdout(stdout):
-            code = main(["--media-dir", str(self.root), "--db-url", self.db_url, "--json"])
+            code = main(
+                ["--media-dir", str(self.root), "--db-url", self.db_url, "--json"]
+            )
         report = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual([x["key"] for x in report["directories"]], ["a", "b"])
