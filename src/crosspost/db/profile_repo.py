@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, select
+from sqlalchemy import delete, not_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -172,6 +172,30 @@ class ProfileRepository:
             return None
         return decrypt_blob(self._vault, row[0])
 
+    async def get_credential_with_blob(
+        self,
+        profile_id: int,
+        channel: str,
+        kind: CredentialKind,
+    ) -> tuple[str | None, str | None]:
+        """Return (plaintext, raw_encrypted_blob). Both None if absent. Single consistent read.
+
+        raw_encrypted_blob is the Fernet ciphertext stored in the DB.
+        Use as CAS fingerprint — never log it.
+        """
+        result = await self._s.execute(
+            select(Credential.blob).where(
+                Credential.profile_id == profile_id,
+                Credential.channel == channel,
+                Credential.kind == kind,
+            )
+        )
+        row = result.first()
+        if row is None:
+            return None, None
+        raw_blob: str = row[0]
+        return decrypt_blob(self._vault, raw_blob), raw_blob
+
     async def get_credential_updated_at(
         self,
         profile_id: int,
@@ -215,32 +239,34 @@ class ProfileRepository:
         *,
         session_key: str | None = None,
         credential_kind: CredentialKind | None = None,
-        credential_at: datetime | None = None,
+        credential_blob_snapshot: str | None = None,
     ) -> bool:
-        """Atomically set state=needs_relogin only if current state=live.
+        """Atomically set state=needs_relogin only if state=live AND credential blob matches.
 
-        Returns True if the update was applied (CAS succeeded).
-        Returns False if connection was already banned/needs_relogin, or if the
-        credential was replaced since the probe started (stale probe result).
-
-        Pass session_key + credential_kind + credential_at (from get_credential_updated_at
-        before the probe) to guard against stale writes after credential rotation.
+        Single SQL statement — no separate SELECT+UPDATE race.
+        credential_blob_snapshot=None means no credential existed at probe start;
+        the NOT EXISTS fence blocks the write if one was added in the meantime.
+        Returns True if exactly one row was updated (CAS succeeded).
         """
-        if credential_at is not None and session_key is not None and credential_kind is not None:
-            current_at = await self.get_credential_updated_at(
-                profile_id, session_key, credential_kind
+        where_clauses: list = [
+            Connection.profile_id == profile_id,
+            Connection.channel == channel,
+            Connection.state == ConnectionState.LIVE,
+        ]
+        if session_key is not None and credential_kind is not None:
+            cred_base = select(Credential.blob).where(
+                Credential.profile_id == profile_id,
+                Credential.channel == session_key,
+                Credential.kind == credential_kind,
             )
-            if current_at != credential_at:
-                return False  # credential replaced — old probe result is stale
-
+            if credential_blob_snapshot is not None:
+                where_clauses.append(
+                    cred_base.where(Credential.blob == credential_blob_snapshot).exists()
+                )
+            else:
+                where_clauses.append(not_(cred_base.exists()))
         result = await self._s.execute(
-            sa_update(Connection)
-            .where(
-                Connection.profile_id == profile_id,
-                Connection.channel == channel,
-                Connection.state == ConnectionState.LIVE,
-            )
-            .values(state=ConnectionState.NEEDS_RELOGIN)
+            sa_update(Connection).where(*where_clauses).values(state=ConnectionState.NEEDS_RELOGIN)
         )
         await self._s.commit()
         return result.rowcount > 0  # type: ignore[attr-defined]

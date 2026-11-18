@@ -62,8 +62,8 @@ class HealthChecker:
             except asyncio.CancelledError:
                 logger.info("health checker stopped")
                 raise
-            except Exception:  # noqa: BLE001
-                logger.exception("health check tick failed")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("health check tick failed (%s)", type(exc).__name__)
             await self._sleep(self._poll)
 
     async def run_once(self) -> None:
@@ -79,8 +79,10 @@ class HealthChecker:
                     await self._check_profile(repo, profile.id)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
-                logger.exception("health check failed for profile %s", profile.id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "health check failed for profile %s (%s)", profile.id, type(exc).__name__
+                )
 
     async def _check_profile(self, repo: ProfileRepository, profile_id: int) -> None:
         """Сгруппировать LIVE-каналы по session_key, проверить каждую группу один раз."""
@@ -103,9 +105,12 @@ class HealthChecker:
                 await self._check_session(repo, profile_id, session_key, channels)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "health check failed for profile %s session_key %s", profile_id, session_key
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "health check failed for profile %s session_key %s (%s)",
+                    profile_id,
+                    session_key,
+                    type(exc).__name__,
                 )
 
     async def _check_session(
@@ -126,12 +131,8 @@ class HealthChecker:
         if primary_validator is None or not primary_validator.enabled:
             return
 
-        credential = await repo.get_credential(
-            profile_id, session_key, primary_validator.credential_kind
-        )
-        # credential may be None for browser validators (they handle empty storageState)
-        # Record credential timestamp before probe for CAS (credential revision guard)
-        credential_at = await repo.get_credential_updated_at(
+        # Single consistent read: plaintext for the probe, raw blob as CAS fence
+        credential, credential_blob = await repo.get_credential_with_blob(
             profile_id, session_key, primary_validator.credential_kind
         )
 
@@ -191,7 +192,7 @@ class HealthChecker:
                     ch,
                     session_key=session_key,
                     credential_kind=primary_validator.credential_kind,
-                    credential_at=credential_at,
+                    credential_blob_snapshot=credential_blob,
                 )
                 if applied:
                     repo._s.add(

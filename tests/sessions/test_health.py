@@ -1121,33 +1121,159 @@ async def test_browser_network_error_preserves_state(repo, factory, monkeypatch)
 
 
 async def test_credential_cas_prevents_stale_probe_writing_needs_relogin(repo):
-    """Credential replaced between probe snapshot and CAS write → state stays LIVE."""
-    import asyncio
-
+    """Blob-based CAS: credential rotated between snapshot and write → state stays LIVE."""
     p = await repo.create_profile("alice")
     await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
-
     await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "old-token")
-    credential_at = await repo.get_credential_updated_at(
+
+    _cred, old_blob = await repo.get_credential_with_blob(
         p.id, "telegraph", CredentialKind.API_TOKEN
     )
-
-    # Simulate credential rotation happening between probe snapshot and CAS write
-    await asyncio.sleep(0.001)
+    # Credential rotated — Fernet random IV guarantees new blob even for same plaintext
     await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "new-token")
 
-    # CAS with OLD timestamp → rejected (credential rotated)
     applied = await repo.set_needs_relogin_if_live(
         p.id,
         "telegraph",
         session_key="telegraph",
         credential_kind=CredentialKind.API_TOKEN,
-        credential_at=credential_at,
+        credential_blob_snapshot=old_blob,
     )
 
     assert not applied  # stale probe result rejected
     conn = await repo.get_connection(p.id, "telegraph")
     assert conn is not None and conn.state == ConnectionState.LIVE
+
+
+async def test_cas_blob_unchanged_applies_write(repo):
+    """Blob unchanged between snapshot and write → CAS succeeds."""
+    p = await repo.create_profile("bob")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+
+    _cred, blob = await repo.get_credential_with_blob(p.id, "telegraph", CredentialKind.API_TOKEN)
+    applied = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_blob_snapshot=blob,
+    )
+    assert applied
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn is not None and conn.state == ConnectionState.NEEDS_RELOGIN
+
+
+async def test_cas_no_cred_snapshot_blocked_if_cred_added(repo):
+    """No credential at probe start (snapshot=None); credential added during probe → blocked."""
+    p = await repo.create_profile("carol")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+    # No credential when probe starts → blob_snapshot=None
+
+    # Credential added after probe started
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+
+    applied = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_blob_snapshot=None,
+    )
+    assert not applied
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn is not None and conn.state == ConnectionState.LIVE
+
+
+async def test_cas_no_cred_snapshot_applies_when_still_absent(repo):
+    """No credential at probe start and still absent → write applied."""
+    p = await repo.create_profile("dave")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+
+    applied = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_blob_snapshot=None,
+    )
+    assert applied
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn is not None and conn.state == ConnectionState.NEEDS_RELOGIN
+
+
+async def test_cas_concurrent_only_first_applies(repo):
+    """Two sequential CAS calls with same blob: first transitions, second sees non-LIVE."""
+    p = await repo.create_profile("eve")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+
+    _cred, blob = await repo.get_credential_with_blob(p.id, "telegraph", CredentialKind.API_TOKEN)
+
+    r1 = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_blob_snapshot=blob,
+    )
+    r2 = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_blob_snapshot=blob,
+    )
+    assert r1 and not r2  # second CAS sees NEEDS_RELOGIN, WHERE state=LIVE fails
+
+
+async def test_run_forever_outer_exception_does_not_log_secret(factory, caplog):
+    """run_forever outer handler: exception message/traceback never emitted to logs."""
+    import logging
+
+    secret = "OUTER_SECRET_TOKEN_xyz123"
+    checker = HealthChecker(factory, poll_seconds=999)
+
+    async def _boom() -> None:
+        raise RuntimeError(secret)
+
+    async def _cancel_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    checker.run_once = _boom  # type: ignore[method-assign]
+    checker._sleep = _cancel_sleep  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING, logger="crosspost"):
+        with pytest.raises(asyncio.CancelledError):
+            await checker.run_forever()
+
+    assert secret not in caplog.text
+
+
+async def test_run_once_per_profile_exception_does_not_log_secret(factory, caplog):
+    """run_once per-profile handler: exception from _check_profile never logs credential."""
+    import logging
+    from unittest.mock import patch
+
+    from crosspost.db.vault import get_vault
+
+    secret = "PROFILE_SECRET_xyz456"
+
+    async with factory() as session:
+        repo = ProfileRepository(session, vault=get_vault())
+        p = await repo.create_profile("frank")
+        await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    with patch.object(
+        ProfileRepository,
+        "get_connections",
+        side_effect=RuntimeError(secret),
+    ):
+        with caplog.at_level(logging.WARNING, logger="crosspost"):
+            await checker.run_once()
+
+    assert secret not in caplog.text
 
 
 # ── 19. ScheduledExecutor retry counter (R2) ─────────────────────────────────
