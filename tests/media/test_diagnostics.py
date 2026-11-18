@@ -26,9 +26,7 @@ class TestMediaAudit(unittest.TestCase):
                 "CREATE TABLE scheduled_posts (id INTEGER PRIMARY KEY, "
                 "profile_id INTEGER NOT NULL, media_paths TEXT)"
             )
-            conn.execute(
-                "CREATE TABLE publications (profile_id INTEGER, publication_id TEXT)"
-            )
+            conn.execute("CREATE TABLE publications (profile_id INTEGER, publication_id TEXT)")
 
     def _add_scheduled(self, post_id: int, profile_id: int, paths: list[str]) -> None:
         with sqlite3.connect(self.db_file) as conn:
@@ -61,18 +59,14 @@ class TestMediaAudit(unittest.TestCase):
         self.assertEqual(report.total_files, 2)
         self.assertEqual(report.orphan_candidates, ("orphan",))
         self.assertEqual(report.directories[0].key, "sched-abc")
-        self.assertEqual(
-            report.directories[0].referenced_by, ("scheduled:1/11", "scheduled:2/12")
-        )
+        self.assertEqual(report.directories[0].referenced_by, ("scheduled:1/11", "scheduled:2/12"))
 
     def test_immediate_publication_id_marks_directory_as_referenced(self) -> None:
         self._file("pub-abc", "photo.png", b"a")
         self._add_publication(7, "pub-abc")
         report = audit_media(self.root, self.db_url)
         self.assertEqual(report.orphan_candidates, ())
-        self.assertEqual(
-            report.directories[0].referenced_by, ("publication:7/pub-abc",)
-        )
+        self.assertEqual(report.directories[0].referenced_by, ("publication:7/pub-abc",))
 
     def test_scheduled_id_is_not_a_media_key_after_hard_delete(self) -> None:
         self._file("sched-old", "pic.jpg", b"data")
@@ -138,9 +132,7 @@ class TestMediaAudit(unittest.TestCase):
         stdout = io.StringIO()
         before = self.db_file.stat().st_mtime_ns
         with contextlib.redirect_stdout(stdout):
-            code = main(
-                ["--media-dir", str(self.root), "--db-url", self.db_url, "--json"]
-            )
+            code = main(["--media-dir", str(self.root), "--db-url", self.db_url, "--json"])
         report = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual([x["key"] for x in report["directories"]], ["a", "b"])
