@@ -18,15 +18,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
+from sqlalchemy import exists, select, update
 
-from crosspost.adapters.base import ChannelAdapter, ResultStatus
+from crosspost.adapters.base import ChannelAdapter, FailureKind, ResultStatus
+from crosspost.channels.validators import VALIDATORS
 from crosspost.content.article_link import DEFAULT_LINK_PHRASE, LINK_TEMPLATE, NO_ARTICLE_REASON
 from crosspost.content.canonical import CanonicalContent
 from crosspost.content.capabilities import supports
 from crosspost.content.validation import validate
-from crosspost.db.models import PublicationStatus
+from crosspost.db.models import Connection, ConnectionState, Credential, PublicationStatus
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.orchestrator.article_flow import (
     _ARTICLE_CHANNEL,
@@ -34,7 +37,11 @@ from crosspost.orchestrator.article_flow import (
     StepState,
     run_binding,
 )
-from crosspost.web.signed_media import redact_media_tokens
+from crosspost.orchestrator.breaker import (
+    BreakerPolicy,
+    CircuitBreakerRepository,
+    retry_after_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,27 +50,32 @@ _SUCCESS_STATUSES = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.v
 
 
 def _error_str(exc: Exception) -> str:
-    """Non-empty error string for any exception.
-
-    Falls back to the type name when str(exc) is blank.
-    For httpx errors that have a request attached, appends the hostname so the
-    operator knows which endpoint timed out (no tokens, no query string).
-    """
-    msg = str(exc).strip()
-    if msg:
-        # Second line of defence: a signed /public-media/ token must never reach
-        # publications.error or the API response (adapter already redacts at source).
-        return redact_media_tokens(msg)
-    try:
-        if isinstance(exc, httpx.HTTPError) and getattr(exc, "request", None):
-            from urllib.parse import urlparse
-
-            host = urlparse(str(exc.request.url)).hostname or ""
-            if host:
-                return f"{type(exc).__name__} → {host}"
-    except Exception:  # noqa: BLE001
-        pass
+    """Only the category is safe: platform text may echo credentials or signed URLs."""
     return type(exc).__name__
+
+
+def _failure_signal(exc: Exception, now: datetime) -> tuple[FailureKind, float | None]:
+    """Use SDK/HTTP types, including errors while building a connected adapter."""
+    from telethon.errors import (
+        AuthKeyUnregisteredError,
+        FloodWaitError,
+        SessionRevokedError,
+        UserDeactivatedBanError,
+    )
+
+    if isinstance(exc, FloodWaitError):
+        return FailureKind.RATE_LIMIT, exc.seconds
+    if isinstance(exc, UserDeactivatedBanError):
+        return FailureKind.BANNED, None
+    if isinstance(exc, (AuthKeyUnregisteredError, SessionRevokedError)):
+        return FailureKind.AUTH, None
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+        return FailureKind.RATE_LIMIT, retry_after_seconds(
+            exc.response.headers.get("Retry-After"), now=now
+        )
+    if isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError)):
+        return FailureKind.TRANSIENT, None
+    return FailureKind.UNKNOWN, None
 
 
 @dataclass(frozen=True)
@@ -134,12 +146,25 @@ class ChannelOutcome:
     # id цели (мультицели). "" — таргетлесс (Telegraph/legacy). Имя цели для показа
     # проставляет слой роутов (у него ChannelTargetRepository), см. Блок 5.
     target: str = ""
+    failure_kind: FailureKind = FailureKind.UNKNOWN
+    retry_after: float | None = None
+    confirmed_done: bool = False
 
 
 class PublishService:
-    def __init__(self, repo: PublicationRepository, adapter_factory: AdapterFactory) -> None:
+    def __init__(
+        self,
+        repo: PublicationRepository,
+        adapter_factory: AdapterFactory,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        breaker_policy: BreakerPolicy | None = None,
+    ) -> None:
         self._repo = repo
         self._factory = adapter_factory
+        self._clock = clock
+        self._policy = breaker_policy or BreakerPolicy.from_env()
+        self._breaker = CircuitBreakerRepository(repo.session)
 
     async def publish(
         self,
@@ -164,8 +189,13 @@ class PublishService:
         validate(content)  # общая валидация контента (не поканальная)
         selections = [_as_selection(item) for item in channels]
 
+        deferred: list[ChannelOutcome] = []
+
         async def _step(sel: Selection, c: CanonicalContent) -> StepResult:
             outcome = await self._publish_one(c, sel, publication_id)
+            if outcome.status in {"deferred", "banned", "needs_relogin"}:
+                deferred.append(outcome)
+                return StepResult(StepState.PENDING, outcome, None)
             state = StepState.DONE if outcome.status in _SUCCESS_STATUSES else StepState.FAILED
             return StepResult(state, outcome, outcome.external_id)
 
@@ -195,7 +225,7 @@ class PublishService:
             fail_closed=_fail_closed,
             article_item=Selection(_ARTICLE_CHANNEL, ""),
         )
-        return flow.outcomes
+        return flow.outcomes or deferred
 
     async def retry_channel(
         self,
@@ -203,16 +233,88 @@ class PublishService:
         channel: str | Selection,
         *,
         publication_id: str,
+        before_dispatch: Callable[[], Awaitable[bool]] | None = None,
     ) -> ChannelOutcome:
         """Повторить ОДНУ единицу (канал+цель). Уже done/submitted → не трогаем."""
         sel = _as_selection(channel)
         if await self._repo.is_done(publication_id, sel.channel, target=sel.target_id):
             return await self._existing_outcome(publication_id, sel)
-        return await self._publish_one(content, sel, publication_id)
+        return await self._publish_one(
+            content, sel, publication_id, before_dispatch=before_dispatch
+        )
 
     # ── внутреннее ────────────────────────────────────────────────────────────
 
     async def _publish_one(
+        self,
+        content: CanonicalContent,
+        sel: Selection,
+        publication_id: str,
+        *,
+        before_dispatch: Callable[[], Awaitable[bool]] | None = None,
+    ) -> ChannelOutcome:
+        channel, target = sel.channel, sel.target_id
+        if await self._repo.is_done(publication_id, channel, target=target):
+            return await self._existing_outcome(publication_id, sel)
+        session, pid = self._repo.session, self._repo.profile_id
+        state = await session.scalar(
+            select(Connection.state).where(
+                Connection.profile_id == pid, Connection.channel == channel
+            )
+        )
+        if state in (ConnectionState.BANNED, ConnectionState.NEEDS_RELOGIN):
+            return ChannelOutcome(channel, str(state), target=target)
+        permit = await self._breaker.acquire(pid, channel, now=self._clock(), policy=self._policy)
+        if permit is None:
+            return ChannelOutcome(channel, "deferred", target=target)
+        # The credential snapshot fences connection demotion from an old in-flight send.
+        declaration = VALIDATORS.get(channel)
+        credential_key = declaration.session_channel or channel if declaration else channel
+        credential_predicates = [Credential.profile_id == pid, Credential.channel == credential_key]
+        if declaration:
+            credential_predicates.append(Credential.kind == declaration.credential_kind)
+        snapshot = await session.scalar(select(Credential.blob).where(*credential_predicates))
+        if before_dispatch and not await before_dispatch():
+            await self._breaker.release_unused(pid, channel, permit, now=self._clock())
+            return ChannelOutcome(channel, "deferred", target=target)
+        await self._repo.bump_attempt(publication_id, channel, target=target)
+        outcome = await self._dispatch_one(content, sel, publication_id)
+        await self._breaker.settle(
+            pid,
+            channel,
+            permit,
+            now=self._clock(),
+            policy=self._policy,
+            confirmed_done=outcome.confirmed_done,
+            failure=outcome.failure_kind,
+            retry_after=outcome.retry_after,
+        )
+        if outcome.failure_kind in (FailureKind.BANNED, FailureKind.AUTH):
+            credential_matches = (
+                exists(
+                    select(Credential.id).where(*credential_predicates, Credential.blob == snapshot)
+                )
+                if snapshot is not None
+                else ~exists(select(Credential.id).where(*credential_predicates))
+            )
+            await session.execute(
+                update(Connection)
+                .where(
+                    Connection.profile_id == pid,
+                    Connection.channel == channel,
+                    Connection.state == ConnectionState.LIVE,
+                    credential_matches,
+                )
+                .values(
+                    state=ConnectionState.BANNED
+                    if outcome.failure_kind == FailureKind.BANNED
+                    else ConnectionState.NEEDS_RELOGIN
+                )
+            )
+            await session.commit()
+        return outcome
+
+    async def _dispatch_one(
         self, content: CanonicalContent, sel: Selection, publication_id: str
     ) -> ChannelOutcome:
         channel, target_id = sel.channel, sel.target_id
@@ -240,6 +342,7 @@ class PublishService:
         try:
             adapter = await self._factory(channel, target_id)
         except Exception as exc:  # noqa: BLE001 — падение сборки не рушит другие единицы
+            failure, retry_after = _failure_signal(exc, self._clock())
             err = _error_str(exc)
             logger.warning("adapter build failed %s/%s: %s", channel, target_id, err)
             await self._repo.set_status(
@@ -254,6 +357,8 @@ class PublishService:
                 PublicationStatus.FAILED.value,
                 error=f"сборка канала: {err}",
                 target=target_id,
+                failure_kind=failure,
+                retry_after=retry_after,
             )
 
         if adapter is None:
@@ -273,6 +378,7 @@ class PublishService:
         try:
             result = await adapter.publish(content, publication_id=publication_id)
         except Exception as exc:  # noqa: BLE001
+            failure, retry_after = _failure_signal(exc, self._clock())
             err = _error_str(exc)
             logger.warning("publish failed %s/%s: %s", channel, target_id, err)
             await self._repo.set_status(
@@ -286,28 +392,43 @@ class PublishService:
                 error=err,
                 screenshot_path=shot,
                 target=target_id,
+                failure_kind=failure,
+                retry_after=retry_after,
             )
 
         # (6) маппим квитанцию → статус
         status = _RESULT_MAP.get(result.status, PublicationStatus.FAILED)
+        receipt = (
+            result.external_id
+            if status in (PublicationStatus.DONE, PublicationStatus.SUBMITTED)
+            else None
+        )
+        url = (
+            result.url if status in (PublicationStatus.DONE, PublicationStatus.SUBMITTED) else None
+        )
         # Second line of defence: redact any signed media token an adapter's error
         # might carry before it reaches the DB or the API response.
-        safe_error = redact_media_tokens(result.error) if result.error else result.error
+        safe_error = f"Ошибка площадки ({result.failure_kind.value})" if result.error else None
         await self._repo.set_status(
             publication_id,
             channel,
             status,
             target=target_id,
-            external_id=result.external_id,
+            external_id=receipt,
             error=safe_error,
         )
         return ChannelOutcome(
             channel,
             status.value,
-            external_id=result.external_id,
+            external_id=receipt,
             error=safe_error,
-            url=result.url,
+            url=url,
             target=target_id,
+            failure_kind=FailureKind.AUTH
+            if result.status == ResultStatus.NEEDS_RELOGIN
+            else result.failure_kind,
+            retry_after=result.retry_after,
+            confirmed_done=result.status == ResultStatus.DONE and bool(result.external_id),
         )
 
     async def _existing_outcome(self, publication_id: str, sel: Selection) -> ChannelOutcome:

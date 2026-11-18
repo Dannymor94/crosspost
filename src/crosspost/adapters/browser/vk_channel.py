@@ -115,7 +115,7 @@ async def _debug_composer_elements(page) -> None:
             except Exception:
                 continue
     except Exception as e:
-        print(f"[vk_channel DEBUG] ошибка дампа: {e}")
+        print(f"[vk_channel DEBUG] ошибка дампа: {type(e).__name__}")
     print("[vk_channel DEBUG] ---")
 
 

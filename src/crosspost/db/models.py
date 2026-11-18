@@ -368,9 +368,10 @@ class CircuitBreaker(Base):
     """Персистентный circuit breaker на (profile, channel). T-203.
 
     Состояния: closed (нормально) → open (пауза до open_until) → half_open (проба).
-    failure_count — счётчик подряд идущих неудач; сбрасывается при успехе.
+    failure_count — принятые rate-limit результаты; устаревшие epochs отклоняются.
     open_until — naive UTC: момент, после которого переходим в half_open.
-    Нет FK-каскада? Нет — ссылается на profiles.id с CASCADE, как остальные.
+    epoch ограждает результаты отправок; lease_until ограничивает HALF_OPEN.
+    OPEN без open_until — карантин: только проверенное ручное восстановление.
     """
 
     __tablename__ = "circuit_breakers"
@@ -384,6 +385,8 @@ class CircuitBreaker(Base):
     state: Mapped[BreakerState] = mapped_column(
         String(16), default=BreakerState.CLOSED, nullable=False
     )
+    epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     open_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

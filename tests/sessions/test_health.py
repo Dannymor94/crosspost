@@ -15,7 +15,7 @@ R1-additions:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -849,10 +849,9 @@ async def test_dispatch_blocked_for_needs_relogin(repo, monkeypatch):
     await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
     await repo.upsert_connection(p.id, "telegraph", ConnectionState.NEEDS_RELOGIN)
 
-    pub_repo = MagicMock()
-    pub_repo.set_status = AsyncMock()
-    pub_repo.is_done = AsyncMock(return_value=False)
-    pub_repo.get_status = AsyncMock(return_value=None)
+    from crosspost.db.publication_repo import PublicationRepository
+
+    pub_repo = PublicationRepository(repo.session, profile_id=p.id)
 
     async def adapter_factory(channel: str, target_id: str):
         return await build_profile_adapter(repo, p.id, channel, target_id)
@@ -866,7 +865,7 @@ async def test_dispatch_blocked_for_needs_relogin(repo, monkeypatch):
 
 
 async def test_dispatch_blocked_for_banned(repo, monkeypatch):
-    """Full chain: BANNED connection → PublishService.publish returns needs_relogin."""
+    """Full chain: BANNED connection → PublishService.publish returns banned."""
     from crosspost.content.canonical import CanonicalContent, ContentType
     from crosspost.orchestrator.publish_service import PublishService
 
@@ -874,10 +873,9 @@ async def test_dispatch_blocked_for_banned(repo, monkeypatch):
     await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
     await repo.upsert_connection(p.id, "telegraph", ConnectionState.BANNED)
 
-    pub_repo = MagicMock()
-    pub_repo.set_status = AsyncMock()
-    pub_repo.is_done = AsyncMock(return_value=False)
-    pub_repo.get_status = AsyncMock(return_value=None)
+    from crosspost.db.publication_repo import PublicationRepository
+
+    pub_repo = PublicationRepository(repo.session, profile_id=p.id)
 
     async def adapter_factory(channel: str, target_id: str):
         return await build_profile_adapter(repo, p.id, channel, target_id)
@@ -887,7 +885,7 @@ async def test_dispatch_blocked_for_banned(repo, monkeypatch):
     outcomes = await service.publish(content, ["telegraph"], publication_id="test-pub-002")
 
     assert len(outcomes) == 1
-    assert outcomes[0].status == "needs_relogin"
+    assert outcomes[0].status == "banned"
 
 
 async def test_dispatch_live_connection_reaches_adapter(repo, monkeypatch):
@@ -1279,8 +1277,8 @@ async def test_run_once_per_profile_exception_does_not_log_secret(factory, caplo
 # ── 19. ScheduledExecutor retry counter (R2) ─────────────────────────────────
 
 
-async def test_executor_needs_relogin_increments_attempt_count(factory):
-    """NEEDS_RELOGIN connection → executor increments attempt_count correctly, post ends FAILED."""
+async def test_executor_needs_relogin_preserves_attempt_count(factory):
+    """CB-04 supersedes the R2 policy: blocked connections never consume attempts."""
     from datetime import datetime, timedelta
 
     from crosspost.db.models import ScheduledPostStatus
@@ -1318,11 +1316,10 @@ async def test_executor_needs_relogin_increments_attempt_count(factory):
         async with factory() as s:
             pub_repo = PublicationRepository(s, profile_id=p.id)
             row = await pub_repo.get_status(pub_id, "telegraph")
-        assert row is not None, f"publication row missing after run {expected_count}"
-        assert row.attempt_count == expected_count
+        assert row is None, f"blocked dispatch created a row after run {expected_count}"
 
-    # After max_attempts runs: post finalized as FAILED
+    # A blocked connection stays pending even after repeated scheduler ticks
     async with factory() as s:
         post_row = await SchedulerRepository(s).get(post_id)
     assert post_row is not None
-    assert post_row.status == ScheduledPostStatus.FAILED
+    assert post_row.status == ScheduledPostStatus.SCHEDULED

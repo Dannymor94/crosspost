@@ -36,6 +36,14 @@ class PublicationRepository:
         self._s = session
         self._pid = profile_id
 
+    @property
+    def session(self) -> AsyncSession:
+        return self._s
+
+    @property
+    def profile_id(self) -> int:
+        return self._pid
+
     # ── Поканальный статус ────────────────────────────────────────────────────
 
     async def set_status(

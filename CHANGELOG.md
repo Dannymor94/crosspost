@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-18 — persistent circuit breaker, доработка T-203-R1
+
+- Единый guard для immediate, scheduled и manual retry: подключение → breaker/lease → попытка.
+- Типизированные FloodWait/HTTP 429 открывают breaker сразу; подтверждённый ban блокирует подключение без таймера.
+- Атомарная HALF_OPEN lease, fencing результатов по epoch, явное отклонение устаревших конкурентных сбоев.
+- Истёкшая проба помещается в карантин; SUBMITTED не закрывает breaker и не пересылается.
+- Ошибки площадок сохраняются как безопасные категории; deferred-ретрай не теряет снимок публикации.
+- Интеграционная проверка включает T-209 retention и T-202 credential CAS; контракт CB-01…CB-18 — `docs/T-203-R1.md`.
+
 ## 2026-11-11 — отключено автоудаление медиа (T-209)
 
 - Все пути удаления медиа (финализация в executor, retry, cancel, PATCH, reject, publish_now)
