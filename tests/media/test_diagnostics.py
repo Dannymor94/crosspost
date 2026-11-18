@@ -83,6 +83,14 @@ class TestMediaAudit(unittest.TestCase):
         self.assertEqual(len(report.unmatched_database_paths), 1)
         self.assertIn("scheduled:5/1", report.unmatched_database_paths[0])
 
+    def test_dotdot_escape_is_unmatched_not_missing_directory(self) -> None:
+        outside = self.root / ".." / "outside" / "photo.jpg"
+        self._add_scheduled(2, 5, [str(outside)])
+        report = audit_media(self.root, self.db_url)
+        self.assertEqual(report.missing_scheduled_directories, ())
+        self.assertEqual(len(report.unmatched_database_paths), 1)
+        self.assertIn("scheduled:5/2", report.unmatched_database_paths[0])
+
     def test_symlinks_are_never_followed_and_root_files_counted(self) -> None:
         outside = Path(self.tmp.name) / "outside"
         outside.mkdir()
