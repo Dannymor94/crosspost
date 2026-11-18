@@ -130,6 +130,10 @@ class HealthChecker:
             profile_id, session_key, primary_validator.credential_kind
         )
         # credential may be None for browser validators (they handle empty storageState)
+        # Record credential timestamp before probe for CAS (credential revision guard)
+        credential_at = await repo.get_credential_updated_at(
+            profile_id, session_key, primary_validator.credential_kind
+        )
 
         try:
             raw = await primary_validator.fn(credential)
@@ -182,7 +186,13 @@ class HealthChecker:
             logger.warning("health check: %s/%s → confirmed auth failure", profile_id, session_key)
             for ch in affected_channels:
                 # CAS: only update if still LIVE — won't overwrite BANNED or a concurrent relogin
-                applied = await repo.set_needs_relogin_if_live(profile_id, ch)
+                applied = await repo.set_needs_relogin_if_live(
+                    profile_id,
+                    ch,
+                    session_key=session_key,
+                    credential_kind=primary_validator.credential_kind,
+                    credential_at=credential_at,
+                )
                 if applied:
                     repo._s.add(
                         Log(

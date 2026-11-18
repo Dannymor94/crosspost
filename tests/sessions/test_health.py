@@ -33,8 +33,9 @@ from crosspost.sessions.health import HealthChecker
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("VAULT_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
 
 @pytest_asyncio.fixture
@@ -657,6 +658,12 @@ async def test_telegraph_network_failure_preserves_state(repo, factory, monkeypa
         def __init__(self, **kwargs):
             pass
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
         async def get(self, *args, **kwargs):
             raise httpx.ConnectError("connection refused")
 
@@ -695,6 +702,12 @@ async def test_telegraph_auth_failure_sets_needs_relogin(repo, factory, monkeypa
 
     class _MockClient:
         def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
             pass
 
         async def get(self, *args, **kwargs):
@@ -891,3 +904,299 @@ async def test_dispatch_live_connection_reaches_adapter(repo, monkeypatch):
 
     # LIVE → adapter is built, not None
     assert isinstance(adapter, TelegraphAdapter)
+
+
+# ── 14. Telegraph edge cases (R2) ─────────────────────────────────────────────
+
+
+async def test_telegraph_rate_limit_preserves_state(repo, factory, monkeypatch):
+    """429 from Telegraph → confirmed_dead=False → LIVE preserved."""
+    import httpx
+
+    from crosspost.channels.validators import _validate_telegraph
+
+    class _RateLimitClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            class _Resp:
+                status_code = 429
+
+                def json(self):
+                    return {}
+
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _RateLimitClient)
+    monkeypatch.setitem(
+        VALIDATORS,
+        "telegraph",
+        ChannelValidatorDef(
+            kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_validate_telegraph
+        ),
+    )
+
+    p = await repo.create_profile("alice")
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    await checker.run_once()
+
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn.state == ConnectionState.LIVE  # rate limit → transient → preserved
+
+
+async def test_telegraph_server_busy_preserves_state(repo, factory, monkeypatch):
+    """ok=false with generic error (not auth) → transient → LIVE preserved."""
+    import httpx
+
+    from crosspost.channels.validators import _validate_telegraph
+
+    class _BusyClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            class _Resp:
+                status_code = 200
+
+                def json(self):
+                    return {"ok": False, "error": "FLOOD_WAIT_30"}
+
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _BusyClient)
+    monkeypatch.setitem(
+        VALIDATORS,
+        "telegraph",
+        ChannelValidatorDef(
+            kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_validate_telegraph
+        ),
+    )
+
+    p = await repo.create_profile("alice")
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    await checker.run_once()
+
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn.state == ConnectionState.LIVE  # generic flood-wait → transient → preserved
+
+
+# ── 15. Instagram 5xx (R2) ────────────────────────────────────────────────────
+
+
+async def test_instagram_server_error_preserves_state(repo, factory, monkeypatch):
+    """5xx from Instagram Graph API → confirmed_dead=False → LIVE preserved."""
+    import json
+
+    import httpx
+
+    from crosspost.channels.validators import _validate_instagram
+
+    class _ServerErrorClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            class _Resp:
+                status_code = 503
+
+                def json(self):
+                    return {"error": {"message": "Service unavailable", "code": 1}}
+
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _ServerErrorClient)
+
+    blob = json.dumps({"access_token": "tok", "ig_user_id": "123"})
+    monkeypatch.setitem(
+        VALIDATORS,
+        "instagram",
+        ChannelValidatorDef(
+            kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_validate_instagram
+        ),
+    )
+
+    p = await repo.create_profile("alice")
+    await repo.set_credential(p.id, "instagram", CredentialKind.API_TOKEN, blob)
+    await repo.upsert_connection(p.id, "instagram", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    await checker.run_once()
+
+    conn = await repo.get_connection(p.id, "instagram")
+    assert conn.state == ConnectionState.LIVE  # 5xx → transient → preserved
+
+
+# ── 16. Telegram network error (R2) ──────────────────────────────────────────
+
+
+async def test_telegram_network_error_preserves_state(repo, factory, monkeypatch):
+    """OSError during Telethon connect → confirmed_dead=False → LIVE preserved."""
+    import json
+
+    from crosspost.channels.validators import _validate_telegram
+
+    async def _mock_connect(self, *a, **kw):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr("telethon.TelegramClient.connect", _mock_connect)
+
+    blob = json.dumps(
+        {
+            "api_id": "12345",
+            "api_hash": "abc123def456",
+            "session": "AAAA",
+            "target_channel": "@test",
+        }
+    )
+    monkeypatch.setitem(
+        VALIDATORS,
+        "telegram",
+        ChannelValidatorDef(
+            kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_validate_telegram
+        ),
+    )
+
+    p = await repo.create_profile("alice")
+    await repo.set_credential(p.id, "telegram", CredentialKind.API_TOKEN, blob)
+    await repo.upsert_connection(p.id, "telegram", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    await checker.run_once()
+
+    conn = await repo.get_connection(p.id, "telegram")
+    assert conn.state == ConnectionState.LIVE  # network error → transient → preserved
+
+
+# ── 17. Browser network error (R2) ───────────────────────────────────────────
+
+
+async def test_browser_network_error_preserves_state(repo, factory, monkeypatch):
+    """open_page raises during browser validate → confirmed_dead=False → LIVE preserved."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _failing_open_page(*args, **kwargs):
+        raise OSError("browser launch failed")
+        yield  # noqa: unreachable
+
+    monkeypatch.setattr("crosspost.adapters.browser.base_browser.open_page", _failing_open_page)
+
+    p = await repo.create_profile("alice")
+    await repo.set_credential(p.id, "vk_wall", CredentialKind.STORAGE_STATE, '{"cookies":[]}')
+    await repo.upsert_connection(p.id, "vk_wall", ConnectionState.LIVE)
+
+    checker = HealthChecker(factory, poll_seconds=999)
+    await checker.run_once()
+
+    conn = await repo.get_connection(p.id, "vk_wall")
+    assert conn.state == ConnectionState.LIVE  # browser error → transient → preserved
+
+
+# ── 18. Credential CAS guard (R2) ────────────────────────────────────────────
+
+
+async def test_credential_cas_prevents_stale_probe_writing_needs_relogin(repo):
+    """Credential replaced between probe snapshot and CAS write → state stays LIVE."""
+    import asyncio
+
+    p = await repo.create_profile("alice")
+    await repo.upsert_connection(p.id, "telegraph", ConnectionState.LIVE)
+
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "old-token")
+    credential_at = await repo.get_credential_updated_at(
+        p.id, "telegraph", CredentialKind.API_TOKEN
+    )
+
+    # Simulate credential rotation happening between probe snapshot and CAS write
+    await asyncio.sleep(0.001)
+    await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "new-token")
+
+    # CAS with OLD timestamp → rejected (credential rotated)
+    applied = await repo.set_needs_relogin_if_live(
+        p.id,
+        "telegraph",
+        session_key="telegraph",
+        credential_kind=CredentialKind.API_TOKEN,
+        credential_at=credential_at,
+    )
+
+    assert not applied  # stale probe result rejected
+    conn = await repo.get_connection(p.id, "telegraph")
+    assert conn is not None and conn.state == ConnectionState.LIVE
+
+
+# ── 19. ScheduledExecutor retry counter (R2) ─────────────────────────────────
+
+
+async def test_executor_needs_relogin_increments_attempt_count(factory):
+    """NEEDS_RELOGIN connection → executor increments attempt_count correctly, post ends FAILED."""
+    from datetime import datetime, timedelta
+
+    from crosspost.db.models import ScheduledPostStatus
+    from crosspost.db.profile_repo import ProfileRepository
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.db.vault import get_vault
+    from crosspost.scheduler.executor import ScheduledExecutor, scheduled_publication_id
+
+    async with factory() as s:
+        repo = ProfileRepository(s, vault=get_vault())
+        p = await repo.create_profile("executor-cas")
+        await repo.set_credential(p.id, "telegraph", CredentialKind.API_TOKEN, "tok")
+        await repo.upsert_connection(p.id, "telegraph", ConnectionState.NEEDS_RELOGIN)
+
+    past = datetime.now() - timedelta(minutes=1)
+    async with factory() as s:
+        pub_repo = PublicationRepository(s, profile_id=p.id)
+        post = await pub_repo.create_scheduled(
+            content_type="post",
+            text="hi",
+            title=None,
+            media_paths=[],
+            channels=["telegraph"],
+            scheduled_at=past,
+        )
+        post_id = post.id
+
+    max_attempts = 3
+    ex = ScheduledExecutor(factory, pacing_seconds=0, poll_seconds=0, max_attempts=max_attempts)
+
+    for expected_count in range(1, max_attempts + 1):
+        await ex.run_once()
+        pub_id = scheduled_publication_id(post_id)
+        async with factory() as s:
+            pub_repo = PublicationRepository(s, profile_id=p.id)
+            row = await pub_repo.get_status(pub_id, "telegraph")
+        assert row is not None, f"publication row missing after run {expected_count}"
+        assert row.attempt_count == expected_count
+
+    # After max_attempts runs: post finalized as FAILED
+    async with factory() as s:
+        post_row = await SchedulerRepository(s).get(post_id)
+    assert post_row is not None
+    assert post_row.status == ScheduledPostStatus.FAILED

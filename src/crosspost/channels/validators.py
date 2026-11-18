@@ -257,18 +257,30 @@ async def _validate_telegraph(token: str | None) -> ValidatorResult:
     try:
         import httpx
 
-        resp = await httpx.AsyncClient(timeout=10).get(
-            "https://api.telegra.ph/getAccountInfo",
-            params={"access_token": token},
-        )
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.telegra.ph/getAccountInfo",
+                params={"access_token": token},
+            )
         if resp.status_code >= 500:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        if resp.status_code == 429:
             return ValidatorResult(alive=False, confirmed_dead=False)
         if resp.status_code in (401, 403):
             return ValidatorResult(alive=False, confirmed_dead=True)
-        data = resp.json()
+        if resp.status_code >= 400:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        try:
+            data = resp.json()
+        except Exception:
+            return ValidatorResult(alive=False, confirmed_dead=False)
         if data.get("ok"):
             return ValidatorResult(alive=True)
-        return ValidatorResult(alive=False, confirmed_dead=True)
+        # ok=false with 2xx: confirmed_dead only if error explicitly indicates auth rejection
+        error_str = str(data.get("error", "")).lower()
+        if "invalid" in error_str or "unauthorized" in error_str or "access_token" in error_str:
+            return ValidatorResult(alive=False, confirmed_dead=True)
+        return ValidatorResult(alive=False, confirmed_dead=False)
     except Exception as exc:
         logger.debug("telegraph validate failed (transient): %s", type(exc).__name__)
         return ValidatorResult(alive=False, confirmed_dead=False)
@@ -333,6 +345,8 @@ async def _validate_instagram(blob: str | None) -> ValidatorResult:
                 )
 
             data = resp.json()
+            if resp.status_code >= 500:
+                return ValidatorResult(alive=False, confirmed_dead=False)
             if "error" in data:
                 kind, msg = classify_api_error(data["error"])
                 if kind == "token_error":
