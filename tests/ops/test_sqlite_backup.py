@@ -131,7 +131,9 @@ def test_rotation_keeps_only_tool_owned_pairs_and_ignores_strays(tmp_path, key):
 
 def test_missing_or_unrecognized_db_never_creates_backup(tmp_path, key):
     backup_dir = tmp_path / "backups"
-    missing = _run(tmp_path, key, "backup", "--db", str(tmp_path / "missing.sqlite3"), "--dest", str(backup_dir))
+    missing = _run(
+        tmp_path, key, "backup", "--db", str(tmp_path / "missing.sqlite3"), "--dest", str(backup_dir)
+    )
     assert missing.returncode == 2
     assert not backup_dir.exists()
     bad_db = tmp_path / "unknown.sqlite3"
