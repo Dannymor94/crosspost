@@ -54,7 +54,9 @@ def _sqlite_path(db_url: str) -> Path:
 
 def _media_key(path: str, root: Path) -> str | None:
     """Return the top-level directory containing a stored media file, if inside root."""
-    candidate = Path(path).absolute()
+    # abspath normalizes `..` without following symlinks. Path.absolute() alone
+    # preserves `..`, which could turn an outside path into a fake key (`..`).
+    candidate = Path(os.path.abspath(path))
     try:
         parts = candidate.relative_to(root).parts
     except ValueError:
@@ -121,7 +123,7 @@ def _walk_size(directory: Path) -> tuple[int, int, int]:
 
 def audit_media(root: Path, db_url: str) -> MediaAudit:
     """Inspect current filesystem and DB references without any writes."""
-    root = root.absolute()
+    root = Path(os.path.abspath(root))
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(f"MEDIA_DIR is not a real directory: {root}")
     references, scheduled_keys, unmatched = _db_references(db_url, root)
