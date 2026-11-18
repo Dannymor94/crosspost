@@ -188,6 +188,7 @@ def test_uncommitted_wal_transaction_not_in_snapshot(tmp_path, key):
         assert saved.execute("SELECT name FROM profiles").fetchall() == [("existing-client",)]
     live.close()
 
+
 def test_rotation_does_not_count_corrupt_newer_archive(tmp_path, key):
     db, live = _database(tmp_path)
     oldest = _backup(tmp_path, key, db, keep=2)
