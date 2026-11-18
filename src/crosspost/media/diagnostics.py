@@ -42,15 +42,11 @@ def _sqlite_path(db_url: str) -> Path:
     """Parse standard relative/absolute SQLAlchemy SQLite URLs without opening a DB."""
     url = urlsplit(db_url)
     if url.scheme not in {"sqlite", "sqlite+aiosqlite"} or url.netloc or url.query:
-        raise ValueError(
-            "Media audit supports only file-based SQLite DB_URL without query params"
-        )
+        raise ValueError("Media audit supports only file-based SQLite DB_URL without query params")
     if not url.path.startswith("/"):
         raise ValueError("DB_URL must identify a SQLite file")
     # sqlite:///relative.db is relative; sqlite:////absolute.db is absolute.
-    database = (
-        url.path[1:] if not url.path.startswith("//") else "/" + url.path.lstrip("/")
-    )
+    database = url.path[1:] if not url.path.startswith("//") else "/" + url.path.lstrip("/")
     if not database or database == ":memory:":
         raise ValueError("Media audit requires an existing on-disk database")
     return Path(unquote(database)).absolute()
@@ -84,12 +80,8 @@ def _db_references(
             "SELECT id, profile_id, media_paths FROM scheduled_posts"
         ):
             paths = json.loads(serialized) if serialized is not None else []
-            if not isinstance(paths, list) or any(
-                not isinstance(p, str) for p in paths
-            ):
-                raise ValueError(
-                    f"Invalid media_paths in scheduled post {scheduled_id}"
-                )
+            if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
+                raise ValueError(f"Invalid media_paths in scheduled post {scheduled_id}")
             for path in paths:
                 key = _media_key(path, root)
                 if key is None:
@@ -103,9 +95,7 @@ def _db_references(
             # For immediate web uploads the directory is named publication_id.
             # Scheduled rows use a different key ('sched-<uuid>'), so their
             # surviving publication rows cannot reconstruct a deleted link.
-            references[str(publication_id)].add(
-                f"publication:{profile_id}/{publication_id}"
-            )
+            references[str(publication_id)].add(f"publication:{profile_id}/{publication_id}")
     finally:
         conn.close()
     return references, scheduled_keys, tuple(sorted(unmatched))
@@ -167,18 +157,14 @@ def audit_media(root: Path, db_url: str) -> MediaAudit:
         root_file_bytes=root_file_bytes,
         ignored_symlinks=ignored_symlinks,
         directories=tuple(directories),
-        orphan_candidates=tuple(
-            item.key for item in directories if not item.referenced_by
-        ),
+        orphan_candidates=tuple(item.key for item in directories if not item.referenced_by),
         missing_scheduled_directories=tuple(sorted(scheduled_keys - present)),
         unmatched_database_paths=unmatched,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Read-only media storage audit (T-213)"
-    )
+    parser = argparse.ArgumentParser(description="Read-only media storage audit (T-213)")
     parser.add_argument(
         "--media-dir", type=Path, default=Path(os.getenv("MEDIA_DIR", "runtime/media"))
     )
@@ -186,12 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         "--db-url",
         default=os.getenv("DB_URL", "sqlite+aiosqlite:///runtime/db.sqlite3"),
     )
-    parser.add_argument(
-        "--top", type=int, default=10, help="number of largest directories"
-    )
-    parser.add_argument(
-        "--json", action="store_true", help="output the full report as JSON"
-    )
+    parser.add_argument("--top", type=int, default=10, help="number of largest directories")
+    parser.add_argument("--json", action="store_true", help="output the full report as JSON")
     args = parser.parse_args(argv)
     if args.top < 0:
         parser.error("--top must be non-negative")
@@ -209,8 +191,7 @@ def main(argv: list[str] | None = None) -> int:
         f"orphan candidates: {len(report.orphan_candidates)}"
     )
     print(
-        f"Root files: {report.root_file_bytes} bytes; "
-        f"ignored symlinks: {report.ignored_symlinks}"
+        f"Root files: {report.root_file_bytes} bytes; ignored symlinks: {report.ignored_symlinks}"
     )
     print("Largest directories:")
     for item in report.directories[: args.top]:
@@ -220,12 +201,8 @@ def main(argv: list[str] | None = None) -> int:
     missing = ", ".join(report.missing_scheduled_directories) or "none"
     print(f"Missing scheduled directories: {missing}")
     print(f"Unmatched stored paths: {len(report.unmatched_database_paths)}")
-    print(
-        "WARNING: Orphans are candidates only; in-flight uploads and deleted rows are invisible."
-    )
-    print(
-        "No files or database rows were modified. Do not delete media based on this report."
-    )
+    print("WARNING: Orphans are candidates only; in-flight uploads and deleted rows are invisible.")
+    print("No files or database rows were modified. Do not delete media based on this report.")
     return 0
 
 
