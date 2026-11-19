@@ -200,3 +200,32 @@ def test_rotation_does_not_count_corrupt_newer_archive(tmp_path, key):
     assert newest.exists()
     assert bad_newer.exists()  # bad archive is not silently deleted; operator investigates
     live.close()
+
+
+def test_restore_rejects_mutation_between_verify_and_copy(tmp_path, key, monkeypatch):
+    """Only bytes authenticated by the manifest may become a restored database."""
+    import importlib.util
+
+    db, live = _database(tmp_path)
+    snapshot = _backup(tmp_path, key, db)
+    monkeypatch.setenv("VAULT_KEY", key)
+    spec = importlib.util.spec_from_file_location("crosspost_sqlite_backup_cli", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    original_verify = module.verify
+
+    def mutate_after_verified(path):
+        meta = original_verify(path)
+        with sqlite3.connect(path) as conn:
+            conn.execute("INSERT INTO profiles(name) VALUES ('UNSIGNED_AFTER_VERIFY')")
+        return meta
+
+    monkeypatch.setattr(module, "verify", mutate_after_verified)
+    destination = tmp_path / "recovered" / "db.sqlite3"
+    with pytest.raises(module.BackupError, match="authenticated manifest"):
+        module.restore(snapshot, destination)
+    assert not destination.exists()
+    assert not list(destination.parent.glob(".crosspost-staging-*"))
+    live.close()
