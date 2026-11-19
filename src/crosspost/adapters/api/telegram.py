@@ -37,7 +37,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
+from crosspost.adapters.base import ChannelAdapter, ChannelResult, FailureKind, ResultStatus
 from crosspost.content.canonical import CanonicalContent
 from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.telegram_text import (
@@ -144,7 +144,13 @@ class TelegramAdapter:
             return ChannelResult(self.channel, ResultStatus.SKIPPED)
 
         # Telethon-исключения импортируем лениво (SDK не тянем на импорт модуля).
-        from telethon.errors import FloodWaitError, RPCError
+        from telethon.errors import (
+            AuthKeyUnregisteredError,
+            FloodWaitError,
+            RPCError,
+            SessionRevokedError,
+            UserDeactivatedBanError,
+        )
         from telethon.errors.rpcerrorlist import MediaCaptionTooLongError
         from telethon.tl.types import DocumentAttributeVideo
 
@@ -267,10 +273,26 @@ class TelegramAdapter:
             return ChannelResult(
                 self.channel,
                 ResultStatus.FAILED,
-                error=f"flood_wait: подождать {e.seconds}s перед повтором",
+                error="Лимит Telegram",
+                failure_kind=FailureKind.RATE_LIMIT,
+                retry_after=e.seconds,
             )
         except MediaCaptionTooLongError as e:
             return ChannelResult(self.channel, ResultStatus.FAILED, error=f"caption too long: {e}")
+        except UserDeactivatedBanError:
+            return ChannelResult(
+                self.channel,
+                ResultStatus.FAILED,
+                error="Аккаунт заблокирован",
+                failure_kind=FailureKind.BANNED,
+            )
+        except (AuthKeyUnregisteredError, SessionRevokedError):
+            return ChannelResult(
+                self.channel,
+                ResultStatus.NEEDS_RELOGIN,
+                error="Требуется вход",
+                failure_kind=FailureKind.AUTH,
+            )
         except RPCError as e:
             # Частичный успех — норма (§6.8): не роняем публикацию, возвращаем FAILED.
             return ChannelResult(self.channel, ResultStatus.FAILED, error=str(e))
