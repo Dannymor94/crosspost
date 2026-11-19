@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.channels.connection_validator import validate_connection
-from crosspost.channels.validators import VALIDATORS, ChannelValidatorDef
+from crosspost.channels.validators import VALIDATORS, ChannelValidatorDef, ValidatorResult
 from crosspost.db.engine import create_engine_and_tables
 from crosspost.db.models import ConnectionState, CredentialKind, Log
 from crosspost.db.profile_repo import ProfileRepository
@@ -42,8 +42,8 @@ async def repo(session, vault) -> ProfileRepository:
 def _make_def(alive: bool, kind: CredentialKind = CredentialKind.API_TOKEN) -> ChannelValidatorDef:
     """Фиктивный валидатор, возвращающий константный результат."""
 
-    async def _fn(credential: str | None) -> bool:
-        return alive
+    async def _fn(credential: str | None) -> ValidatorResult:
+        return ValidatorResult(alive=alive, confirmed_dead=not alive)
 
     return ChannelValidatorDef(kind="api", credential_kind=kind, fn=_fn)
 
@@ -51,8 +51,8 @@ def _make_def(alive: bool, kind: CredentialKind = CredentialKind.API_TOKEN) -> C
 def _make_browser_def(alive: bool) -> ChannelValidatorDef:
     """Фиктивный браузерный валидатор."""
 
-    async def _fn(credential: str | None) -> bool:
-        return alive
+    async def _fn(credential: str | None) -> ValidatorResult:
+        return ValidatorResult(alive=alive, confirmed_dead=not alive)
 
     return ChannelValidatorDef(kind="browser", credential_kind=CredentialKind.STORAGE_STATE, fn=_fn)
 
@@ -258,3 +258,48 @@ async def test_validate_updates_existing_connection(repo, monkeypatch):
     conns = await repo.get_connections(p.id)
     assert len(conns) == 1  # одна строка, не две
     assert conns[0].state == ConnectionState.LIVE
+
+
+# ── Transient preservation (R2) ───────────────────────────────────────────────
+
+
+async def test_validate_connection_transient_preserves_live_state(repo, monkeypatch):
+    """confirmed_dead=False → transient result → existing LIVE state preserved."""
+
+    async def _transient(_: str | None) -> ValidatorResult:
+        return ValidatorResult(alive=False, confirmed_dead=False)
+
+    monkeypatch.setitem(
+        VALIDATORS,
+        "telegram",
+        ChannelValidatorDef(kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_transient),
+    )
+    p = await repo.create_profile("alice")
+    await repo.upsert_connection(p.id, "telegram", ConnectionState.LIVE)
+
+    state = await validate_connection(repo, p.id, "telegram")
+
+    assert state == ConnectionState.LIVE
+    conn = await repo.get_connection(p.id, "telegram")
+    assert conn is not None and conn.state == ConnectionState.LIVE
+
+
+async def test_validate_connection_exception_preserves_live_state(repo, monkeypatch):
+    """Exception in validator → transient → existing LIVE state preserved."""
+
+    async def _boom(_: str | None) -> bool:
+        raise OSError("network unreachable")
+
+    monkeypatch.setitem(
+        VALIDATORS,
+        "telegram",
+        ChannelValidatorDef(kind="api", credential_kind=CredentialKind.API_TOKEN, fn=_boom),
+    )
+    p = await repo.create_profile("alice")
+    await repo.upsert_connection(p.id, "telegram", ConnectionState.LIVE)
+
+    state = await validate_connection(repo, p.id, "telegram")
+
+    assert state == ConnectionState.LIVE
+    conn = await repo.get_connection(p.id, "telegram")
+    assert conn is not None and conn.state == ConnectionState.LIVE

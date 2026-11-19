@@ -19,7 +19,7 @@ from crosspost.adapters.base import ChannelAdapter
 from crosspost.channels.telegram_login import parse_credential_blob
 from crosspost.channels.validators import VALIDATORS, normalize_target
 from crosspost.config import browser_headless
-from crosspost.db.models import CredentialKind
+from crosspost.db.models import ConnectionState, CredentialKind
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.sqlite_store import CheckpointStore
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -44,6 +44,12 @@ async def build_profile_adapter(
     """
     validator = VALIDATORS.get(channel)
     if validator is None or not validator.enabled:
+        return None
+
+    # Fail-closed: don't dispatch to connections flagged as needs_relogin or banned
+    conn = await repo.get_connection(profile_id, channel)
+    if conn is not None and conn.state in (ConnectionState.NEEDS_RELOGIN, ConnectionState.BANNED):
+        logger.info("adapter build skipped: %s/%s is %s", profile_id, channel, conn.state)
         return None
 
     if store is None:
