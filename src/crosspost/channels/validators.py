@@ -39,12 +39,16 @@ class ValidatorResult:
 
     alive=True → подключение живое; expires_at → срок действия токена (если известен).
     alive=False → ошибка; error — человеческое сообщение; error_field — поле формы ('' = общая).
+    confirmed_dead=True → ошибка аутентификации (сессия отозвана, токен невалиден);
+    confirmed_dead=False → причина неизвестна (сеть, таймаут, прокси) → состояние сохраняется.
+    Поле учитывается только health-checker'ом; validate_connection (UI) игнорирует его.
     """
 
     alive: bool
     error: str = ""
     error_field: str = ""
     expires_at: datetime | None = field(default=None)
+    confirmed_dead: bool = False
 
 
 # Тип валидирующей функции: принимает credential (plaintext или None для browser)
@@ -173,16 +177,33 @@ class ChannelValidatorDef:
 
 # ── Валидирующие функции ──────────────────────────────────────────────────────
 
+# Telethon exception class names that indicate confirmed auth failure (not transient).
+_TELEGRAM_AUTH_ERROR_NAMES: frozenset[str] = frozenset(
+    {
+        "AuthKeyUnregisteredError",
+        "SessionRevokedError",
+        "AuthKeyDuplicatedError",
+        "PhoneNumberBannedError",
+        "UserDeactivatedBanError",
+        "UserDeactivatedError",
+        "AuthKeyInvalidError",
+        "SessionExpiredError",
+    }
+)
 
-async def _validate_telegram(token: str | None) -> bool:
+
+async def _validate_telegram(token: str | None) -> ValidatorResult:
     """Telethon: проверяем строку сессии через get_me().
 
     Учётка из UI — JSON {api_id, api_hash, target_channel, session}: берём
     per-profile api_id/api_hash. Голая строка сессии (легаси/CLI) — fallback
     на api_id/api_hash из env.
+
+    Возвращает ValidatorResult с confirmed_dead=True только при явной ошибке аутентификации.
+    Сетевые ошибки → confirmed_dead=False (состояние сохраняется в health-checker).
     """
     if not token:
-        return False
+        return ValidatorResult(alive=False, confirmed_dead=False)
     try:
         import os
 
@@ -204,35 +225,65 @@ async def _validate_telegram(token: str | None) -> bool:
             api_hash = os.environ.get("TELEGRAM_API_HASH", "")
         if not api_id or not api_hash:
             logger.warning("api_id/api_hash не заданы — пропускаем проверку telegram")
-            return False
+            return ValidatorResult(alive=False, confirmed_dead=False)
         client = TelegramClient(StringSession(session_str), api_id, api_hash)
         await client.connect()
-        me = await client.get_me()
-        await client.disconnect()
-        return me is not None
+        try:
+            me = await client.get_me()
+        finally:
+            await client.disconnect()
+        if me is None:
+            return ValidatorResult(alive=False, confirmed_dead=True)
+        return ValidatorResult(alive=True)
     except Exception as exc:
-        logger.debug("telegram validate failed: %s", exc)
-        return False
+        exc_name = type(exc).__name__
+        if exc_name in _TELEGRAM_AUTH_ERROR_NAMES:
+            logger.debug("telegram validate: confirmed auth error (%s)", exc_name)
+            return ValidatorResult(alive=False, confirmed_dead=True)
+        logger.debug("telegram validate failed (transient): %s", exc_name)
+        return ValidatorResult(alive=False, confirmed_dead=False)
 
 
-async def _validate_telegraph(token: str | None) -> bool:
+async def _validate_telegraph(token: str | None) -> ValidatorResult:
     """Telegraph: getAccountInfo с access_token.
 
     API: https://telegra.ph/api#getAccountInfo
+
+    confirmed_dead=True: 401/403 или явный ok=false (неверный токен).
+    confirmed_dead=False: сеть, таймаут, 5xx (временный сбой).
     """
     if not token:
-        return False
+        return ValidatorResult(alive=False, confirmed_dead=False)
     try:
         import httpx
 
-        resp = await httpx.AsyncClient(timeout=10).get(
-            "https://api.telegra.ph/getAccountInfo",
-            params={"access_token": token},
-        )
-        return bool(resp.json().get("ok"))
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.telegra.ph/getAccountInfo",
+                params={"access_token": token},
+            )
+        if resp.status_code >= 500:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        if resp.status_code == 429:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        if resp.status_code in (401, 403):
+            return ValidatorResult(alive=False, confirmed_dead=True)
+        if resp.status_code >= 400:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        try:
+            data = resp.json()
+        except Exception:
+            return ValidatorResult(alive=False, confirmed_dead=False)
+        if data.get("ok"):
+            return ValidatorResult(alive=True)
+        # ok=false with 2xx: confirmed_dead only if error explicitly indicates auth rejection
+        error_str = str(data.get("error", "")).lower()
+        if "invalid" in error_str or "unauthorized" in error_str or "access_token" in error_str:
+            return ValidatorResult(alive=False, confirmed_dead=True)
+        return ValidatorResult(alive=False, confirmed_dead=False)
     except Exception as exc:
-        logger.debug("telegraph validate failed: %s", exc)
-        return False
+        logger.debug("telegraph validate failed (transient): %s", type(exc).__name__)
+        return ValidatorResult(alive=False, confirmed_dead=False)
 
 
 _ERR_PROXY_DOWN = (
@@ -294,11 +345,14 @@ async def _validate_instagram(blob: str | None) -> ValidatorResult:
                 )
 
             data = resp.json()
+            if resp.status_code >= 500:
+                return ValidatorResult(alive=False, confirmed_dead=False)
             if "error" in data:
                 kind, msg = classify_api_error(data["error"])
                 if kind == "token_error":
                     return ValidatorResult(
                         alive=False,
+                        confirmed_dead=True,
                         error="Токен недействителен или истёк. Получите новый токен в Meta Business Suite.",
                         error_field="access_token",
                     )
@@ -313,9 +367,12 @@ async def _validate_instagram(blob: str | None) -> ValidatorResult:
             return ValidatorResult(alive=True, expires_at=expires_at)
 
     except Exception as exc:
-        logger.debug("instagram validate failed: %s", type(exc).__name__)
+        logger.debug("instagram validate failed (transient): %s", type(exc).__name__)
         return ValidatorResult(
-            alive=False, error="Внутренняя ошибка при проверке подключения.", error_field=""
+            alive=False,
+            confirmed_dead=False,
+            error="Внутренняя ошибка при проверке подключения.",
+            error_field="",
         )
 
 
@@ -344,9 +401,13 @@ def _make_browser_validator(
     require_selector: str | None = None,
     session_channel: str | None = None,
 ) -> ValidatorFn:
-    """Фабрика: возвращает async-функцию, открывающую url и проверяющую is_logged_in."""
+    """Фабрика: возвращает async-функцию, открывающую url и проверяющую is_logged_in.
 
-    async def _validate(storage_state: str | None) -> bool:
+    confirmed_dead=True: страница явно показывает незалогиненное состояние (редирект на логин).
+    confirmed_dead=False: не удалось запустить браузер / сеть / таймаут (временный сбой).
+    """
+
+    async def _validate(storage_state: str | None) -> ValidatorResult:
         # storage_state — per-profile сессия из credentials (расшифрована в памяти).
         # Передаём её В open_page явно: НИКАКОГО общего файла — изоляция по профилю.
         # Пустой storage_state → пустой контекст → is_logged_in=False → NEEDS_RELOGIN.
@@ -356,14 +417,16 @@ def _make_browser_validator(
             channel_key = session_channel or _channel_from_url(url)
             async with open_page(channel_key, headless=True, storage_state=storage_state) as page:
                 await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-                return await is_logged_in(
+                logged_in = await is_logged_in(
                     page,
                     reject_url_fragments=reject_url_fragments,
                     require_selector=require_selector,
                 )
+                # URL redirect to login = definitive auth failure, not transient.
+                return ValidatorResult(alive=logged_in, confirmed_dead=not logged_in)
         except Exception as exc:
-            logger.debug("browser validate failed for %s: %s", url, exc)
-            return False
+            logger.debug("browser validate failed for %s (transient): %s", url, type(exc).__name__)
+            return ValidatorResult(alive=False, confirmed_dead=False)
 
     return _validate
 

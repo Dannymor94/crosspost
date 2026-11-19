@@ -70,17 +70,32 @@ async def validate_connection(
     try:
         raw = await validator.fn(credential)
     except Exception as exc:
-        logger.warning("validate_connection %s/%s exception: %s", profile_id, channel, exc)
-        await _log(repo, profile_id, channel, "ERROR", f"Исключение при валидации: {exc}")
-        return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
+        exc_type = type(exc).__name__
+        logger.warning(
+            "validate_connection %s/%s exception (%s), state preserved",
+            profile_id,
+            channel,
+            exc_type,
+        )
+        await _log(
+            repo,
+            profile_id,
+            channel,
+            "WARNING",
+            f"Временная ошибка при проверке ({exc_type}), состояние сохранено",
+        )
+        conn = await repo.get_connection(profile_id, channel)
+        return conn.state if conn is not None else ConnectionState.NEEDS_RELOGIN
 
-    # Coerce bool | ValidatorResult → (alive, expires_at)
+    # Coerce bool | ValidatorResult → (alive, expires_at, confirmed_dead)
     if isinstance(raw, ValidatorResult):
         alive = raw.alive
         expires_at = raw.expires_at
+        confirmed_dead = raw.confirmed_dead
     else:
         alive = bool(raw)
         expires_at = None
+        confirmed_dead = False  # plain bool = unknown/transient
 
     if alive:
         await _log(repo, profile_id, channel, "INFO", "Подключение активно")
@@ -93,9 +108,16 @@ async def validate_connection(
             ConnectionState.LIVE,
             expires_at=expires_at if persist_expiry else None,
         )
-    else:
+    elif confirmed_dead:
         await _log(repo, profile_id, channel, "WARNING", "Подключение требует ре-логина")
         return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
+    else:
+        # Transient/unknown: preserve existing state, write diagnostic
+        await _log(
+            repo, profile_id, channel, "INFO", "Временная ошибка при проверке, состояние сохранено"
+        )
+        conn = await repo.get_connection(profile_id, channel)
+        return conn.state if conn is not None else ConnectionState.NEEDS_RELOGIN
 
 
 async def _write(
