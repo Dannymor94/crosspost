@@ -56,7 +56,12 @@ source/runtime PASS, #25 — independent R1 PASS, #23 — independent R2 source 
 | Полная совмещённая схема | `tests/ops/test_integration_rehearsal.py::test_int01_migrated_wal_backup_restore_and_read_only_media_audit` |
 
 Интеграционный smoke создаёт только синтетическую мигрированную БД и медиа в tmp_path.
-CLI диагностики сохраняет size/mtime DB/WAL/SHM и SHA256 DB/WAL/media, orphan не удаляется.
+CLI диагностики сохраняет size/mtime и SHA256 DB/WAL/media, размер SHM и orphan-файлы.
+SQLite WAL readers обновляют служебные read marks в SHM; на Linux это может менять mtime
+SHM даже при `mode=ro` ([SQLite WAL format §2.3.1](https://sqlite.org/walformat.html#wal_locks)).
+Первый Linux push-run поймал чрезмерное требование нового smoke к SHM mtime; одна
+целевая коррекция теста исключила только служебную SHM mtime. Проверки байтов, размера и
+mtime DB/WAL/media не ослаблены, production-диагностика не изменялась.
 Online backup видит committed WAL; после verify/restore в новый путь сохранены профиль,
 зашифрованный credential (расшифровывается тем же внешним тестовым ключом), BANNED,
 SUBMITTED, OPEN и Alembic head. Реальные БД, медиа и ключи не читались/не загружались.

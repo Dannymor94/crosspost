@@ -88,8 +88,10 @@ async def test_int01_migrated_wal_backup_restore_and_read_only_media_audit(tmp_p
             return {
                 str(path): (
                     path.stat().st_size,
-                    path.stat().st_mtime_ns,
-                    # SHM read marks may change in memory; no data/schema/media writes are allowed.
+                    # SQLite readers update SHM read marks (walformat.html §2.3.1).
+                    # Linux may reflect that in mtime. SHM is coordination state,
+                    # not database content; DB/WAL/media must remain byte-identical.
+                    None if path.name.endswith("-shm") else path.stat().st_mtime_ns,
                     None
                     if path.name.endswith("-shm")
                     else hashlib.sha256(path.read_bytes()).hexdigest(),
