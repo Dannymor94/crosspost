@@ -222,7 +222,7 @@ def verify(snapshot: Path) -> dict:
 
 
 def restore(snapshot: Path, destination: Path) -> Path:
-    verify(snapshot)  # No writes before key, checksum, schema, and integrity checks.
+    verified = verify(snapshot)  # Authenticate source before writing to the destination area.
     if destination.exists() or destination.is_symlink():
         raise BackupError(
             "restore target already exists; restore to a new path with service stopped"
@@ -237,6 +237,11 @@ def restore(snapshot: Path, destination: Path) -> Path:
                 dst.write(chunk)
             dst.flush()
             os.fsync(dst.fileno())
+        # The source can change after verify() but before/during copying. Authenticate
+        # the exact staged bytes that will be published, not only the source path.
+        checksum, size = _sha256_size(staged)
+        if checksum != verified["sha256"] or size != verified["size_bytes"]:
+            raise BackupError("restored snapshot bytes do not match authenticated manifest")
         _integrity_and_schema(staged)
         _publish_exclusive(staged, destination)
     finally:
