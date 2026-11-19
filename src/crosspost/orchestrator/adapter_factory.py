@@ -176,7 +176,7 @@ async def _build_telegram(
         logger.warning("telegram: неполная учётка профиля")
         return None
 
-    client = TelegramClient(StringSession(session), api_id, api_hash)
+    client = TelegramClient(StringSession(session), api_id, api_hash, flood_sleep_threshold=0)
     await client.connect()  # сессия уже авторизована — без интерактива
     return TelegramAdapter(
         client, target=target, store=store, topic_id=topic_id, peer_access_hash=peer_access_hash

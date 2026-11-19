@@ -300,7 +300,7 @@ async def test_attempts_are_logged(factory):
     assert len(logs) == 1
     assert logs[0].channel == "telegram"
     assert logs[0].level == "ERROR"
-    assert "boom" in logs[0].message
+    assert "RuntimeError" in logs[0].message
     assert logs[0].publication_id == scheduled_publication_id(post_id)
 
 

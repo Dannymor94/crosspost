@@ -118,7 +118,7 @@ async def test_partial_success_one_fails(session):
 
     assert by["telegram"].status == "done"
     assert by["vk_wall"].status == "failed"
-    assert "VK упал" in by["vk_wall"].error
+    assert by["vk_wall"].error == "RuntimeError"
     # Персистентно: статусы в БД поканальные.
     statuses = {p.channel: str(p.status) for p in await _repo(session).list_statuses("p1")}
     assert statuses == {"telegram": "done", "vk_wall": "failed"}
