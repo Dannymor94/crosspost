@@ -29,7 +29,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -44,6 +44,7 @@ from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.db.vault import get_vault
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
 from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
+from crosspost.orchestrator.breaker import BreakerPolicy
 from crosspost.orchestrator.publish_service import (
     ChannelOutcome,
     PublishService,
@@ -51,7 +52,6 @@ from crosspost.orchestrator.publish_service import (
     selections_from_stored,
 )
 from crosspost.scheduler.browser_cooldown import BrowserCooldown
-from crosspost.web import media as media_store
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def scheduled_publication_id(post_id: int) -> str:
 
 def _as_naive(dt: datetime) -> datetime:
     """Снять tzinfo для сравнения времён (в очереди возможны naive и aware вперемешку)."""
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+    return dt.astimezone().replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
 class ScheduledExecutor:
@@ -82,6 +82,9 @@ class ScheduledExecutor:
         pacing_seconds: float = 5.0,
         poll_seconds: float = 30.0,
         browser_session_cooldown: float = 0.0,
+        breaker_cooldown_seconds: float = 300.0,
+        breaker_lease_seconds: float = 600.0,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: SleepFn = asyncio.sleep,
     ) -> None:
         self._factory = session_factory
@@ -89,6 +92,8 @@ class ScheduledExecutor:
         self._pacing = max(0.0, pacing_seconds)
         self._poll = max(0.0, poll_seconds)
         self._browser_cooldown = max(0.0, browser_session_cooldown)
+        self._breaker_policy = BreakerPolicy(breaker_cooldown_seconds, breaker_lease_seconds)
+        self._clock = clock
         self._sleep = sleep
 
     # ── Конфигурация ──────────────────────────────────────────────────────────
@@ -104,6 +109,8 @@ class ScheduledExecutor:
             browser_session_cooldown=float(
                 os.environ.get("BROWSER_SESSION_COOLDOWN_SECONDS", "300")
             ),
+            breaker_cooldown_seconds=BreakerPolicy.from_env().cooldown_seconds,
+            breaker_lease_seconds=BreakerPolicy.from_env().lease_seconds,
         )
 
     # ── Публичный API ─────────────────────────────────────────────────────────
@@ -138,7 +145,7 @@ class ScheduledExecutor:
 
         Возвращает id обработанных постов (для тестов/диагностики).
         """
-        moment = now if now is not None else datetime.now()
+        moment = now if now is not None else self._clock()
         async with self._factory() as session:
             active = await SchedulerRepository(session).list_scheduled_active()
         due_ids = [p.id for p in active if _as_naive(p.scheduled_at) <= _as_naive(moment)]
@@ -154,7 +161,7 @@ class ScheduledExecutor:
     # ── Обработка одного поста ────────────────────────────────────────────────
 
     async def _process_post(self, post_id: int, *, now: datetime | None = None) -> None:
-        moment = now if now is not None else datetime.now()
+        moment = now if now is not None else self._clock()
         async with self._factory() as session:
             sched_repo = SchedulerRepository(session)
             post = await sched_repo.get(post_id)
@@ -178,7 +185,13 @@ class ScheduledExecutor:
             # Единый секвенсор связки статья→каналы. Различие с publish-now —
             # ТОЛЬКО политика ретраев, инъектируемая как step (здесь — с потолком).
             step = self._ceiling_step(
-                pub_repo, service, log_repo, post.profile_id, pubid, cooldown, moment
+                pub_repo,
+                service,
+                log_repo,
+                post.profile_id,
+                pubid,
+                cooldown,
+                moment,
             )
             fail_closed = self._fail_closed(pub_repo, log_repo, post.profile_id, pubid)
 
@@ -201,7 +214,6 @@ class ScheduledExecutor:
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
-            self._cleanup_media(post.media_paths)
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
 
     def _ceiling_step(
@@ -238,30 +250,23 @@ class ScheduledExecutor:
             if row is not None and row.attempt_count >= self._max_attempts:
                 return StepResult(StepState.FAILED, self._outcome_from_row(row), None)
 
-            # Browser cooldown gate — defers without consuming a retry attempt.
-            if await cooldown.is_cooling_down(profile_id, channel, now):
-                label = f"{channel}·{target}" if target else channel
-                await log_repo.add(
-                    profile_id,
-                    channel=channel,
-                    publication_id=pubid,
-                    level="INFO",
-                    message=f"scheduler: {label} → deferred (browser session cooldown)",
-                )
-                deferred_outcome = ChannelOutcome(channel, "deferred", target=target)
-                return StepResult(StepState.PENDING, deferred_outcome, None)
+            async def before_dispatch() -> bool:
+                # Called only after connection and breaker gates; denied work cannot
+                # consume attempts or the shared browser account cooldown.
+                if await cooldown.is_cooling_down(profile_id, channel, _as_naive(now)):
+                    return False
+                if dispatched[0] > 0 and self._pacing > 0:
+                    await self._sleep(self._pacing)
+                dispatched[0] += 1
+                await cooldown.record_session(profile_id, channel, _as_naive(now))
+                return True
 
-            if dispatched[0] > 0 and self._pacing > 0:
-                await self._sleep(self._pacing)  # разнос отправок между целями
-            dispatched[0] += 1
-
-            # Record session BEFORE the adapter call: if the process crashes mid-flight,
-            # the cooldown window is still honoured on the next retry.
-            await cooldown.record_session(profile_id, channel, now)
-            # Счётчик +1 ДО попытки — переживает падение процесса (потолок соблюдён).
-            await pub_repo.bump_attempt(pubid, channel, target=target)
-            outcome = await service.retry_channel(content, sel, publication_id=pubid)
+            outcome = await service.retry_channel(
+                content, sel, publication_id=pubid, before_dispatch=before_dispatch
+            )
             await self._log_outcome(log_repo, profile_id, sel, pubid, outcome)
+            if outcome.status in {"deferred", "banned", "needs_relogin"}:
+                return StepResult(StepState.PENDING, outcome, None)
 
             if outcome.status in _SUCCESS:
                 return StepResult(StepState.DONE, outcome, outcome.external_id)
@@ -320,7 +325,9 @@ class ScheduledExecutor:
         outcome: ChannelOutcome,
     ) -> None:
         ok = outcome.status in _SUCCESS
-        level = "INFO" if ok else "ERROR"
+        level = (
+            "INFO" if ok or outcome.status in {"deferred", "banned", "needs_relogin"} else "ERROR"
+        )
         label = f"{sel.channel}·{sel.target_id}" if sel.target_id else sel.channel
         msg = f"scheduler: {label} → {outcome.status}"
         if outcome.external_id:
@@ -347,7 +354,9 @@ class ScheduledExecutor:
         async def factory(channel: str, target_id: str = ""):
             return await build_profile_adapter(profile_repo, profile_id, channel, target_id)
 
-        return PublishService(pub_repo, factory)
+        return PublishService(
+            pub_repo, factory, clock=self._clock, breaker_policy=self._breaker_policy
+        )
 
     def _content_from_post(self, post: ScheduledPost) -> CanonicalContent:
         return CanonicalContent(
@@ -357,11 +366,8 @@ class ScheduledExecutor:
             media_paths=[Path(p) for p in (post.media_paths or [])],
         )
 
-    def _cleanup_media(self, media_paths: list) -> None:
-        """Удалить каталоги медиа поста (sched-<uuid>) — все каналы финализированы."""
-        keys = {Path(p).parent.name for p in (media_paths or [])}
-        for key in keys:
-            media_store.cleanup_media(key)
+    # T-209: automatic media deletion disabled — media is retained indefinitely.
+    # Safe cleanup conditions are tracked in T-214.
 
     async def _cleanup_checkpoints(self, session, profile_id: int, publication_id: str) -> None:
         """Удалить чекпоинты шагов после финализации (все каналы терминальны)."""

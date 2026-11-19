@@ -255,10 +255,10 @@ async def test_rpc_error_returns_failed_not_raise(
 
 
 @pytest.mark.asyncio
-async def test_flood_wait_puts_seconds_in_error(
+async def test_flood_wait_preserves_typed_retry_after(
     tmp_path, store, publication_id, fake_telethon_client
 ):
-    """§6.3: время ожидания FloodWait — в error, чтобы ретрай не пришёл раньше."""
+    """CB-05: rate-limit evidence survives adapter error conversion."""
     from telethon.errors import FloodWaitError
 
     err = FloodWaitError(_Req())
@@ -269,8 +269,8 @@ async def test_flood_wait_puts_seconds_in_error(
     result = await adapter.publish(content, publication_id=publication_id)
 
     assert result.status is ResultStatus.FAILED
-    assert "flood_wait" in result.error
-    assert f"{err.seconds}s" in result.error
+    assert result.failure_kind.value == "rate_limit"
+    assert result.retry_after == err.seconds
 
 
 # ── 5) ретрай после падения второго вызова не пересылает фото ─────────────────
@@ -384,3 +384,21 @@ async def test_schedule_on_both_messages_of_long_post(
     _, m_kwargs = fake_telethon_client.send_message.call_args
     assert f_kwargs["schedule"] == _WHEN
     assert m_kwargs["schedule"] == _WHEN
+
+
+@pytest.mark.parametrize("kind", ["ban", "auth"])
+async def test_typed_account_failure_survives_adapter(
+    tmp_path, store, publication_id, fake_telethon_client, kind
+):
+    from telethon.errors import SessionRevokedError, UserDeactivatedBanError
+
+    from crosspost.adapters.base import FailureKind
+
+    fake_telethon_client.send_file.side_effect = (
+        UserDeactivatedBanError if kind == "ban" else SessionRevokedError
+    )(_Req())
+    a = TelegramAdapter(fake_telethon_client, target="@x", store=store)
+    result = await a.publish(_post(tmp_path, "hello"), publication_id=publication_id)
+    assert result.failure_kind == (FailureKind.BANNED if kind == "ban" else FailureKind.AUTH)
+    assert result.status == (ResultStatus.FAILED if kind == "ban" else ResultStatus.NEEDS_RELOGIN)
+    assert not await store.is_done(publication_id, "telegram")

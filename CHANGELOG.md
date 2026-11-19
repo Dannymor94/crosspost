@@ -1,6 +1,69 @@
 # Changelog
 
-<<<<<<< HEAD
+## 2026-11-19 — INT-01, только репетиция интеграции
+
+- Зафиксированные heads #18/#17/#21/#20/#25/#23 объединены в отдельной rehearsal-ветке; исходные PR и main не меняются.
+- Конфликты документации согласованы с сохранением всех решений; поведение и frozen CB-01…CB-18 не менялись.
+- Добавлен синтетический smoke полного migrated schema: read-only аудит активной WAL-базы, backup/verify/restore и расшифровка credential тем же тестовым ключом.
+- Переносимость smoke: служебная SHM mtime не считается записью клиентских данных; SHA256/size/mtime DB/WAL/media проверяются без исключений.
+- Пошаговые make check и финальный CI — в отчёте Issue #26. Независимая INT-02 QA и решение владельца ещё обязательны.
+
+## 2026-11-19 — safety fixes T-203-R2
+
+- Подтверждённые ban/auth сохраняют Connection даже для legacy credential без строки подключения; INSERT и UPDATE защищены снимком credential blob.
+- Проверка Connection и учёт попытки выполняются одним условным SQL-запросом; демотированный канал не меняет статус/счётчик публикации и освобождает неиспользованную lease.
+- Детерминированные регрессии покрывают immediate/scheduled/manual, CLOSED/HALF_OPEN, новые и существующие публикации, stale credentials и конкурентные DONE/SUBMITTED.
+
+## 2026-11-18 — persistent circuit breaker, доработка T-203-R1
+
+- Единый guard для immediate, scheduled и manual retry: подключение → breaker/lease → попытка.
+- Типизированные FloodWait/HTTP 429 открывают breaker сразу; подтверждённый ban блокирует подключение без таймера.
+- Атомарная HALF_OPEN lease, fencing результатов по epoch, явное отклонение устаревших конкурентных сбоев.
+- Истёкшая проба помещается в карантин; SUBMITTED не закрывает breaker и не пересылается.
+- Ошибки площадок сохраняются как безопасные категории; deferred-ретрай не теряет снимок публикации.
+- Интеграционная проверка включает T-209 retention и T-202 credential CAS; контракт CB-01…CB-18 — `docs/T-203-R1.md`.
+
+## 2026-11-11 — отключено автоудаление медиа (T-209)
+
+- Все пути удаления медиа (финализация в executor, retry, cancel, PATCH, reject, publish_now)
+  перестали удалять файлы. Медиа накапливается до ручной чистки (T-214).
+- Тест на каждый путь: падает при возврате вызова `cleanup_media`.
+
+
+## 2026-11-18 — Health-check сессий и fail-closed dispatch (T-202)
+
+- `sessions/health.py`: `HealthChecker` — фоновый asyncio.Task, периодически проверяет LIVE-подключения
+  по всем профилям. Временные сбои сети → состояние сохраняется (`confirmed_dead=False`).
+  `confirmed_dead=True` → атомарный blob-CAS (`set_needs_relogin_if_live`). BANNED никогда не перезаписывается.
+- `db/profile_repo.py`: `get_credential_with_blob` — единый согласованный снимок (plaintext + raw blob).
+  `set_needs_relogin_if_live` — один SQL `UPDATE WHERE EXISTS(blob=snapshot)`, без отдельного SELECT.
+- `orchestrator/adapter_factory.py`: fail-closed — `needs_relogin` или `banned` → `build_profile_adapter`
+  возвращает None без попытки публикации.
+- `web/app.py`: `HealthChecker` запускается в lifespan; флаг `HEALTH_CHECK_ENABLED`, интервал `HEALTH_CHECK_POLL_SECONDS`.
+- Внешние исключения в `run_forever`/`run_once`/`_check_profile` логируются только как `type(exc).__name__` (без трейсбека).
+- Тесты (39 новых): мёртвая сессия, временный сбой, бан, fail-closed dispatch, изоляция профилей,
+  VK shared session, отмена, изоляция ошибок, Telegraph 429/5xx, Instagram 5xx/token_error,
+  Telegram network error, browser network error, ScheduledExecutor retry, blob-CAS (5 сценариев), outer-loop secret sanitization (2).
+- Итог: 1161 passed, 0 failed.
+
+
+## 2026-11-18 — диагностика медиа-хранилища (T-213)
+
+- Добавлена команда `python -m crosspost.media.diagnostics`: отчёт по каталогам,
+  размерам, ссылкам SQLite и кандидатам в orphan без изменения файлов и БД.
+- Вывод в текстовом или JSON-формате; симлинки не обходятся, ошибка структуры
+  БД/JSON приводит к остановке. Кандидаты **не подлежат автоматическому удалению**.
+- Одиннадцать синтетических тестов; реальный запуск на операторской базе ожидает smoke.
+
+## 2026-11-18 — T-207: безопасные SQLite snapshots (код на ревью)
+
+- `scripts/sqlite_backup.py`: консистентный SQLite online backup (WAL), CLI `backup/verify/restore`;
+  восстановление только в новый файл, без перезаписи существующей БД.
+- HMAC-манифест, SHA256, fingerprint внешнего `VAULT_KEY`, приватные права,
+  ротация только собственных пар. Ключ не попадает в бэкап.
+- `tests/ops/test_sqlite_backup.py`: WAL, restore, wrong key, tamper, no-clobber,
+  ротация, права. Операторский drill на копии реальных данных ещё требуется.
+
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут

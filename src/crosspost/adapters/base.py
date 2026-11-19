@@ -14,6 +14,14 @@ from typing import Protocol, runtime_checkable
 from crosspost.content.canonical import CanonicalContent
 
 
+class FailureKind(StrEnum):
+    UNKNOWN = "unknown"
+    RATE_LIMIT = "rate_limit"
+    BANNED = "banned"
+    AUTH = "auth"
+    TRANSIENT = "transient"
+
+
 class ResultStatus(StrEnum):
     DONE = "done"
     FAILED = "failed"
@@ -41,6 +49,8 @@ class ChannelResult:
     error: str | None = None
     url: str | None = None
     topic_id: int | None = None
+    failure_kind: FailureKind = FailureKind.UNKNOWN
+    retry_after: float | None = None
 
 
 @runtime_checkable
