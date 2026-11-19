@@ -16,6 +16,12 @@
   Telegram network error, browser network error, ScheduledExecutor retry, blob-CAS (5 сценариев), outer-loop secret sanitization (2).
 - Итог: 1161 passed, 0 failed.
 
+## 2026-11-11 — отключено автоудаление медиа (T-209)
+
+- Все пути удаления медиа (финализация в executor, retry, cancel, PATCH, reject, publish_now)
+  перестали удалять файлы. Медиа накапливается до ручной чистки (T-214).
+- Тест на каждый путь: падает при возврате вызова `cleanup_media`.
+
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут

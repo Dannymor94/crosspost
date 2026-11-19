@@ -144,7 +144,7 @@ async def test_due_post_is_published(factory):
     rows = await _channel_rows(factory, pid, post_id)
     assert str(rows["telegram"].status) == "done"
     assert rows["telegram"].external_id == "tg1"
-    assert not media_dir.exists()  # медиа очищено после финала
+    assert media_dir.exists()  # T-209: медиа не удаляется автоматически
 
 
 async def test_future_post_is_left_alone(factory):
@@ -231,7 +231,7 @@ async def test_media_kept_until_all_channels_final(factory):
         await ex.run_once()  # vk_wall attempt 2 → потолок → все терминальны
 
     assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED
-    assert not media_dir.exists()  # теперь очищено
+    assert media_dir.exists()  # T-209: медиа не удаляется даже при финале с FAILED
     # telegram НЕ публиковался повторно (был done).
     assert ok.calls == 1
     assert bad.calls == 2
@@ -350,7 +350,7 @@ async def test_article_binding_telegraph_first_then_tg_with_link(factory):
     assert tg.calls == 1
     assert url in tg.texts[0]
     assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
-    assert not media_dir.exists()
+    assert media_dir.exists()  # T-209: медиа не удаляется после финала article-поста
 
 
 async def test_article_ceiling_fail_closed_channel_not_sent(factory):
@@ -437,7 +437,7 @@ async def test_multi_target_post_publishes_each_target(factory):
     assert str(rows[("vk_wall", "20")].status) == "done"
     assert rows[("vk_wall", "20")].external_id == "B"
     assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
-    assert not media_dir.exists()
+    assert media_dir.exists()  # T-209: медиа не удаляется после мульти-target финала
 
 
 async def test_pacing_between_targets_within_post(factory):
@@ -511,7 +511,7 @@ async def test_multi_target_partial_success(factory):
     assert str(rows[("vk_wall", "10")].status) == "done"
     assert str(rows[("vk_wall", "20")].status) == "failed"
     assert await _post_status(factory, post_id) == ScheduledPostStatus.FAILED
-    assert not media_dir.exists()
+    assert media_dir.exists()  # T-209: медиа не удаляется при частичном провале мульти-target
     assert ok.calls == 1  # успешная цель не пересылалась
 
 
