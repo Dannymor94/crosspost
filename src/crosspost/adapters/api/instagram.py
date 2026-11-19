@@ -365,6 +365,8 @@ class InstagramAdapter:
                 "caption": content.text or "",
             },
         )
+        if resp.status_code == 429:
+            resp.raise_for_status()
         payload = resp.json()
         _raise_for_api_error(payload)
         container_id = payload.get("id")
@@ -379,6 +381,8 @@ class InstagramAdapter:
             params={"fields": "status_code,status"},
             headers={"Authorization": f"Bearer {self._token}"},
         )
+        if resp.status_code == 429:
+            resp.raise_for_status()
         payload = resp.json()
         _raise_for_api_error(payload)
         code = str(payload.get("status_code") or "")
@@ -416,6 +420,8 @@ class InstagramAdapter:
             headers={"Authorization": f"Bearer {self._token}"},
             json={"creation_id": container_id},
         )
+        if resp.status_code == 429:
+            resp.raise_for_status()
         payload = resp.json()
         _raise_for_api_error(payload)
         media_id = payload.get("id")

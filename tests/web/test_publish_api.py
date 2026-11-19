@@ -2419,7 +2419,7 @@ async def test_publish_now_failure_creates_log_row(client, factory, monkeypatch)
         logs = await LogRepository(s).list_for_profile(pid)
     error_logs = [lg for lg in logs if lg.level == "ERROR" and lg.channel == "telegram"]
     assert error_logs, "failed publish-now must create an ERROR log row"
-    assert "simulated failure" in error_logs[0].message
+    assert "Ошибка площадки (unknown)" in error_logs[0].message
 
 
 async def test_publish_now_log_message_no_full_token(client, factory, monkeypatch, tmp_path):
@@ -2607,7 +2607,7 @@ async def test_publish_error_redacts_signed_media_token(client, factory):
     outcome = body["outcomes"][0]
     # Response JSON: full token gone, truncated form kept.
     assert fake_token not in (outcome["error"] or "")
-    assert "/public-media/ABCDEFGH…" in outcome["error"]
+    assert outcome["error"] == "Ошибка площадки (unknown)"
 
     # Persisted publications.error must also be redacted.
     st = await client.get(f"/api/profiles/{pid}/publish/{body['publication_id']}")
@@ -2796,3 +2796,44 @@ async def test_t209_failed_upload_does_not_delete_existing_media(
 
     # Существующее медиа другой публикации не тронуто
     assert existing_file.exists(), "медиа другой публикации удалено при откате загрузки — не должно"
+
+
+async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(client, factory):
+    """Blocked targets have no DB row; successful siblings must not discard the retry snapshot."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock
+
+    from crosspost.adapters.base import FailureKind
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.orchestrator.breaker import BreakerPolicy, CircuitBreakerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    async with factory() as s:
+        r = CircuitBreakerRepository(s)
+        policy = BreakerPolicy(cooldown_seconds=86400)
+        now = datetime.now(UTC)
+        permit = await r.acquire(pid, "telegram", now=now, policy=policy)
+        await r.settle(
+            pid, "telegram", permit, now=now, policy=policy, failure=FailureKind.RATE_LIMIT
+        )
+    with _patch_adapters({"vk_wall": _MockAdapter("vk_wall")}):
+        response = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "hi",
+                "channels": json.dumps(["telegram", "vk_wall"]),
+            },
+            files=_post_files(),
+        )
+    assert response.status_code == 200, response.text
+    pubid = response.json()["publication_id"]
+    assert [o["status"] for o in response.json()["outcomes"]] == ["deferred", "done"]
+    with patch("crosspost.web.routes.publish.build_profile_adapter", AsyncMock()) as build:
+        for _ in range(2):
+            retry = await client.post(f"/api/profiles/{pid}/publish/{pubid}/retry/telegram")
+            assert retry.status_code == 200, retry.text
+            assert retry.json()["status"] == "deferred"
+        build.assert_not_called()
+    async with factory() as s:
+        assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
