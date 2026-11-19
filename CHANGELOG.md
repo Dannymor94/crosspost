@@ -9,7 +9,6 @@
 - `tests/ops/test_sqlite_backup.py`: WAL, restore, wrong key, tamper, no-clobber,
   ротация, права. Операторский drill на копии реальных данных ещё требуется.
 
-<<<<<<< HEAD
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут
