@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import (
     SCHEDULED_TERMINAL,
+    Connection,
+    ConnectionState,
     Publication,
     PublicationStatus,
     ScheduledPost,
@@ -132,6 +134,51 @@ class PublicationRepository:
         )
         await self._s.execute(stmt)
         await self._s.commit()
+
+    async def authorize_attempt(
+        self, publication_id: str, channel: str, *, target: str = ""
+    ) -> bool:
+        """Linearize Connection authorization and attempt accounting in one write.
+
+        Missing legacy connections remain permitted. A committed demotion before
+        this statement denies both INSERT and UPDATE without touching publication
+        state. Terminal receipts are protected even if committed since the guard.
+        """
+        allowed = ~sa.exists(
+            select(Connection.id).where(
+                Connection.profile_id == self._pid,
+                Connection.channel == channel,
+                Connection.state.in_((ConnectionState.BANNED, ConnectionState.NEEDS_RELOGIN)),
+            )
+        )
+        stmt = (
+            sqlite_insert(Publication)
+            .from_select(
+                ["profile_id", "publication_id", "channel", "target", "status", "attempt_count"],
+                select(
+                    sa.literal(self._pid),
+                    sa.literal(publication_id),
+                    sa.literal(channel),
+                    sa.literal(target),
+                    sa.literal(PublicationStatus.ATTEMPTING.value),
+                    sa.literal(1),
+                ).where(allowed),
+            )
+            .on_conflict_do_update(
+                index_elements=["profile_id", "publication_id", "channel", "target"],
+                set_={
+                    "attempt_count": Publication.attempt_count + 1,
+                    "status": PublicationStatus.ATTEMPTING,
+                },
+                where=Publication.status.not_in(
+                    (PublicationStatus.DONE, PublicationStatus.SUBMITTED)
+                ),
+            )
+            .returning(Publication.id)
+        )
+        authorized = (await self._s.execute(stmt)).scalar_one_or_none() is not None
+        await self._s.commit()
+        return authorized
 
     async def is_done(self, publication_id: str, channel: str, *, target: str = "") -> bool:
         row = await self._s.execute(

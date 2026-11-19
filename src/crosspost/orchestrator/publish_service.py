@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, literal, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from crosspost.adapters.base import ChannelAdapter, FailureKind, ResultStatus
 from crosspost.channels.validators import VALIDATORS
@@ -277,7 +278,22 @@ class PublishService:
         if before_dispatch and not await before_dispatch():
             await self._breaker.release_unused(pid, channel, permit, now=self._clock())
             return ChannelOutcome(channel, "deferred", target=target)
-        await self._repo.bump_attempt(publication_id, channel, target=target)
+        if not await self._repo.authorize_attempt(publication_id, channel, target=target):
+            await self._breaker.release_unused(pid, channel, permit, now=self._clock())
+            if await self._repo.is_done(publication_id, channel, target=target):
+                return await self._existing_outcome(publication_id, sel)
+            state = await session.scalar(
+                select(Connection.state).where(
+                    Connection.profile_id == pid, Connection.channel == channel
+                )
+            )
+            return ChannelOutcome(
+                channel,
+                str(state)
+                if state in (ConnectionState.BANNED, ConnectionState.NEEDS_RELOGIN)
+                else "deferred",
+                target=target,
+            )
         outcome = await self._dispatch_one(content, sel, publication_id)
         await self._breaker.settle(
             pid,
@@ -290,6 +306,11 @@ class PublishService:
             retry_after=outcome.retry_after,
         )
         if outcome.failure_kind in (FailureKind.BANNED, FailureKind.AUTH):
+            blocked_state = (
+                ConnectionState.BANNED
+                if outcome.failure_kind == FailureKind.BANNED
+                else ConnectionState.NEEDS_RELOGIN
+            )
             credential_matches = (
                 exists(
                     select(Credential.id).where(*credential_predicates, Credential.blob == snapshot)
@@ -297,18 +318,20 @@ class PublishService:
                 if snapshot is not None
                 else ~exists(select(Credential.id).where(*credential_predicates))
             )
+            # Fence INSERT as well as UPDATE: legacy credentials can lack a
+            # Connection, but an old result must never block a newer credential.
             await session.execute(
-                update(Connection)
-                .where(
-                    Connection.profile_id == pid,
-                    Connection.channel == channel,
-                    Connection.state == ConnectionState.LIVE,
-                    credential_matches,
+                sqlite_insert(Connection)
+                .from_select(
+                    ["profile_id", "channel", "state"],
+                    select(literal(pid), literal(channel), literal(blocked_state.value)).where(
+                        credential_matches
+                    ),
                 )
-                .values(
-                    state=ConnectionState.BANNED
-                    if outcome.failure_kind == FailureKind.BANNED
-                    else ConnectionState.NEEDS_RELOGIN
+                .on_conflict_do_update(
+                    index_elements=["profile_id", "channel"],
+                    set_={"state": blocked_state},
+                    where=Connection.state == ConnectionState.LIVE,
                 )
             )
             await session.commit()

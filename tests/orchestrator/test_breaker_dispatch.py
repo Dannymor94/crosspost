@@ -579,8 +579,13 @@ async def test_cb04_scheduled_connection_guard(db, state):
 
 
 @pytest.mark.parametrize("failure", [FailureKind.AUTH, FailureKind.BANNED])
-async def test_cb04_stale_credential_result_cannot_demote_reconnection(db, failure):
-    from crosspost.db.models import CredentialKind
+@pytest.mark.parametrize("missing_connection", [False, True])
+async def test_cb04_stale_credential_result_cannot_demote_reconnection(
+    db, failure, missing_connection
+):
+    from sqlalchemy import delete
+
+    from crosspost.db.models import Connection, CredentialKind
 
     f, _ = db
     entered, release = asyncio.Event(), asyncio.Event()
@@ -588,6 +593,13 @@ async def test_cb04_stale_credential_result_cannot_demote_reconnection(db, failu
         await ProfileRepository(s, vault=get_vault()).set_credential(
             1, "telegram", CredentialKind.API_TOKEN, "old"
         )
+        if missing_connection:
+            await s.execute(
+                delete(Connection).where(
+                    Connection.profile_id == 1, Connection.channel == "telegram"
+                )
+            )
+            await s.commit()
 
     async def send(*args, **kw):
         entered.set()
@@ -611,12 +623,11 @@ async def test_cb04_stale_credential_result_cannot_demote_reconnection(db, failu
         finally:
             release.set()
             await task
-        assert (
-            str(
-                (await ProfileRepository(s2, vault=get_vault()).get_connection(1, "telegram")).state
-            )
-            == "live"
-        )
+        conn = await ProfileRepository(s2, vault=get_vault()).get_connection(1, "telegram")
+        if missing_connection:
+            assert conn is None  # No stale INSERT for the new credential either.
+        else:
+            assert str(conn.state) == "live"
 
 
 async def test_cb01_open_article_defers_without_overwriting_channels(db):
@@ -645,3 +656,158 @@ async def test_cb05_typed_flood_during_factory_opens_breaker(db):
         assert [o.status for o in out] == ["failed", "deferred"]
         assert build.call_count == 1
     assert (await snapshot(f)).open_until == (T0 + timedelta(seconds=45)).replace(tzinfo=None)
+
+
+async def test_CB06_missing_connection_confirmed_ban_no_repeat(db):
+    from sqlalchemy import delete
+
+    from crosspost.db.models import Connection, CredentialKind
+
+    f, _ = db
+    async with f() as s:
+        profiles = ProfileRepository(s, vault=get_vault())
+        await profiles.set_credential(1, "telegram", CredentialKind.API_TOKEN, "legacy")
+        await s.execute(
+            delete(Connection).where(Connection.profile_id == 1, Connection.channel == "telegram")
+        )
+        await s.commit()
+        assert await profiles.get_connection(1, "telegram") is None
+        a = adapter(ResultStatus.FAILED, FailureKind.BANNED)
+        svc, build = service(s, a)
+        assert (await svc.retry_channel(CONTENT, "telegram", publication_id="p")).status == "failed"
+        build.assert_awaited_once()
+        a.publish.assert_awaited_once()
+    # Separate session and a different publication: neither retry nor new work may send.
+    async with f() as s:
+        svc, build = service(s, adapter(), clock=lambda: T0 + timedelta(days=100))
+        for publication_id in ["p", "new"]:
+            out = await svc.retry_channel(CONTENT, "telegram", publication_id=publication_id)
+            assert out.status == "banned"
+        build.assert_not_called()
+        conn = await ProfileRepository(s, vault=get_vault()).get_connection(1, "telegram")
+        assert conn is not None and conn.state == ConnectionState.BANNED
+        assert (await svc._repo.get_status("p", "telegram")).attempt_count == 1
+        assert await svc._repo.get_status("new", "telegram") is None
+
+
+@pytest.mark.parametrize("state", [ConnectionState.BANNED, ConnectionState.NEEDS_RELOGIN])
+@pytest.mark.parametrize("probe", [False, True])
+@pytest.mark.parametrize("path", ["immediate", "manual", "scheduled"])
+@pytest.mark.parametrize("existing_publication", [False, True])
+async def test_CB04_demotion_between_guard_and_attempt_no_bump(
+    db, state, probe, path, existing_publication
+):
+    f, _ = db
+    if probe:
+        await trip(f)
+
+    def clock():
+        return T0 + timedelta(seconds=30)
+
+    async with f() as s:
+        repo = PublicationRepository(s, profile_id=1)
+        if path == "scheduled":
+            post = await repo.create_scheduled(
+                content_type="post",
+                text="hello",
+                title=None,
+                media_paths=[],
+                channels=["telegram"],
+                scheduled_at=T0.replace(tzinfo=None),
+            )
+            publication_id = scheduled_publication_id(post.id)
+            post_id = post.id
+        else:
+            publication_id = "race"
+        if existing_publication:
+            await repo.bump_attempt(publication_id, "telegram")
+            await repo.set_status(publication_id, "telegram", PublicationStatus.FAILED, error="old")
+    permitted, demoted = asyncio.Event(), asyncio.Event()
+    acquire = CircuitBreakerRepository.acquire
+
+    async def pause_after_guard(self, *args, **kwargs):
+        permit = await acquire(self, *args, **kwargs)
+        assert permit is not None
+        permitted.set()
+        await demoted.wait()
+        return permit
+
+    a, build = adapter(), AsyncMock()
+    build.return_value = a
+    async with f() as worker_a, f() as worker_b:
+        svc = PublishService(
+            PublicationRepository(worker_a, profile_id=1),
+            build,
+            clock=clock,
+            breaker_policy=POLICY,
+        )
+        with (
+            patch.object(CircuitBreakerRepository, "acquire", pause_after_guard),
+            patch("crosspost.scheduler.executor.build_profile_adapter", build),
+        ):
+            if path == "immediate":
+                dispatch = svc.publish(CONTENT, ["telegram"], publication_id=publication_id)
+            elif path == "manual":
+                dispatch = svc.retry_channel(CONTENT, "telegram", publication_id=publication_id)
+            else:
+                dispatch = ScheduledExecutor(f, pacing_seconds=0, clock=clock).run_once(now=clock())
+            task = asyncio.create_task(dispatch)
+            await permitted.wait()
+            try:
+                await ProfileRepository(worker_b, vault=get_vault()).upsert_connection(
+                    1, "telegram", state
+                )
+            finally:
+                demoted.set()
+                outcome = await task
+            if path == "immediate":
+                assert outcome[0].status == str(state)
+            elif path == "manual":
+                assert outcome.status == str(state)
+        build.assert_not_called()
+        a.publish.assert_not_called()
+    async with f() as s:
+        row = await PublicationRepository(s, profile_id=1).get_status(publication_id, "telegram")
+        if existing_publication:
+            assert (str(row.status), row.attempt_count, row.error) == ("failed", 1, "old")
+        else:
+            assert row is None
+        if path == "scheduled":
+            assert str((await SchedulerRepository(s).get(post_id)).status) == "scheduled"
+    cb = await snapshot(f)
+    assert str(cb.state) == ("open" if probe else "closed")
+    assert cb.lease_until is None
+
+
+@pytest.mark.parametrize("terminal", [PublicationStatus.DONE, PublicationStatus.SUBMITTED])
+async def test_cb13_receipt_between_guard_and_attempt_is_preserved(db, terminal):
+    f, _ = db
+    await trip(f)
+    permitted, completed = asyncio.Event(), asyncio.Event()
+    acquire = CircuitBreakerRepository.acquire
+
+    async def pause_after_guard(self, *args, **kwargs):
+        permit = await acquire(self, *args, **kwargs)
+        assert permit is not None and permit.probe
+        permitted.set()
+        await completed.wait()
+        return permit
+
+    async with f() as worker_a, f() as worker_b:
+        svc, build = service(worker_a, adapter(), clock=lambda: T0 + timedelta(seconds=30))
+        with patch.object(CircuitBreakerRepository, "acquire", pause_after_guard):
+            task = asyncio.create_task(svc.retry_channel(CONTENT, "telegram", publication_id="p"))
+            await permitted.wait()
+            try:
+                repo = PublicationRepository(worker_b, profile_id=1)
+                await repo.bump_attempt("p", "telegram")
+                await repo.set_status("p", "telegram", terminal, external_id="receipt")
+            finally:
+                completed.set()
+                outcome = await task
+        assert outcome.status == terminal.value
+        build.assert_not_called()
+        row = await svc._repo.get_status("p", "telegram")
+        assert (row.status, row.attempt_count, row.external_id) == (terminal, 1, "receipt")
+    cb = await snapshot(f)
+    assert str(cb.state) == "open" and cb.lease_until is None

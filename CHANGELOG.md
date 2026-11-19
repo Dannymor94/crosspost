@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-19 — safety fixes T-203-R2
+
+- Подтверждённые ban/auth сохраняют Connection даже для legacy credential без строки подключения; INSERT и UPDATE защищены снимком credential blob.
+- Проверка Connection и учёт попытки выполняются одним условным SQL-запросом; демотированный канал не меняет статус/счётчик публикации и освобождает неиспользованную lease.
+- Детерминированные регрессии покрывают immediate/scheduled/manual, CLOSED/HALF_OPEN, новые и существующие публикации, stale credentials и конкурентные DONE/SUBMITTED.
+
 ## 2026-11-18 — persistent circuit breaker, доработка T-203-R1
 
 - Единый guard для immediate, scheduled и manual retry: подключение → breaker/lease → попытка.
