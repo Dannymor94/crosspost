@@ -682,7 +682,7 @@ async def publish_retry(
 
     all_now = await pub_repo.list_statuses(publication_id)
     if all(str(s.status) in _SUCCESS for s in all_now):
-        media_store.cleanup_media(run.media_key)
+        # T-209: media not deleted — retained indefinitely until T-214.
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
@@ -1003,9 +1003,6 @@ async def reschedule(
         key = f"sched-{new_publication_id()}"
         new_media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
 
-    # Запоминаем старые пути ДО CAS (нужны для cleanup после успеха).
-    old_media_paths = list(post.media_paths or []) if new_media_paths is not None else []
-
     # CAS-апдейт: WHERE status IN ('scheduled','failed') — PUBLISHING/DONE дают rowcount=0.
     updated = await pub_repo.patch_scheduled_cas(
         scheduled_id,
@@ -1016,14 +1013,10 @@ async def reschedule(
         rewind_failed=True,
     )
     if not updated:
-        # Orphaned new media: CAS не прошёл — удаляем свежескачанный файл до 409.
-        if new_media_paths:
-            _cleanup_paths_safe(new_media_paths)
+        # T-209: orphaned new media not deleted — retained indefinitely.
         raise HTTPException(status_code=409, detail="Пост уже исполнен или обрабатывается")
 
-    # Удаляем старое медиа после успешной замены (если не shared).
-    if old_media_paths:
-        await _cleanup_old_media(pub_repo, scheduled_id, old_media_paths)
+    # T-209: old media not deleted on replace — retained indefinitely until T-214.
 
     post = await pub_repo.get_scheduled(scheduled_id)
     assert post is not None
@@ -1038,12 +1031,8 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
-    media_paths = list(post.media_paths or [])
     await pub_repo.cancel_scheduled(scheduled_id)
-    # Чистим медиа отменённого поста (каталог = родитель первого файла).
-    if media_paths:
-        parent = Path(media_paths[0]).parent
-        media_store.cleanup_media(parent.name)
+    # T-209: media not deleted on cancel — retained indefinitely until T-214.
     return {"cancelled": True}
 
 
@@ -1127,23 +1116,6 @@ def _cleanup_paths_safe(paths: list[str]) -> None:
         media_store.cleanup_media(key)
 
 
-async def _cleanup_old_media(
-    pub_repo: PublicationRepository,
-    scheduled_id: int,
-    old_paths: list[str],
-) -> None:
-    """Удалить каталоги старого медиа, только если они не shared с другим постом."""
-    keys = {Path(p).parent.name for p in old_paths if p}
-    for key in keys:
-        try:
-            shared = await pub_repo.media_key_shared(scheduled_id, key)
-        except Exception:  # noqa: BLE001
-            logger.warning("cleanup: failed to check shared for key=%s", key)
-            continue
-        if not shared:
-            media_store.cleanup_media(key)
-
-
 async def _reject_ineligible(
     profile_repo: ProfileRepository,
     profile_id: int,
@@ -1222,9 +1194,8 @@ async def _save_media(files, key: str) -> list[str]:
 
 
 async def _cleanup_if_final(session, profile_id: int, publication_id: str, outcomes) -> None:
-    """Если все каналы завершились успешно — чистим медиа, снимок и чекпоинты."""
+    """Если все каналы завершились — чистим чекпоинты. Медиа не удаляем (T-209)."""
     if all(o.status in _SUCCESS for o in outcomes):
-        media_store.cleanup_media(publication_id)
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
@@ -1328,17 +1299,12 @@ async def reject_post(
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Пост не найден")
-    media_paths = list(post.media_paths or [])
 
     ok = await pub_repo.reject_pending(scheduled_id, body.reason)
     if not ok:
         raise HTTPException(status_code=409, detail="Пост не найден или уже не на проверке")
 
-    # Чистим медиа отклонённого поста (каталог = родитель первого файла).
-    if media_paths:
-        parent = Path(media_paths[0]).parent
-        media_store.cleanup_media(parent.name)
-
+    # T-209: media not deleted on reject — retained indefinitely until T-214.
     return {"rejected": True}
 
 

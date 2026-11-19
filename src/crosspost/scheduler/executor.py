@@ -51,7 +51,6 @@ from crosspost.orchestrator.publish_service import (
     selections_from_stored,
 )
 from crosspost.scheduler.browser_cooldown import BrowserCooldown
-from crosspost.web import media as media_store
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +200,6 @@ class ScheduledExecutor:
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
-            self._cleanup_media(post.media_paths)
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
 
     def _ceiling_step(
@@ -357,11 +355,8 @@ class ScheduledExecutor:
             media_paths=[Path(p) for p in (post.media_paths or [])],
         )
 
-    def _cleanup_media(self, media_paths: list) -> None:
-        """Удалить каталоги медиа поста (sched-<uuid>) — все каналы финализированы."""
-        keys = {Path(p).parent.name for p in (media_paths or [])}
-        for key in keys:
-            media_store.cleanup_media(key)
+    # T-209: automatic media deletion disabled — media is retained indefinitely.
+    # Safe cleanup conditions are tracked in T-214.
 
     async def _cleanup_checkpoints(self, session, profile_id: int, publication_id: str) -> None:
         """Удалить чекпоинты шагов после финализации (все каналы терминальны)."""
