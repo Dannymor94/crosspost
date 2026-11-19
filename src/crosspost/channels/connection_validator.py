@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from crosspost.channels.validators import VALIDATORS, ValidatorResult
 from crosspost.db.models import ConnectionState, Log
 from crosspost.db.profile_repo import ProfileRepository
+from crosspost.orchestrator.breaker import CircuitBreakerRepository
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ async def validate_connection(
     Возвращает новый ConnectionState (live | needs_relogin).
     Канал не в реестре → needs_relogin + запись в лог.
     """
+    breaker = CircuitBreakerRepository(repo.session)
+    recovery_epoch = await breaker.recovery_epoch(profile_id, channel)
     validator = VALIDATORS.get(channel)
     if validator is None:
         await _log(
@@ -70,19 +73,35 @@ async def validate_connection(
     try:
         raw = await validator.fn(credential)
     except Exception as exc:
-        logger.warning("validate_connection %s/%s exception: %s", profile_id, channel, exc)
-        await _log(repo, profile_id, channel, "ERROR", f"Исключение при валидации: {exc}")
-        return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
+        exc_type = type(exc).__name__
+        logger.warning(
+            "validate_connection %s/%s exception (%s), state preserved",
+            profile_id,
+            channel,
+            exc_type,
+        )
+        await _log(
+            repo,
+            profile_id,
+            channel,
+            "WARNING",
+            f"Временная ошибка при проверке ({exc_type}), состояние сохранено",
+        )
+        conn = await repo.get_connection(profile_id, channel)
+        return conn.state if conn is not None else ConnectionState.NEEDS_RELOGIN
 
-    # Coerce bool | ValidatorResult → (alive, expires_at)
+    # Coerce bool | ValidatorResult → (alive, expires_at, confirmed_dead)
     if isinstance(raw, ValidatorResult):
         alive = raw.alive
         expires_at = raw.expires_at
+        confirmed_dead = raw.confirmed_dead
     else:
         alive = bool(raw)
         expires_at = None
+        confirmed_dead = False  # plain bool = unknown/transient
 
     if alive:
+        await breaker.verified_recovery(profile_id, channel, recovery_epoch)
         await _log(repo, profile_id, channel, "INFO", "Подключение активно")
         # expires_at записываем только при сохранении/замене токена (persist_expiry),
         # иначе ре-валидация сдвинула бы оценочный срок и предупреждение не сработало бы.
@@ -93,9 +112,16 @@ async def validate_connection(
             ConnectionState.LIVE,
             expires_at=expires_at if persist_expiry else None,
         )
-    else:
+    elif confirmed_dead:
         await _log(repo, profile_id, channel, "WARNING", "Подключение требует ре-логина")
         return await _write(repo, profile_id, channel, ConnectionState.NEEDS_RELOGIN)
+    else:
+        # Transient/unknown: preserve existing state, write diagnostic
+        await _log(
+            repo, profile_id, channel, "INFO", "Временная ошибка при проверке, состояние сохранено"
+        )
+        conn = await repo.get_connection(profile_id, channel)
+        return conn.state if conn is not None else ConnectionState.NEEDS_RELOGIN
 
 
 async def _write(
