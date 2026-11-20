@@ -70,6 +70,8 @@ def _make_preview_client() -> httpx.AsyncClient:
 
 
 _SUCCESS = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
+_FAILURE = frozenset({PublicationStatus.FAILED.value, PublicationStatus.NEEDS_RELOGIN.value})
+_NONTERMINAL = frozenset({PublicationStatus.QUEUED.value, PublicationStatus.ATTEMPTING.value})
 
 # ── Preview block cache ───────────────────────────────────────────────────────
 # Process-level URL → (data_uri, expiry) cache.
@@ -1198,8 +1200,9 @@ async def _save_media(files, key: str) -> list[str]:
 
 
 async def _cleanup_if_final(session, profile_id: int, publication_id: str, outcomes) -> None:
-    """Если все каналы завершились — чистим чекпоинты. Медиа не удаляем (T-209)."""
-    if all(o.status in _SUCCESS for o in outcomes):
+    """Если все каналы завершились DONE — чистим чекпоинты. Медиа не удаляем (T-209).
+    SUBMITTED не считается финальным для _RUNS: пользователь может идемпотентно ретраить."""
+    if outcomes and all(o.status == PublicationStatus.DONE.value for o in outcomes):
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415
 
@@ -1219,17 +1222,34 @@ def _parse_marker(value: str | None) -> datetime | None:
 def _overall_status(outcomes: list[OutcomeOut]) -> str:
     """Свёртка поканальных статусов в общий вердикт для карточки журнала.
 
-    done — все каналы успешны (done/submitted); failed — все упали; partial —
-    часть упала. Пусто (нет строк) — unknown (пост помечен published без итогов).
+    Precedence (highest first):
+      empty → unknown
+      all nonterminal (queued/attempting) → in_progress
+      success + nonterminal → partial
+      all done → done; any submitted (rest done/submitted) → submitted
+      any failure + any success → partial
+      failure + nonterminal → partial
+      all failures (or unknown statuses) → failed
+    Unknown statuses are fail-closed (treated as failures).
     """
     if not outcomes:
         return "unknown"
-    ok = sum(1 for o in outcomes if o.status in _SUCCESS)
-    if ok == len(outcomes):
-        return "done"
-    if ok == 0:
-        return "failed"
-    return "partial"
+    statuses = [o.status for o in outcomes]
+    n_success = sum(1 for s in statuses if s in _SUCCESS)
+    n_failure = sum(1 for s in statuses if s in _FAILURE)
+    n_nonterminal = sum(1 for s in statuses if s in _NONTERMINAL)
+    n_other = len(statuses) - n_success - n_failure - n_nonterminal
+
+    # fail-closed: unrecognised statuses count as failures
+    effective_failures = n_failure + n_other
+    if effective_failures:
+        return "failed" if n_success == 0 and n_nonterminal == 0 else "partial"
+    if n_nonterminal:
+        return "partial" if n_success > 0 else "in_progress"
+    # all terminal success
+    if any(s == PublicationStatus.SUBMITTED.value for s in statuses):
+        return "submitted"
+    return "done"
 
 
 # ── Модерация клиентских постов (только admin) ────────────────────────────────

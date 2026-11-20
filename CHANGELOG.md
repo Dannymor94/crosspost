@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-20 — SUBMITTED отличается от DONE в журнале (T-210)
+
+- `VerifyFailed("no_match")` typed exception в браузерных адаптерах; центральный allowlist в `publish_service`.
+- `_overall_status` precedence matrix: `done/submitted/partial/failed/in_progress/unknown`.
+- Вкладка «Требуют внимания» включает submitted-агрегат; `REPORT_META` добавляет «Отправлено, без квитанции».
+- Retry на SUBMITTED идемпотентен: `_cleanup_if_final` удаляет `_RUNS` только при all-DONE.
+
 ## 2026-11-19 — safety fixes T-203-R2
 
 - Подтверждённые ban/auth сохраняют Connection даже для legacy credential без строки подключения; INSERT и UPDATE защищены снимком credential blob.

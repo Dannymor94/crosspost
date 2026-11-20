@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
+from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus, VerifyFailed
 from crosspost.adapters.browser.base_browser import _FROM_FILE, is_logged_in, open_page
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
@@ -193,7 +193,7 @@ class VKChannelBrowserAdapter:
                 await self._attach_photos(page, content.media_paths[:10])
 
             # 6) отправка
-            external_id = await self._send(
+            external_id, verify_reason = await self._send(
                 page, text=content.text, known_ids=set(posts), has_media=has_media
             )
 
@@ -205,6 +205,7 @@ class VKChannelBrowserAdapter:
             ResultStatus.SUBMITTED,
             external_id=external_id,
             url=url,
+            error=verify_reason,
         )
 
     # ── внутренние методы ────────────────────────────────────────────────────
@@ -257,7 +258,9 @@ class VKChannelBrowserAdapter:
         except Exception:
             pass  # превью не обязательно — отправка всё равно пройдёт
 
-    async def _send(self, page, *, text: str, known_ids: set[str], has_media: bool) -> str | None:
+    async def _send(
+        self, page, *, text: str, known_ids: set[str], has_media: bool
+    ) -> tuple[str | None, str | None]:
         """Отправить пост кнопкой «Отправить сообщение».
 
         НЕ через Enter первым — в contenteditable Enter делает перенос строки.
@@ -303,9 +306,11 @@ class VKChannelBrowserAdapter:
         await page.locator(_SEND_BUTTON_SELECTOR).first.click(timeout=_CLICK_TIMEOUT)
 
         try:
-            return await self._verify_sent(page, text, known_ids)
+            return await self._verify_sent(page, text, known_ids), None
+        except VerifyFailed as e:
+            return None, e.reason  # "no_match": polling exhausted, receipt not found
         except Exception:
-            return None  # клик выполнен; подтверждение доставки недоступно
+            return None, None  # unclassified: verification unavailable
 
     async def _read_posts(self, page) -> dict[str, str]:
         """Снять текст и ID из опубликованных записей, не из composer."""
@@ -337,7 +342,7 @@ class VKChannelBrowserAdapter:
             if post_id:
                 return post_id
             await page.wait_for_timeout(_VERIFY_POLL_INTERVAL)
-        raise RuntimeError("vk_channel: пост не отправился — доставка в ленте не подтверждена")
+        raise VerifyFailed("no_match")
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека
