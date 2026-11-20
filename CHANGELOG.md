@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-18 — T-207: безопасные SQLite snapshots (код на ревью)
+
+- `scripts/sqlite_backup.py`: консистентный SQLite online backup (WAL), CLI `backup/verify/restore`;
+  восстановление только в новый файл, без перезаписи существующей БД.
+- HMAC-манифест, SHA256, fingerprint внешнего `VAULT_KEY`, приватные права,
+  ротация только собственных пар. Ключ не попадает в бэкап.
+- `tests/ops/test_sqlite_backup.py`: WAL, restore, wrong key, tamper, no-clobber,
+  ротация, права. Операторский drill на копии реальных данных ещё требуется.
+
 ## 2026-11-18 — диагностика медиа-хранилища (T-213)
 
 - Добавлена команда `python -m crosspost.media.diagnostics`: отчёт по каталогам,

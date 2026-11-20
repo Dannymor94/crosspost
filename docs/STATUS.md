@@ -62,11 +62,11 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 ---
 
-## 3. Здоровье кода (T-213 + T-202 + T-209)
+## 3. Здоровье кода (T-207 + T-213 + T-202 + T-209)
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 1177 passed, 0 failed (T-213 + T-202 + T-209; CI проверяется на точном HEAD PR #20) |
+| `pytest -q` | 1187 passed, 0 failed (T-207 + T-213 + T-202 + T-209; CI проверяется на точном HEAD PR #25) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
@@ -89,3 +89,10 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 | K-10 | ~~`TG_API_ID` vs `TELEGRAM_API_ID`~~ — исправлено в T-106; `TG_API_ID` — deprecated alias с предупреждением | T-106 ✅ |
 | K-11 | `index.html` ~4800 строк — горячая точка конфликтов | T-501 |
 | K-12 | Комментарий TODO про кнопку публикации в `vk_wall.py` при работающем канале; проверить, устарел ли он | T-206 |
+
+## T-207 — резервное копирование (ветка на ревью)
+
+Код `scripts/sqlite_backup.py` и тесты добавлены в отдельном PR: online SQLite WAL snapshot,
+проверка SHA256/HMAC и `VAULT_KEY`, восстановление только в новый файл, контролируемая
+ротация. Боевой бэкап и операторское восстановление реальной копии ещё **не выполнялись**;
+production-ready не заявляется. Подробности: [OPERATIONS.md §6](OPERATIONS.md).
