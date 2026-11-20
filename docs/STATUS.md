@@ -78,7 +78,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | main 1187 passed (T-207 + T-213 + T-202 + T-209; PUSH CI `7b5bb616`); PR #23 source CI PASS на `aeff0cfd` ([44594596060](https://github.com/Dannymor94/crosspost/actions/runs/44594596060), 3.11+3.13, 1244 тестов); не смержен; Боевой бэкап и операторское восстановление реальной копии ещё **не выполнялись**; production-ready не заявляется |
+| `pytest -q` | main `7b5bb616`: 1187 passed (T-207 + T-213 + T-202 + T-209); PR #23 integration HEAD `e3f6757`: **1265 passed, 0 failed, 2 warnings** (PUSH CI [44700793130](https://github.com/Dannymor94/crosspost/actions/runs/44700793130) 3.11+3.13 ✅; PR CI [44700799417](https://github.com/Dannymor94/crosspost/actions/runs/44700799417) 3.11+3.13 ✅); не смержен; Боевой бэкап и операторское восстановление реальной копии ещё **не выполнялись**; production-ready не заявляется |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
