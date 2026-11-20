@@ -51,6 +51,7 @@ async def test_valid_credentials_live_token_not_leaked(repo, monkeypatch):
 
     # httpx returns a healthy user response
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"id": "17841400000000000"}
 
     mock_client = MagicMock()
@@ -86,6 +87,7 @@ async def test_invalid_token_field_error():
     from crosspost.channels.validators import ValidatorResult, _validate_instagram
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "error": {"type": "OAuthException", "code": 190, "message": "Invalid OAuth access token"}
     }
@@ -143,6 +145,7 @@ async def test_expiry_stored_and_expires_soon_computed(repo, monkeypatch, sessio
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_resp_user = MagicMock()
+    mock_resp_user.status_code = 200
     mock_resp_user.json.return_value = {"id": "17841400000000000"}
     # Only one HTTP call expected: expiry is now computed locally (now + 60 days).
     mock_client.get = AsyncMock(return_value=mock_resp_user)
@@ -190,6 +193,7 @@ async def test_revalidation_does_not_move_expiry(repo, monkeypatch, session):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_resp_user = MagicMock()
+    mock_resp_user.status_code = 200
     mock_resp_user.json.return_value = {"id": "17841400000000000"}
     mock_client.get = AsyncMock(return_value=mock_resp_user)
 
@@ -222,6 +226,7 @@ async def test_validator_uses_instagram_graph_host():
     from crosspost.channels.validators import _validate_instagram
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"id": "17841400000000000"}
 
     mock_client = MagicMock()
@@ -251,6 +256,7 @@ async def test_validator_code_190_gives_token_expired():
     from crosspost.channels.validators import _validate_instagram
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "error": {"type": "OAuthException", "code": 190, "message": "Session has expired"}
     }
@@ -276,6 +282,7 @@ async def test_validator_code_200_gives_verbatim_meta_message():
     from crosspost.channels.validators import _validate_instagram
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "error": {"type": "OAuthException", "code": 200, "message": "API access blocked."}
     }
@@ -307,6 +314,7 @@ async def test_validator_uses_proxy_from_env(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_PROXY_URL", "http://127.0.0.1:10809")
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"id": "17841400000000000"}
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -373,6 +381,7 @@ async def test_telegraph_validator_no_proxy(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_PROXY_URL", "http://127.0.0.1:10809")
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": True}
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -394,6 +403,7 @@ async def test_validator_code_200_no_proxy_has_region_hint(monkeypatch):
     monkeypatch.delenv("INSTAGRAM_PROXY_URL", raising=False)
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "error": {"type": "OAuthException", "code": 200, "message": "API access blocked."}
     }

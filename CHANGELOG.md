@@ -9,6 +9,36 @@
 - `tests/ops/test_sqlite_backup.py`: WAL, restore, wrong key, tamper, no-clobber,
   ротация, права. Операторский drill на копии реальных данных ещё требуется.
 
+## 2026-11-18 — диагностика медиа-хранилища (T-213)
+
+- Добавлена команда `python -m crosspost.media.diagnostics`: отчёт по каталогам,
+  размерам, ссылкам SQLite и кандидатам в orphan без изменения файлов и БД.
+- Вывод в текстовом или JSON-формате; симлинки не обходятся, ошибка структуры
+  БД/JSON приводит к остановке. Кандидаты **не подлежат автоматическому удалению**.
+- Одиннадцать синтетических тестов; реальный запуск на операторской базе ожидает smoke.
+
+## 2026-11-18 — Health-check сессий и fail-closed dispatch (T-202)
+
+- `sessions/health.py`: `HealthChecker` — фоновый asyncio.Task, периодически проверяет LIVE-подключения
+  по всем профилям. Временные сбои сети → состояние сохраняется (`confirmed_dead=False`).
+  `confirmed_dead=True` → атомарный blob-CAS (`set_needs_relogin_if_live`). BANNED никогда не перезаписывается.
+- `db/profile_repo.py`: `get_credential_with_blob` — единый согласованный снимок (plaintext + raw blob).
+  `set_needs_relogin_if_live` — один SQL `UPDATE WHERE EXISTS(blob=snapshot)`, без отдельного SELECT.
+- `orchestrator/adapter_factory.py`: fail-closed — `needs_relogin` или `banned` → `build_profile_adapter`
+  возвращает None без попытки публикации.
+- `web/app.py`: `HealthChecker` запускается в lifespan; флаг `HEALTH_CHECK_ENABLED`, интервал `HEALTH_CHECK_POLL_SECONDS`.
+- Внешние исключения в `run_forever`/`run_once`/`_check_profile` логируются только как `type(exc).__name__` (без трейсбека).
+- Тесты (39 новых): мёртвая сессия, временный сбой, бан, fail-closed dispatch, изоляция профилей,
+  VK shared session, отмена, изоляция ошибок, Telegraph 429/5xx, Instagram 5xx/token_error,
+  Telegram network error, browser network error, ScheduledExecutor retry, blob-CAS (5 сценариев), outer-loop secret sanitization (2).
+- Итог: 1161 passed, 0 failed.
+
+## 2026-11-11 — отключено автоудаление медиа (T-209)
+
+- Все пути удаления медиа (финализация в executor, retry, cancel, PATCH, reject, publish_now)
+  перестали удалять файлы. Медиа накапливается до ручной чистки (T-214).
+- Тест на каждый путь: падает при возврате вызова `cleanup_media`.
+
 ## 2026-11-05 — контракт VK (T-208)
 
 - После клика VK возвращает submitted без реальной квитанции, включая таймаут

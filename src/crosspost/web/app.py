@@ -109,9 +109,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.executor = executor
         scheduler_task = asyncio.create_task(executor.run_forever())
 
+    # Фоновый health-check сессий: проверяет LIVE-подключения, переводит протухшие
+    # в needs_relogin до публикации. Выключается флагом HEALTH_CHECK_ENABLED=false.
+    health_task: asyncio.Task | None = None
+    if parse_bool(os.environ.get("HEALTH_CHECK_ENABLED", "true")):
+        from crosspost.sessions.health import HealthChecker  # noqa: PLC0415
+
+        health_checker = HealthChecker.from_env(factory)
+        health_task = asyncio.create_task(health_checker.run_forever())
+
     try:
         yield
     finally:
+        if health_task is not None:
+            health_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await health_task
         if scheduler_task is not None:
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
