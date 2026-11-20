@@ -125,7 +125,7 @@ async def capture_failure_screenshot(page, channel: str) -> str | None:
         await page.screenshot(path=str(path))
         return str(path)
     except Exception as exc:  # noqa: BLE001 — скриншот не критичен
-        logger.debug("screenshot capture failed for %s: %s", channel, exc)
+        logger.debug("screenshot capture failed for %s: %s", channel, type(exc).__name__)
         return None
 
 

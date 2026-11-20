@@ -681,7 +681,11 @@ async def publish_retry(
         outcome = await svc.retry_channel(run.content, sel, publication_id=publication_id)
 
     all_now = await pub_repo.list_statuses(publication_id)
-    if all(str(s.status) in _SUCCESS for s in all_now):
+    completed = {Selection(s.channel, s.target) for s in all_now if str(s.status) in _SUCCESS}
+    required = set(run.selections)
+    if run.article_text:
+        required.add(Selection("telegraph"))
+    if required <= completed:
         # T-209: media not deleted — retained indefinitely until T-214.
         _RUNS.pop((profile_id, publication_id), None)
         from crosspost.db.sqlite_store import CheckpointStore  # noqa: PLC0415

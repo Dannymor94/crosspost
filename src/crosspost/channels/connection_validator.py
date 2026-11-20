@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from crosspost.channels.validators import VALIDATORS, ValidatorResult
 from crosspost.db.models import ConnectionState, Log
 from crosspost.db.profile_repo import ProfileRepository
+from crosspost.orchestrator.breaker import CircuitBreakerRepository
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ async def validate_connection(
     Возвращает новый ConnectionState (live | needs_relogin).
     Канал не в реестре → needs_relogin + запись в лог.
     """
+    breaker = CircuitBreakerRepository(repo.session)
+    recovery_epoch = await breaker.recovery_epoch(profile_id, channel)
     validator = VALIDATORS.get(channel)
     if validator is None:
         await _log(
@@ -98,6 +101,7 @@ async def validate_connection(
         confirmed_dead = False  # plain bool = unknown/transient
 
     if alive:
+        await breaker.verified_recovery(profile_id, channel, recovery_epoch)
         await _log(repo, profile_id, channel, "INFO", "Подключение активно")
         # expires_at записываем только при сохранении/замене токена (persist_expiry),
         # иначе ре-валидация сдвинула бы оценочный срок и предупреждение не сработало бы.
