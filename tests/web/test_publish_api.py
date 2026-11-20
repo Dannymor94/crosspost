@@ -622,6 +622,63 @@ async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
     assert shots == {"vk_wall": "/shots/x.png"}
 
 
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([], "unknown"),
+        (["queued", "attempting"], "in_progress"),
+        (["done", "queued"], "partial"),
+        (["done"], "done"),
+        (["done", "done"], "done"),
+        (["submitted"], "submitted"),
+        (["done", "submitted"], "submitted"),
+        (["done", "failed"], "partial"),
+        (["submitted", "failed"], "partial"),
+        (["failed", "queued"], "partial"),
+        (["failed"], "failed"),
+        (["needs_relogin"], "failed"),
+        (["done", "failed", "queued"], "partial"),
+        (["bogus_future_status"], "failed"),
+        (["new"], "failed"),
+    ],
+)
+def test_scheduled_report_overall_status_matrix(statuses, expected):
+    outcomes = [
+        publish.OutcomeOut(channel=f"channel_{i}", status=status)
+        for i, status in enumerate(statuses)
+    ]
+    assert publish._overall_status(outcomes) == expected
+
+
+@pytest.mark.parametrize("verify_reason", ["no_match", None])
+async def test_scheduled_report_submitted_reason_survives_reload(client, factory, verify_reason):
+    """The actual journal API reloads persisted SUBMITTED and its safe reason."""
+    from datetime import datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    await _make_executed(
+        factory,
+        pid,
+        text="пост без подтверждения",
+        channels={
+            "telegram": (PublicationStatus.DONE, "tg-1"),
+            "vk_wall": (PublicationStatus.SUBMITTED, verify_reason),
+        },
+        published_at=datetime(2026, 8, 10, 9, 6, tzinfo=UTC),
+    )
+    for _ in range(2):  # independent request/session, not in-memory client state
+        response = await client.get(f"/api/profiles/{pid}/scheduled/report")
+        assert response.status_code == 200
+        row = response.json()[0]
+        assert row["overall"] == "submitted"
+        by_channel = {o["channel"]: o for o in row["outcomes"]}
+        assert by_channel["telegram"]["status"] == "done"
+        assert by_channel["vk_wall"]["status"] == "submitted"
+        assert by_channel["vk_wall"]["error"] == verify_reason
+
+
 async def test_scheduled_screenshots_only_for_failed_channel(client, factory):
     """Канал упал на попытке 1 (скриншот в логах), но дожался на ретрае (done).
 
