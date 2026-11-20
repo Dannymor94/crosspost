@@ -62,11 +62,11 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 
 ---
 
-## 3. Здоровье кода (T-213 + T-202 + T-209)
+## 3. Здоровье кода (T-207 + T-213 + T-202 + T-209)
 
 | Проверка | Результат |
 |---|---|
-| `pytest -q` | 1177 passed, 0 failed (T-213 + T-202 + T-209; CI проверяется на точном HEAD PR #20) |
+| `pytest -q` | 1187 passed, 0 failed (T-207 + T-213 + T-202 + T-209; CI проверяется на точном HEAD PR #25) |
 | `ruff check` / `ruff format --check` | чисто |
 | `mypy src` | чисто |
 | CI (GitHub Actions) | зелёный: матрица 3.11 + 3.13, `.[dev,browser,infra,crypto]`, `make check` (T-101) |
