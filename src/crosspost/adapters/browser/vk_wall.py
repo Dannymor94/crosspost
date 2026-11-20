@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus
+from crosspost.adapters.base import ChannelAdapter, ChannelResult, ResultStatus, VerifyFailed
 from crosspost.adapters.browser.base_browser import _FROM_FILE, is_logged_in, open_page
 from crosspost.content.canonical import CanonicalContent
 from crosspost.orchestrator.task import IdempotencyStore
@@ -160,7 +160,7 @@ class VKWallBrowserAdapter:
             await page.locator(_NEXT_BUTTON_SELECTOR).click()
 
             # 9) шаг 2: финальная публикация (TODO: уточнить селектор кнопки)
-            external_id = await self._publish_step2(page, content.text, set(posts))
+            external_id, verify_reason = await self._publish_step2(page, content.text, set(posts))
 
         await self._store.mark_done(publication_id, self.channel, external_id=external_id)
         # url — на стену сообщества (свежий пост сверху): переход из UI после отправки.
@@ -169,6 +169,7 @@ class VKWallBrowserAdapter:
             ResultStatus.SUBMITTED,
             external_id=external_id,
             url=url,
+            error=verify_reason,
         )
 
     # ── внутренние методы ────────────────────────────────────────────────────
@@ -227,11 +228,14 @@ class VKWallBrowserAdapter:
                 timeout=_PHOTO_TIMEOUT,
             )
 
-    async def _publish_step2(self, page, text: str, known_ids: set[str]) -> str | None:
+    async def _publish_step2(
+        self, page, text: str, known_ids: set[str]
+    ) -> tuple[str | None, str | None]:
         """Шаг 2: финальный экран публикации.
 
         Нажимаем кнопку публикации (несколько кандидатов на случай A/B),
         затем ждём новый пост с нашим текстом и ID в ленте.
+        Возвращает (external_id | None, verify_reason | None).
         """
         for selector in (
             '[data-testid="posting_confirm_screen_submit"]',
@@ -245,9 +249,11 @@ class VKWallBrowserAdapter:
             await page.get_by_role("button", name="Опубликовать", exact=True).click()
 
         try:
-            return await self._wait_for_post(page, text, known_ids)
+            return await self._wait_for_post(page, text, known_ids), None
+        except VerifyFailed as e:
+            return None, e.reason  # "no_match": polling exhausted, receipt not found
         except Exception:
-            return None  # клик выполнен; подтверждение доставки недоступно
+            return None, None  # unclassified: verification unavailable
 
     async def _stabilize_posts(self, page) -> dict[str, str]:
         """Читать ленту, пока два подряд чтения не дадут одинаковый набор id.
@@ -294,7 +300,7 @@ class VKWallBrowserAdapter:
             if post_id:
                 return post_id
             await page.wait_for_timeout(500)
-        raise RuntimeError("vk_wall: пост не найден в ленте, доставка не подтверждена")
+        raise VerifyFailed("no_match")
 
 
 # проверка соответствия контракту на этапе импорта-тайпчека

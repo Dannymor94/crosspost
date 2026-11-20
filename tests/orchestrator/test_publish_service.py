@@ -437,3 +437,106 @@ async def test_empty_exc_str_stored_as_type_name(session):
     assert outcomes[0].status == "failed"
     assert outcomes[0].error, "error must be non-empty"
     assert "_BlankError" in outcomes[0].error
+
+
+# ── T-210: verify reason allowlist (safe_error for SUBMITTED) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_submitted_no_reason_persists_none(session):
+    """SUBMITTED with error=None → Publication.error is None."""
+    adapter = _MockAdapter(
+        "vk_wall", result=ChannelResult("vk_wall", ResultStatus.SUBMITTED, error=None)
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    outcomes = await svc.publish(_post(), ["vk_wall"], publication_id="p_sub_none")
+
+    assert outcomes[0].status == "submitted"
+    assert outcomes[0].error is None
+
+    rows = await _repo(session).list_statuses("p_sub_none")
+    assert rows[0].error is None
+
+
+@pytest.mark.asyncio
+async def test_submitted_no_match_reason_persisted(session):
+    """SUBMITTED with error='no_match' → allowlisted code survives to DB."""
+    adapter = _MockAdapter(
+        "vk_wall", result=ChannelResult("vk_wall", ResultStatus.SUBMITTED, error="no_match")
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    outcomes = await svc.publish(_post(), ["vk_wall"], publication_id="p_sub_match")
+
+    assert outcomes[0].error == "no_match"
+
+    rows = await _repo(session).list_statuses("p_sub_match")
+    assert rows[0].error == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_submitted_adversarial_url_dropped(session):
+    """SUBMITTED with raw URL in error → allowlist drops it, DB gets None."""
+    adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult(
+            "vk_wall", ResultStatus.SUBMITTED, error="https://example.com?secret=token123"
+        ),
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    outcomes = await svc.publish(_post(), ["vk_wall"], publication_id="p_adv_url")
+
+    assert outcomes[0].error is None
+
+    rows = await _repo(session).list_statuses("p_adv_url")
+    assert rows[0].error is None
+
+
+@pytest.mark.asyncio
+async def test_submitted_adversarial_unknown_code_dropped(session):
+    """SUBMITTED with arbitrary string in error → allowlist drops it."""
+    adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult("vk_wall", ResultStatus.SUBMITTED, error="arbitrary_unknown_code"),
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    outcomes = await svc.publish(_post(), ["vk_wall"], publication_id="p_adv_code")
+
+    assert outcomes[0].error is None
+
+
+@pytest.mark.asyncio
+async def test_failed_error_still_uses_failure_kind_wrapping(session):
+    """FAILED path unchanged: safe_error uses FailureKind, not raw adapter error."""
+    from crosspost.adapters.base import FailureKind
+
+    adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult(
+            "vk_wall",
+            ResultStatus.FAILED,
+            error="raw platform message",
+            failure_kind=FailureKind.TRANSIENT,
+        ),
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    outcomes = await svc.publish(_post(), ["vk_wall"], publication_id="p_fail_kind")
+
+    assert outcomes[0].status == "failed"
+    assert "transient" in outcomes[0].error
+    assert "raw platform message" not in outcomes[0].error
+
+
+@pytest.mark.asyncio
+async def test_submitted_no_duplicate_on_retry(session):
+    """Previously SUBMITTED publication: retry_channel leaves adapter.calls=1."""
+    adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult("vk_wall", ResultStatus.SUBMITTED, error="no_match"),
+    )
+    svc = PublishService(_repo(session), _factory({"vk_wall": adapter}))
+    await svc.publish(_post(), ["vk_wall"], publication_id="p_no_dupe")
+    assert adapter.calls == 1
+
+    again = await svc.retry_channel(_post(), "vk_wall", publication_id="p_no_dupe")
+    assert again.status == "submitted"
+    assert adapter.calls == 1  # not retried; attempt counter unchanged

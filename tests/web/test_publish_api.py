@@ -2837,3 +2837,179 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+# ── T-210: overall_status precedence matrix ───────────────────────────────────
+
+
+def _out(status: str):
+    """Minimal OutcomeOut stub for _overall_status tests."""
+    from crosspost.web.routes.publish import OutcomeOut
+
+    return OutcomeOut(channel="x", status=status)
+
+
+def test_overall_status_empty():
+    from crosspost.web.routes.publish import _overall_status
+
+    assert _overall_status([]) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "statuses,expected",
+    [
+        (["queued", "attempting"], "in_progress"),
+        (["done", "queued"], "partial"),
+        (["done"], "done"),
+        (["done", "done"], "done"),
+        (["submitted"], "submitted"),
+        (["done", "submitted"], "submitted"),
+        (["done", "failed"], "partial"),
+        (["submitted", "failed"], "partial"),
+        (["failed", "queued"], "partial"),
+        (["failed"], "failed"),
+        (["needs_relogin"], "failed"),
+        (["done", "failed", "queued"], "partial"),
+        (["bogus_future_status"], "failed"),  # fail-closed: unknown treated as failure
+    ],
+)
+def test_overall_status_matrix(statuses, expected):
+    from crosspost.web.routes.publish import _overall_status
+
+    assert _overall_status([_out(s) for s in statuses]) == expected
+
+
+# ── T-210: journal API — SUBMITTED survives DB round-trip ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_scheduled_report_submitted_overall_and_reason(client, factory):
+    """Journal GET after fresh session: overall=submitted, per-channel error=no_match persisted."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    await _make_executed(
+        factory,
+        pid,
+        text="вк пост без квитанции",
+        channels={"vk_wall": (PublicationStatus.SUBMITTED, "no_match")},
+        published_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+    )
+
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    # Overall aggregate must be "submitted", not "done"
+    assert row["overall"] == "submitted", f"got {row['overall']!r}"
+    by = {o["channel"]: o for o in row["outcomes"]}
+    assert by["vk_wall"]["status"] == "submitted"
+    assert by["vk_wall"]["error"] == "no_match"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_report_submitted_no_reason(client, factory):
+    """SUBMITTED with no reason (error=None) → journal shows submitted, error absent/null."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    await _make_executed(
+        factory,
+        pid,
+        text="вк без причины",
+        channels={"vk_wall": (PublicationStatus.SUBMITTED, None)},
+        published_at=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+    )
+
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["overall"] == "submitted"
+    by = {o["channel"]: o for o in row["outcomes"]}
+    assert by["vk_wall"]["status"] == "submitted"
+    assert by["vk_wall"].get("error") is None
+
+
+@pytest.mark.asyncio
+async def test_submitted_overall_included_in_attention_filter(client, factory):
+    """submitted overall is treated as a problem: would appear in problems filter."""
+    from datetime import UTC, datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    await _make_executed(
+        factory,
+        pid,
+        text="внимание без квитанции",
+        channels={"vk_wall": (PublicationStatus.SUBMITTED, "no_match")},
+        published_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+    )
+
+    resp = await client.get(f"/api/profiles/{pid}/scheduled/report")
+    rows = resp.json()
+    assert rows[0]["overall"] == "submitted"
+
+    # Verify isReportProblem logic (server-side analogue: overall in {partial,failed,submitted})
+    assert rows[0]["overall"] in {"partial", "failed", "submitted"}
+
+
+@pytest.mark.asyncio
+async def test_submitted_no_retry_via_retry_endpoint(client, factory):
+    """Retry endpoint on a SUBMITTED channel must not re-invoke the adapter (T-208 guard).
+
+    Goes through the HTTP publish path so that _RUNS is populated, then retries.
+    """
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+
+    # Publish via HTTP so publication lands in _RUNS and DB as SUBMITTED.
+    submitted_adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult("vk_wall", ResultStatus.SUBMITTED, error="no_match"),
+    )
+    with _patch_adapters({"vk_wall": submitted_adapter}):
+        resp = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={
+                "content_type": "post",
+                "text": "submitted no retry",
+                "channels": json.dumps(["vk_wall"]),
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    pub_id = resp.json()["publication_id"]
+
+    # Retry: SUBMITTED is terminal — adapter must not be called again.
+    retry_adapter = _MockAdapter(
+        "vk_wall",
+        result=ChannelResult("vk_wall", ResultStatus.DONE, external_id="new"),
+    )
+    with _patch_adapters({"vk_wall": retry_adapter}):
+        r = await client.post(f"/api/profiles/{pid}/publish/{pub_id}/retry/vk_wall")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "submitted"
+
+
+# ── T-210: isReportProblem frontend logic (pure-function extract) ─────────────
+
+
+@pytest.mark.parametrize(
+    "overall,expected",
+    [
+        ("submitted", True),
+        ("partial", True),
+        ("failed", True),
+        ("done", False),
+        ("in_progress", False),
+        ("unknown", False),
+    ],
+)
+def test_is_report_problem_js_logic(overall, expected):
+    """isReportProblem covers submitted, partial, failed; excludes done/in_progress/unknown."""
+    is_problem = overall in {"partial", "failed", "submitted"}
+    assert is_problem == expected

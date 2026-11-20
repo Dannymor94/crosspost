@@ -9,9 +9,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from crosspost.content.canonical import CanonicalContent
+
+VerifyReason = Literal["no_match"]
+
+
+class VerifyFailed(Exception):
+    """Raised by browser adapters when verify-after-click cannot confirm delivery."""
+
+    def __init__(self, reason: VerifyReason) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 class FailureKind(StrEnum):

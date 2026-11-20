@@ -3556,13 +3556,15 @@ function PublishView({ profile }) {
 // Скриншоты сбоя грузятся лениво при раскрытии карточки (отдельным запросом).
 
 const REPORT_META = {
-  done: { cls: "success", label: "Отправлено" },
-  partial: { cls: "warning", label: "Частично" },
-  failed: { cls: "error", label: "Не отправлено" },
-  unknown: { cls: "info", label: "Без итогов" },
+  done:        { cls: "success", label: "Опубликовано" },
+  submitted:   { cls: "warning", label: "Отправлено, без квитанции" },
+  partial:     { cls: "warning", label: "Частично" },
+  failed:      { cls: "error",   label: "Не отправлено" },
+  in_progress: { cls: "info",    label: "Выполняется" },
+  unknown:     { cls: "info",    label: "Без итогов" },
 };
 const REPORT_PAGE = 20;  // размер страницы (совпадает с limit на сервере)
-const isReportProblem = (r) => r.overall === "partial" || r.overall === "failed";
+const isReportProblem = (r) => r.overall === "partial" || r.overall === "failed" || r.overall === "submitted";
 
 // Слить страницы журнала: дедуп по id, сортировка по курсору (published_at) — свежие
 // сверху. cursor — ISO в UTC, поэтому строковое сравнение = хронологическое.
@@ -3607,12 +3609,12 @@ function SchedulerReport({ base, items, hasMore, onMore, onRefresh }) {
       h("div", { className: "report-filter" },
         h("button", { className: filter === "all" ? "active" : "", onClick: () => setFilter("all") }, "Все"),
         h("button", { className: filter === "problems" ? "active" : "", onClick: () => setFilter("problems") },
-          `Проблемные${problemCount ? ` · ${problemCount}` : ""}`),
+          `Требуют внимания${problemCount ? ` · ${problemCount}` : ""}`),
       ),
       h("span", { className: "report-count" }, `загружено ${items.length}`),
     ),
     filter === "problems" && shown.length === 0
-      ? h("p", { className: "text-3", style: { fontSize: "13px" } }, "Проблемных постов среди загруженных нет.")
+      ? h("p", { className: "text-3", style: { fontSize: "13px" } }, "Таких постов среди загруженных нет.")
       : groups.map((g, i) => h("div", { key: i },
           h("div", { className: "report-day" }, g.label),
           h("div", { className: "report-rows" },
