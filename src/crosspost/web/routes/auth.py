@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from crosspost.auth.passwords import hash_password, verify_password
-from crosspost.auth.sessions import sign_session
+from crosspost.auth.sessions import sign_session, verify_recovery_token
 from crosspost.db.models import Role
 from crosspost.web.deps import SESSION_COOKIE, CurrentUser, UserRepoDep
 
@@ -26,6 +26,11 @@ _DUMMY_HASH = hash_password("crosspost-dummy-constant")
 class LoginBody(BaseModel):
     login: str
     password: str
+
+
+class RecoverBody(BaseModel):
+    token: str
+    new_password: str = Field(min_length=12, max_length=256)
 
 
 class MeOut(BaseModel):
@@ -49,13 +54,28 @@ async def login(body: LoginBody, response: Response, users: UserRepoDep) -> MeOu
 
     response.set_cookie(
         SESSION_COOKIE,
-        sign_session(user.id),
+        sign_session(user.id, generation=user.session_generation),
         max_age=_SESSION_MAX_AGE,
         httponly=True,  # JS не читает куку → токен не украсть XSS-ом
         samesite="lax",
         path="/",
     )
     return MeOut.model_validate(user)
+
+
+@router.post("/recover")
+async def recover(body: RecoverBody, response: Response, users: UserRepoDep) -> dict[str, bool]:
+    """Клиент задаёт новый пароль по одноразовому токену, выданному владельцем."""
+    response.headers["Cache-Control"] = "no-store"
+    claims = verify_recovery_token(body.token)
+    if claims is None:
+        raise HTTPException(status_code=400, detail="Ссылка недействительна или устарела")
+    user_id, generation = claims
+    if not await users.recover_client_password(
+        user_id, generation=generation, new_password=body.new_password
+    ):
+        raise HTTPException(status_code=400, detail="Ссылка недействительна или устарела")
+    return {"ok": True}
 
 
 @router.post("/logout")

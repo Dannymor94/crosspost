@@ -522,7 +522,8 @@ async def test_cb18_deployed_main_upgrade_preserves_data(tmp_path):
                 == []
             )
             assert (
-                await conn.scalar(text("SELECT version_num FROM alembic_version")) == "t203_fencing"
+                await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                == "t406_session_generation"
             )
     finally:
         await upgraded.dispose()
