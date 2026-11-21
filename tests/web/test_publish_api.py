@@ -740,9 +740,7 @@ async def test_scheduled_report_sanitizes_dispatch_reason_after_fresh_reload(
         )
         pubid = scheduled_publication_id(post.id)
         service = PublishService(repo, adapter_factory)
-        published = (
-            await service.publish(content, ["vk_wall"], publication_id=pubid)
-        )[0]
+        published = (await service.publish(content, ["vk_wall"], publication_id=pubid))[0]
         assert published.status == "submitted"
         assert published.error == expected
 
