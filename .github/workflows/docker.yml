@@ -8,6 +8,10 @@ on:
       - docker-compose.yml
       - .github/workflows/docker.yml
       - tests/deployment/**
+      - src/**
+      - scripts/**
+      - pyproject.toml
+      - uv.lock
 
 jobs:
   build-and-persist:
@@ -60,13 +64,37 @@ jobs:
             exit 1
           fi
           docker compose exec -T app python -c 'import sqlite3; db = sqlite3.connect("runtime/db.sqlite3"); assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",); assert db.execute("select name from sqlite_master where type=\x27table\x27 and name=\x27profiles\x27").fetchone()'
-          docker compose exec -T app sh -c 'umask 077; printf T301-v1 > /app/runtime/.t301-volume-marker'
+          docker compose exec -T app python - <<'PY'
+          from pathlib import Path
+
+          markers = {
+              "/app/backups/.t301-backup-marker": "backup-v1",
+              "/app/runtime/media/.t301-media-marker": "media-v1",
+              "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
+              "/app/runtime/settings.json": '{"t301_smoke": true}',
+          }
+          for name, content in markers.items():
+              path = Path(name)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content, encoding="utf-8")
+          PY
 
       - name: Preserve both volumes across recreation
         run: |
           docker compose down
           docker compose up -d --no-build
-          docker compose exec -T app sh -c 'test "$(cat /app/runtime/.t301-volume-marker)" = T301-v1'
+          docker compose exec -T app python - <<'PY'
+          from pathlib import Path
+
+          markers = {
+              "/app/backups/.t301-backup-marker": "backup-v1",
+              "/app/runtime/media/.t301-media-marker": "media-v1",
+              "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
+              "/app/runtime/settings.json": '{"t301_smoke": true}',
+          }
+          for name, content in markers.items():
+              assert Path(name).read_text(encoding="utf-8") == content, name
+          PY
           docker compose exec -T app test -f /app/runtime/db.sqlite3
           docker compose exec -T app python -c 'import sys; assert sys.version_info[:2] == (3, 13)'
 

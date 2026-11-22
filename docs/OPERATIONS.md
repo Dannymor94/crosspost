@@ -249,7 +249,11 @@ secret-manager (не вписывать реальные значения в Com
 существующей БД. Дополнительные параметры: `CROSSPOST_PORT` (по умолчанию 8001),
 `BROWSER_HEADLESS=true`, `SCHEDULER_ENABLED=true`, `HEALTH_CHECK_ENABLED=true`,
 `VK_PROXY_URL`, `YANDEX_PROXY_URL`, `INSTAGRAM_PROXY_URL`,
-`INSTAGRAM_PUBLIC_BASE_URL`. Переменные из `runtime/.env` в Docker **не** загружаются.
+`INSTAGRAM_PUBLIC_BASE_URL`. Compose не монтирует отдельный `.env` в контейнер,
+но `crosspost.config.load_config()` **прочитает** `runtime/.env`, если такой файл
+уже находится в постоянном томе (например, после переноса старого окружения).
+Явные переменные процесса имеют приоритет над значениями файла. Для production
+хранить секреты только во внешнем защищённом окружении, `runtime/.env` не создавать.
 
 ```bash
 docker compose config --quiet       # fail closed, если нет обязательных секретов
