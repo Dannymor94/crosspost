@@ -1,5 +1,23 @@
 # Architecture decisions
 
+## 2026-11-22 — T-302: TLS-терминация Caddy и граница доверия proxy headers
+
+Единственный публичный вход production — Caddy на TCP 80 (ACME/redirect) и 443 (TLS);
+прокси передаёт все пути без rewrite во внутренний FastAPI. Caddy не имеет томов
+runtime/media и не включает access logs, поскольку `/public-media/{token}` — bearer URL.
+В контейнере Uvicorn raw access logs также отключены. Caddy адресован выделенным
+IP `${CROSSPOST_PROXY_IP}` в Compose bridge `${CROSSPOST_PROXY_SUBNET}`;
+только этот IP входит в `FORWARDED_ALLOW_IPS`. Произвольные `X-Forwarded-*`
+от клиента не доверяются ни Caddy, ни Uvicorn. Это договор для T-409 IP rate limit;
+на внешнем CDN/другом reverse-proxy нужна отдельная архитектурная ревизия.
+
+Compose выводит `INSTAGRAM_PUBLIC_BASE_URL=https://${CROSSPOST_DOMAIN}` из домена
+Caddy, чтобы исключить несовпадение origin; адаптер отдельно отвергает HTTP,
+локальные/частные IP и URL с userinfo, path, query или fragment. На VPS требуются
+публичные DNS A/AAAA, сертификат, реальный curl/Meta fetch и отдельный T-409
+Secure-cookie gate. Пока изменения стековые к T-301, `main` не меняется.
+
+
 Short dated entries. One paragraph each.
 
 ---

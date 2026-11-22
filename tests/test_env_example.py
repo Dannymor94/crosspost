@@ -11,6 +11,12 @@ from pathlib import Path
 
 _SRC = Path(__file__).parent.parent / "src"
 _EXAMPLE = Path(__file__).parent.parent / ".env.example"
+_COMPOSE = Path(__file__).parent.parent / "docker-compose.yml"
+
+# T-302 HTTPS ingress options are consumed by Docker Compose, not Python code.
+_DEPLOYMENT_ONLY_KEYS = frozenset(
+    {"CROSSPOST_DOMAIN", "CROSSPOST_PROXY_SUBNET", "CROSSPOST_PROXY_IP"}
+)
 
 
 def _is_os_environ(node: ast.AST) -> bool:
@@ -99,8 +105,11 @@ def test_env_example_matches_code() -> None:
     code = _code_keys()
     example = _example_keys()
 
+    compose = _COMPOSE.read_text(encoding="utf-8")
+    assert all(f"${{{key}" in compose for key in _DEPLOYMENT_ONLY_KEYS)
+
     missing_from_example = code - example
-    obsolete_in_example = example - code
+    obsolete_in_example = example - code - _DEPLOYMENT_ONLY_KEYS
 
     errors: list[str] = []
     if missing_from_example:
