@@ -160,15 +160,25 @@ def _read_file(source: Path, destination: Path | None = None) -> tuple[str, int]
     return digest.hexdigest(), length
 
 
-def _walk_files(root: Path) -> list[Path]:
+def _walk_files(root: Path, directories: list[Path] | None = None) -> list[Path]:
     _require_real_dir(root)
     paths: list[Path] = []
-    for current, dirs, names in os.walk(root, followlinks=False):
+
+    def _onerror(_exc: OSError) -> None:
+        # os.walk silently omits inaccessible subtrees by default; that would
+        # authenticate an incomplete backup as if it were complete.
+        raise BundleError("recovery input contains unreadable directory")
+
+    for current, dirs, names in os.walk(root, followlinks=False, onerror=_onerror):
         current_path = Path(current)
         for name in dirs:
             entry = current_path / name
             if entry.is_symlink() or not entry.is_dir():
                 raise BundleError("recovery input contains symlink/non-directory")
+            if directories is not None:
+                directories.append(entry.relative_to(root))
+                if len(paths) + len(directories) > MAX_FILES:
+                    raise BundleError("recovery inventory entry count exceeds safety limit")
         for name in names:
             entry = current_path / name
             if entry.is_symlink() or not entry.is_file():
@@ -230,6 +240,7 @@ def backup_bundle(
         / f"crosspost-recovery-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:12]}"
     )
     inventory: list[dict] = []
+    directories: list[str] = ["database", "media", "profiles"]
     total = [0]
     try:
         db_dir = _ensure_real_dir(staging / "database")
@@ -247,13 +258,18 @@ def backup_bundle(
         for group, source in (("media", media), ("profiles", profiles)):
             dest_root = staging / group
             dest_root.mkdir(mode=0o700)
-            for relative in _walk_files(source):
+            group_directories: list[Path] = []
+            source_files = _walk_files(source, group_directories)
+            for relative in group_directories:
+                (dest_root / relative).mkdir(parents=True, mode=0o700, exist_ok=True)
+                directories.append((Path(group) / relative).as_posix())
+            for relative in source_files:
                 _copy_and_list(source / relative, dest_root / relative, inventory, total)
                 inventory[-1]["path"] = (Path(group) / relative).as_posix()
         if settings_present:
             _copy_and_list(settings, staging / "settings.json", inventory, total)
             inventory[-1]["path"] = "settings.json"
-        if len(inventory) > MAX_FILES or total[0] > MAX_BYTES:
+        if len(inventory) + len(directories) > MAX_FILES or total[0] > MAX_BYTES:
             raise BundleError("recovery inventory exceeds safety limit")
         meta = {
             "version": VERSION,
@@ -264,6 +280,7 @@ def backup_bundle(
             "encrypted": False,
             "quiesced_by_operator": True,
             "settings_present": settings_present,
+            "directories": sorted(directories),
             "files": sorted(inventory, key=lambda item: item["path"]),
         }
         meta["hmac_sha256"] = _auth(meta, key)
@@ -311,6 +328,21 @@ def verify_bundle(bundle: Path) -> dict:
     files = meta.get("files")
     if not isinstance(files, list) or not files or len(files) > MAX_FILES:
         raise BundleError("recovery bundle file inventory is invalid")
+    directory_records = meta.get("directories")
+    if not isinstance(directory_records, list) or len(directory_records) > MAX_FILES:
+        raise BundleError("recovery directory inventory is invalid")
+    expected_dirs: set[str] = set()
+    for record in directory_records:
+        if not isinstance(record, str):
+            raise BundleError("recovery directory record invalid")
+        _safe_relative(record)
+        if record in expected_dirs:
+            raise BundleError("duplicate recovery directory record")
+        expected_dirs.add(record)
+    if len(files) + len(expected_dirs) > MAX_FILES:
+        raise BundleError("recovery inventory entry count exceeds safety limit")
+    if not {"database", "media", "profiles"}.issubset(expected_dirs):
+        raise BundleError("recovery bundle missing required directories")
     expected: set[str] = set()
     size_sum = 0
     for item in files:
@@ -349,9 +381,14 @@ def verify_bundle(bundle: Path) -> dict:
         raise BundleError("recovery bundle missing SQLite manifest")
     if not (bundle / "media").is_dir() or not (bundle / "profiles").is_dir():
         raise BundleError("recovery bundle missing asset groups")
-    actual = {path.as_posix() for path in _walk_files(bundle) if path.as_posix() != MANIFEST}
-    if expected != actual:
-        raise BundleError("recovery bundle contains missing/extra files")
+    actual_directories: list[Path] = []
+    actual = {
+        path.as_posix()
+        for path in _walk_files(bundle, actual_directories)
+        if path.as_posix() != MANIFEST
+    }
+    if expected != actual or expected_dirs != {p.as_posix() for p in actual_directories}:
+        raise BundleError("recovery bundle contains missing/extra files or directories")
     sqlite_backup.verify(bundle / _safe_relative(snapshot_name))
     if meta["settings_present"]:
         _require_valid_settings(bundle / "settings.json")
@@ -368,8 +405,8 @@ def restore_bundle(bundle: Path, destination: Path) -> Path:
     staging = destination.parent / f".recovery-restore-{uuid4().hex}"
     staging.mkdir(mode=0o700)
     try:
-        for group in ("database", "media", "profiles"):
-            (staging / group).mkdir(mode=0o700)
+        for item in meta["directories"]:
+            (staging / _safe_relative(item)).mkdir(mode=0o700, parents=True, exist_ok=True)
         for item in meta["files"]:
             path = _safe_relative(item["path"])
             checksum, size = _read_file(bundle / path, staging / path)

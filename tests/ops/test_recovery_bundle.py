@@ -342,3 +342,55 @@ def test_rename_race_cannot_clobber_newly_created_empty_directory(tmp_path, key,
     assert not list(destination.iterdir())
     assert not list(destination.parent.glob(".recovery-restore-*"))
     conn.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX chmod directory failure")
+def test_unreadable_nested_media_directory_rejects_entire_bundle(tmp_path, key):
+    database, conn, media, profiles, settings = _sources(tmp_path)
+    forbidden = media / "private-client"
+    forbidden.mkdir()
+    (forbidden / "critical.jpg").write_bytes(b"required-asset")
+    forbidden.chmod(0)
+    try:
+        result = _run(
+            tmp_path,
+            key,
+            "backup",
+            "--db",
+            str(database),
+            "--media-dir",
+            str(media),
+            "--profiles-dir",
+            str(profiles),
+            "--settings",
+            str(settings),
+            "--dest",
+            str(tmp_path / "backups"),
+            "--quiesced",
+        )
+        assert result.returncode == 2
+        assert "unreadable directory" in result.stderr
+        assert not list((tmp_path / "backups").glob("crosspost-recovery-*"))
+    finally:
+        forbidden.chmod(0o700)
+        conn.close()
+
+
+def test_empty_nested_directories_are_preserved_and_authenticated(tmp_path, key):
+    database, conn, media, profiles, settings = _sources(tmp_path)
+    (media / "new-empty-gallery").mkdir()
+    (profiles / "vk" / "empty-cache").mkdir()
+    bundle = _bundle(tmp_path, key, database, media, profiles, settings, "--quiesced")
+    assert isinstance(bundle, Path)
+    meta = json.loads((bundle / "recovery_manifest.json").read_text())
+    assert "media/new-empty-gallery" in meta["directories"]
+    assert "profiles/vk/empty-cache" in meta["directories"]
+    recovered = tmp_path / "staging" / "restore"
+    result = _run(tmp_path, key, "restore", "--bundle", str(bundle), "--target", str(recovered))
+    assert result.returncode == 0, result.stderr
+    assert (recovered / "media/new-empty-gallery").is_dir()
+    assert (recovered / "profiles/vk/empty-cache").is_dir()
+    assert _run(tmp_path, key, "verify", "--bundle", str(recovered)).returncode == 0
+    (recovered / "media/new-empty-gallery").rmdir()
+    assert _run(tmp_path, key, "verify", "--bundle", str(recovered)).returncode == 2
+    conn.close()
