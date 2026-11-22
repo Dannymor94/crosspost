@@ -136,6 +136,7 @@ pytest -q
 | Почему принято решение X | [`docs/decisions.md`](docs/decisions.md) |
 | Особенности канала | [`docs/channels/`](docs/channels/) |
 | Что менялось | [`CHANGELOG.md`](CHANGELOG.md) |
+| Подтверждённая передача результатов на 22.11.2026 | [`docs/PROGRESS-REPORT-2026-11-22.md`](docs/PROGRESS-REPORT-2026-11-22.md) |
 
 ---
 
