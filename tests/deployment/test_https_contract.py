@@ -29,6 +29,9 @@ def test_compose_public_ports_media_isolation_and_proxy_trust() -> None:
     assert '"127.0.0.1:${CROSSPOST_PORT:-8001}:8001"' in compose
     assert "FORWARDED_ALLOW_IPS:" in compose
     assert "CROSSPOST_PROXY_IP" in compose
+    # Both addresses are reserved: app must not win the proxy IP allocation race.
+    assert 'ipv4_address: "${CROSSPOST_APP_IP:-172.30.92.3}"' in compose
+    assert 'ipv4_address: "${CROSSPOST_PROXY_IP:-172.30.92.2}"' in compose
     assert 'INSTAGRAM_PUBLIC_BASE_URL: "https://${CROSSPOST_DOMAIN:?' in compose
     assert 'CROSSPOST_DOMAIN: "${CROSSPOST_DOMAIN:?' in compose
     assert "caddy_data:/data" in compose

@@ -330,10 +330,12 @@ Caddy access logs выключены, Uvicorn raw access logs тоже, поск
 
 **Доверие к прокси:** у Caddy статический IP
 `${CROSSPOST_PROXY_IP:-172.30.92.2}` в отдельном bridge subnet
-`${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}`. Uvicorn читает
+`${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}`. Для app закреплён отдельный
+`${CROSSPOST_APP_IP:-172.30.92.3}`, чтобы app не занял адрес Caddy при старте.
+Uvicorn читает
 `FORWARDED_ALLOW_IPS` равный только этому IP, **не `*`**; внешний клиент не может
 подставить `X-Forwarded-For` или `X-Forwarded-Proto`. Если выбранный Docker subnet
-занят, поменять оба значения согласованно и повторить тесты/контроль сетей.
+занят, поменять все три значения согласованно и повторить тесты/контроль сетей.
 Сторонний CDN/обратный прокси перед Caddy требует отдельного security-review,
 нельзя молча включать дополнительные `trusted_proxies`. T-409 отдельно
 включит Secure cookie, CSRF и IP rate limit — до этого платных клиентов не пускать.

@@ -15,7 +15,7 @@ _COMPOSE = Path(__file__).parent.parent / "docker-compose.yml"
 
 # T-302 HTTPS ingress options are consumed by Docker Compose, not Python code.
 _DEPLOYMENT_ONLY_KEYS = frozenset(
-    {"CROSSPOST_DOMAIN", "CROSSPOST_PROXY_SUBNET", "CROSSPOST_PROXY_IP"}
+    {"CROSSPOST_DOMAIN", "CROSSPOST_PROXY_SUBNET", "CROSSPOST_PROXY_IP", "CROSSPOST_APP_IP"}
 )
 
 

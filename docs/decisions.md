@@ -7,6 +7,7 @@
 runtime/media и не включает access logs, поскольку `/public-media/{token}` — bearer URL.
 В контейнере Uvicorn raw access logs также отключены. Caddy адресован выделенным
 IP `${CROSSPOST_PROXY_IP}` в Compose bridge `${CROSSPOST_PROXY_SUBNET}`;
+приложению резервируется другой IP `${CROSSPOST_APP_IP}` (CI R1 устранил коллизию);
 только этот IP входит в `FORWARDED_ALLOW_IPS`. Произвольные `X-Forwarded-*`
 от клиента не доверяются ни Caddy, ни Uvicorn. Это договор для T-409 IP rate limit;
 на внешнем CDN/другом reverse-proxy нужна отдельная архитектурная ревизия.

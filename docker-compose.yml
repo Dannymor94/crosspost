@@ -44,7 +44,9 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - ingress
+      ingress:
+        # Reserve a separate address so the app never claims Caddy's .2 first.
+        ipv4_address: "${CROSSPOST_APP_IP:-172.30.92.3}"
 
   caddy:
     image: caddy:2.11.9-alpine
