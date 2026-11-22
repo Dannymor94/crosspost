@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from crosspost.content.canonical import CanonicalContent
 
@@ -28,6 +28,19 @@ class ResultStatus(StrEnum):
     SKIPPED = "skipped"  # идемпотентность: уже опубликовано
     SUBMITTED = "submitted"  # отправлено без окончательного подтверждения (VK / модерация Яндекс)
     NEEDS_RELOGIN = "needs_relogin"  # сессия протухла — нужен ручной логин
+
+
+# Only explicit, bounded verification outcomes may be tagged with a cause.
+# An arbitrary browser exception is NOT evidence of a network failure.
+VerifyReason = Literal["no_match"]
+
+
+class VerifyFailed(Exception):
+    """A bounded post-click verification completed without finding a receipt."""
+
+    def __init__(self, reason: VerifyReason) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 @dataclass(frozen=True)

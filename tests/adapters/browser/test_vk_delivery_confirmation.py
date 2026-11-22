@@ -203,6 +203,10 @@ async def test_unconfirmed_send_is_submitted(
             result = await adapter.publish(content, publication_id=publication_id)
             assert result.status is ResultStatus.SUBMITTED
             assert result.external_id is None
+            expected_reason = (
+                None if scenario in {"list_error", "read_error", "id_error"} else "no_match"
+            )
+            assert result.error == expected_reason
             assert await store.is_done(publication_id, adapter.channel)
 
 
@@ -229,6 +233,7 @@ async def test_new_matching_receipt_confirms_delivery(
         result = await adapter.publish(content, publication_id=publication_id)
     assert result.status is ResultStatus.SUBMITTED
     assert result.external_id == ("wallnew" if module is vk_wall else "channel-itemnew")
+    assert result.error is None
     assert await store.is_done(publication_id, adapter.channel)
 
 
