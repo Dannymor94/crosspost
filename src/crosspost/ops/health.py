@@ -118,7 +118,9 @@ async def evaluate_readiness(
     try:
         async with asyncio.timeout(config.db_timeout_seconds):
             async with factory() as session:
-                await session.execute(text("SELECT 1"))
+                # A constant SELECT can succeed without touching the database file.
+                # Probe a mandatory schema table to detect broken/missing DBs.
+                await session.execute(text("SELECT 1 FROM profiles LIMIT 1"))
                 error_spike = False
                 if config.error_threshold:
                     since = now() - timedelta(minutes=config.error_window_minutes)

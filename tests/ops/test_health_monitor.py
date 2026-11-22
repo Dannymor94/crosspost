@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from crosspost.db.engine import create_engine_and_tables
 from crosspost.ops.health import HealthConfig, SchedulerProgress, evaluate_readiness
@@ -226,6 +226,26 @@ async def test_health_real_db_failure_is_503() -> None:
         app.state.scheduler_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await app.state.scheduler_task
+
+
+async def test_db_without_crosspost_schema_is_not_ready() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    task = asyncio.create_task(asyncio.sleep(3600))
+    try:
+        result = await evaluate_readiness(
+            factory,
+            scheduler_enabled=True,
+            scheduler_task=task,
+            progress=SchedulerProgress(),
+            config=HealthConfig(error_threshold=0),
+        )
+        assert not result.ready
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await engine.dispose()
 
 
 def test_probe_recognizes_degradation_without_transport_error(monkeypatch) -> None:
