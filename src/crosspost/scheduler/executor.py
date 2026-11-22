@@ -140,7 +140,6 @@ class ScheduledExecutor:
             self._max_attempts,
         )
         while True:
-            self.progress.pulse()
             try:
                 await self.run_once()
             except asyncio.CancelledError:

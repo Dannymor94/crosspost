@@ -34,6 +34,7 @@ async def ready(request: Request) -> JSONResponse:
         scheduler_task=getattr(app_state, "scheduler_task", None),
         progress=getattr(app_state, "scheduler_progress", None),
         config=config,
+        error_cache=getattr(app_state, "health_error_cache", None),
     )
     return JSONResponse(
         {"status": "ok" if result.ready else "unavailable", "error_spike": result.error_spike},

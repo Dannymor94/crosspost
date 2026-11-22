@@ -6,7 +6,9 @@ cannot self-report its own downtime.
 
 from __future__ import annotations
 
+import http.client
 import json
+import math
 import os
 import tempfile
 import time
@@ -37,6 +39,7 @@ class MonitorConfig:
             or url.query
             or url.fragment
             or self.timeout_seconds <= 0
+            or not math.isfinite(self.timeout_seconds)
         ):
             raise ValueError("Monitor needs an HTTPS URL (or local loopback), without credentials")
 
@@ -49,9 +52,13 @@ def probe_health(url: str, *, timeout_seconds: float = 5) -> str:
             if response.status != 200:
                 return "down"
             payload = json.loads(response.read(4096))
-    except (ValueError, OSError, TimeoutError, urllib.error.URLError):
+    except (ValueError, OSError, TimeoutError, urllib.error.URLError, http.client.HTTPException):
         return "down"
-    if not isinstance(payload, dict) or payload.get("status") != "ok":
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "ok"
+        or type(payload.get("error_spike")) is not bool
+    ):
         return "down"
     return "degraded" if payload.get("error_spike") is True else "up"
 
@@ -72,9 +79,19 @@ def send_telegram_alert(*, token: str, chat_id: str, state: str) -> None:
             request = urllib.request.Request(endpoint, data=body, method="POST")
             with urllib.request.urlopen(request, timeout=5) as response:
                 payload = json.loads(response.read(4096))
-                if response.status == 200 and payload.get("ok") is True:
+                if (
+                    response.status == 200
+                    and isinstance(payload, dict)
+                    and payload.get("ok") is True
+                ):
                     return
-        except (OSError, ValueError, TimeoutError, urllib.error.URLError):
+        except (
+            OSError,
+            ValueError,
+            TimeoutError,
+            urllib.error.URLError,
+            http.client.HTTPException,
+        ):
             pass  # secrets may appear in HTTP exceptions; suppress all details
         if attempt < 2:
             time.sleep(1)

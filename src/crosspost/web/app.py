@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from crosspost.config import load_config, parse_bool
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.db.scheduler_repo import SchedulerRepository
-from crosspost.ops.health import SchedulerProgress
+from crosspost.ops.health import ErrorSpikeCache, SchedulerProgress
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
 from crosspost.web.routes import (
@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)
     app.state.health_factory = factory
+    app.state.health_error_cache = ErrorSpikeCache()
 
     # Реконсиляция: посты, застрявшие в PUBLISHING после прошлого падения процесса,
     # вернуть в SCHEDULED (идемпотентность по (publication_id, канал, цель) не даст дублей).
@@ -142,6 +143,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.scheduler_task = None
         app.state.scheduler_enabled = None
         app.state.health_factory = None
+        app.state.health_error_cache = None
         await engine.dispose()
 
 
