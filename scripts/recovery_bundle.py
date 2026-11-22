@@ -8,6 +8,8 @@ actual no-egress application drill are separate operator responsibilities.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import hmac
 import json
@@ -63,6 +65,50 @@ def _require_valid_settings(path: Path) -> None:
         or ("browser_headless" in settings and not isinstance(settings["browser_headless"], bool))
     ):
         raise BundleError("runtime settings contain unexpected keys/types; review separately")
+
+
+def _settings_present(path: Path) -> bool:
+    """An absent settings.json is a supported fresh-deployment state."""
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise BundleError("runtime settings parent directory missing or symlinked")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(info.st_mode):
+        raise BundleError("runtime settings must be a regular file when present")
+    _require_valid_settings(path)
+    return True
+
+
+def _publish_directory_exclusive(staging: Path, target: Path) -> None:
+    """Publish a completed bundle atomically without replacing even an empty directory.
+
+    Linux renameat2(RENAME_NOREPLACE) matches the project's Docker/VPS target.
+    Fail closed elsewhere instead of silently falling back to os.rename(), which
+    can overwrite an existing empty directory during a check/rename race.
+    """
+    if sys.platform != "linux":
+        raise BundleError("atomic directory publication requires Linux renameat2")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise BundleError("atomic renameat2 unavailable; refusing unsafe publication")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(staging), -100, os.fsencode(target), 1)
+    if result == 0:
+        return
+    code = ctypes.get_errno()
+    if code in (errno.EEXIST, errno.ENOTEMPTY):
+        raise BundleError("recovery destination already exists; refusing overwrite")
+    raise BundleError(f"atomic directory publication failed (errno={code})")
 
 
 def _safe_relative(value: str) -> Path:
@@ -159,7 +205,7 @@ def backup_bundle(
     sqlite_backup._integrity_and_schema(database)
     _require_real_dir(media)
     _require_real_dir(profiles)
-    _require_valid_settings(settings)
+    settings_present = _settings_present(settings)
     media_root = media.resolve()
     profile_root = profiles.resolve()
     if _contained_or_equal(media_root, profile_root) or _contained_or_equal(
@@ -204,8 +250,9 @@ def backup_bundle(
             for relative in _walk_files(source):
                 _copy_and_list(source / relative, dest_root / relative, inventory, total)
                 inventory[-1]["path"] = (Path(group) / relative).as_posix()
-        _copy_and_list(settings, staging / "settings.json", inventory, total)
-        inventory[-1]["path"] = "settings.json"
+        if settings_present:
+            _copy_and_list(settings, staging / "settings.json", inventory, total)
+            inventory[-1]["path"] = "settings.json"
         if len(inventory) > MAX_FILES or total[0] > MAX_BYTES:
             raise BundleError("recovery inventory exceeds safety limit")
         meta = {
@@ -216,6 +263,7 @@ def backup_bundle(
             "keys_embedded": False,
             "encrypted": False,
             "quiesced_by_operator": True,
+            "settings_present": settings_present,
             "files": sorted(inventory, key=lambda item: item["path"]),
         }
         meta["hmac_sha256"] = _auth(meta, key)
@@ -228,7 +276,7 @@ def backup_bundle(
             os.fsync(stream.fileno())
         if target.exists() or target.is_symlink():
             raise BundleError("recovery bundle destination already exists")
-        os.rename(staging, target)
+        _publish_directory_exclusive(staging, target)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
@@ -254,6 +302,7 @@ def verify_bundle(bundle: Path) -> dict:
         or meta.get("encrypted") is not False
         or meta.get("keys_embedded") is not False
         or meta.get("quiesced_by_operator") is not True
+        or type(meta.get("settings_present")) is not bool
         or meta.get("vault_key_fingerprint_sha256") != hashlib.sha256(key).hexdigest()
         or not isinstance(signature, str)
         or not hmac.compare_digest(_auth(unsigned, key), signature)
@@ -293,7 +342,7 @@ def verify_bundle(bundle: Path) -> dict:
         or snapshot_name not in expected
         or not snapshot_name.startswith("database/")
         or not sqlite_backup.ARCHIVE_RE.fullmatch(Path(snapshot_name).name)
-        or "settings.json" not in expected
+        or ("settings.json" in expected) != meta["settings_present"]
     ):
         raise BundleError("recovery bundle missing required artifacts")
     if not (any(path.startswith("database/") and path.endswith(".json") for path in expected)):
@@ -304,7 +353,8 @@ def verify_bundle(bundle: Path) -> dict:
     if expected != actual:
         raise BundleError("recovery bundle contains missing/extra files")
     sqlite_backup.verify(bundle / _safe_relative(snapshot_name))
-    _require_valid_settings(bundle / "settings.json")
+    if meta["settings_present"]:
+        _require_valid_settings(bundle / "settings.json")
     return meta
 
 
@@ -327,9 +377,7 @@ def restore_bundle(bundle: Path, destination: Path) -> Path:
                 raise BundleError("restored file did not match authenticated inventory")
         _read_file(bundle / MANIFEST, staging / MANIFEST)
         verify_bundle(staging)
-        if destination.exists() or destination.is_symlink():
-            raise BundleError("restore destination appeared during restore; refusing overwrite")
-        os.rename(staging, destination)
+        _publish_directory_exclusive(staging, destination)
     finally:
         if staging.exists():
             shutil.rmtree(staging)

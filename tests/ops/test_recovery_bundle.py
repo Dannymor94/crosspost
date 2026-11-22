@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import sqlite3
@@ -296,4 +297,48 @@ def test_restore_rejects_authenticated_manifest_path_traversal(tmp_path, key):
     assert "unsafe recovery manifest path" in bad.stderr
     assert not target.exists()
     assert not (tmp_path / "escape.txt").exists()
+    conn.close()
+
+
+def test_absent_settings_json_is_authenticated_and_stays_absent_after_restore(tmp_path, key):
+    database, conn, media, profiles, settings = _sources(tmp_path)
+    settings.unlink()  # RuntimeSettings._load() legitimately defaults to {}.
+    bundle = _bundle(tmp_path, key, database, media, profiles, settings, "--quiesced")
+    assert isinstance(bundle, Path)
+    manifest = json.loads((bundle / "recovery_manifest.json").read_text())
+    assert manifest["settings_present"] is False
+    assert "settings.json" not in {entry["path"] for entry in manifest["files"]}
+    assert _run(tmp_path, key, "verify", "--bundle", str(bundle)).returncode == 0
+    target = tmp_path / "staging" / "recovered"
+    restored = _run(tmp_path, key, "restore", "--bundle", str(bundle), "--target", str(target))
+    assert restored.returncode == 0, restored.stderr
+    assert not (target / "settings.json").exists()
+    assert _run(tmp_path, key, "verify", "--bundle", str(target)).returncode == 0
+    conn.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux renameat2 RENAME_NOREPLACE contract")
+def test_rename_race_cannot_clobber_newly_created_empty_directory(tmp_path, key, monkeypatch):
+    database, conn, media, profiles, settings = _sources(tmp_path)
+    bundle = _bundle(tmp_path, key, database, media, profiles, settings, "--quiesced")
+    assert isinstance(bundle, Path)
+    monkeypatch.setenv("VAULT_KEY", key)
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    module = importlib.import_module("recovery_bundle")
+    real_publish = module._publish_directory_exclusive
+    destination = tmp_path / "staging" / "recovered"
+
+    def destination_appears_just_before_publish(source: Path, target: Path) -> None:
+        assert target == destination
+        target.mkdir(mode=0o700)  # Existing empty dirs are replaceable by os.rename().
+        real_publish(source, target)
+
+    monkeypatch.setattr(
+        module, "_publish_directory_exclusive", destination_appears_just_before_publish
+    )
+    with pytest.raises(module.BundleError, match="already exists"):
+        module.restore_bundle(bundle, destination)
+    assert destination.is_dir()
+    assert not list(destination.iterdir())
+    assert not list(destination.parent.glob(".recovery-restore-*"))
     conn.close()
