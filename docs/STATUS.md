@@ -19,7 +19,11 @@ Compose для одного FastAPI/SQLite процесса вместо Redis/P
 FastAPI остаётся на loopback хоста и в приватной Docker-сети. Публичный
 Instagram URL выводится из обязательного `CROSSPOST_DOMAIN` как HTTPS-origin,
 прокси-заголовки Uvicorn доверяет только статическому IP Caddy, сырые
-`/public-media/{token}` не пишутся в ingress/access logs. Независимый QA,
+`/public-media/{token}` не пишутся в ingress/access или error logs: глобальный
+runtime logger Caddy удаляет объект request и заголовки даже при 502.
+R2 устраняет находку независимого QA (P0 утечка URI в error log, P2 пустые
+разделители HTTPS-origin) и добавляет регрессионный Docker smoke.
+Повторный независимый QA,
 интеграция **после owner-merge T-301** и живой DNS/TLS/Instagram smoke — впереди.
 Это не подтверждение готовности сервера и не разрешение публичного запуска.
 

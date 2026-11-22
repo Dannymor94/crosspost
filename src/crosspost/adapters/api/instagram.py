@@ -115,6 +115,10 @@ def _public_base_url() -> str:
         or parsed.path not in ("", "/")
         or parsed.query
         or parsed.fragment
+        # urlsplit() returns empty strings for bare delimiters, yet they make
+        # the appended media path a query/fragment instead of a URL path.
+        or "?" in val
+        or "#" in val
         or (port is not None and not 1 <= port <= 65535)
         or any(char in val for char in ("\\", "%", "\r", "\n", "\t", " "))
         or _is_local_host(host)

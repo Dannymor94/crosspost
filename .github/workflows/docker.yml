@@ -122,6 +122,30 @@ jobs:
           docker compose exec -T app test -f /app/runtime/db.sqlite3
           docker compose exec -T app python -c 'import sys; assert sys.version_info[:2] == (3, 13)'
 
+      - name: Reject proxy error-log disclosure of signed URL and headers
+        run: |
+          # Disposable sentinel only: never put a real signed media token in CI.
+          docker compose stop app
+          code=$(curl --silent --show-error --insecure --output /dev/null \
+            --write-out '%{http_code}' --max-time 10 \
+            -H 'Authorization: Bearer QA_FAKE_HEADER_NEVER_LOG' \
+            'https://localhost/public-media/QA_FAKE_BEARER_DO_NOT_LOG')
+          if [ "$code" != 502 ]; then
+            echo "Expected 502 from intentionally stopped app; got $code"
+            exit 1
+          fi
+          docker compose logs --no-color caddy > /tmp/crosspost-caddy-runtime.log
+          if grep -F -e QA_FAKE_BEARER_DO_NOT_LOG \
+            -e QA_FAKE_HEADER_NEVER_LOG /tmp/crosspost-caddy-runtime.log; then
+            echo 'Caddy runtime error logs contain disposable request secret!'
+            exit 1
+          fi
+          # Do not accidentally pass if the reverse-proxy error was not logged.
+          if ! grep -F 'http.log.error' /tmp/crosspost-caddy-runtime.log; then
+            echo 'Expected Caddy runtime proxy error was not observed'
+            exit 1
+          fi
+
       - name: Diagnostics on failure
         if: failure()
         run: docker compose logs --tail=150 app caddy

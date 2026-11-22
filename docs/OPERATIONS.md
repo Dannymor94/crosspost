@@ -325,8 +325,13 @@ origin между Instagram и Caddy. В обычном CLI/dev разрешён
 Caddy **не монтирует** `runtime`, `backups` и `media`: `/public-media/{token}`
 передаётся в FastAPI без rewrite, где уже действуют HMAC/TTL/path confinement.
 Caddy access logs выключены, Uvicorn raw access logs тоже, поскольку token в URL
-является временным bearer credential. Не включать общий access log без надёжной
-маскировки сегмента `/public-media/{token}`.
+является временным bearer credential. **Глобальный Caddy runtime logger** также
+удаляет `request`/URI/заголовки из proxy-error записей (включая 502), сохраняя
+статус и диагностическую трассу. CI специально останавливает тестовый app,
+проверяет 502 на фиктивном `/public-media/QA_FAKE_BEARER_DO_NOT_LOG` и отсутствие
+этого маркера и фиктивного заголовка в `docker compose logs caddy`.
+Не включать общий access log и не менять runtime log formatter без повторного
+теста отсутствия сырого URL/headers; реальный токен для такого теста не нужен.
 
 **Доверие к прокси:** у Caddy статический IP
 `${CROSSPOST_PROXY_IP:-172.30.92.2}` в отдельном bridge subnet

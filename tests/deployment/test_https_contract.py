@@ -50,7 +50,13 @@ def test_no_access_log_contains_signed_route_token() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     caddyfile = (ROOT / "deploy/Caddyfile").read_text(encoding="utf-8")
     assert '"--no-access-log"' in dockerfile
+    # Site access logging remains disabled. The global runtime logger must
+    # sanitize upstream 502 errors, whose structured request includes the URI.
     assert "log {" not in caddyfile
+    assert "log default {" in caddyfile
+    assert "format filter {" in caddyfile
+    assert "request delete" in caddyfile
+    assert "wrap json" in caddyfile
 
 
 def test_docker_ci_validates_caddy_and_retains_t301_smoke() -> None:
@@ -59,6 +65,10 @@ def test_docker_ci_validates_caddy_and_retains_t301_smoke() -> None:
     assert "caddy validate" in workflow
     assert "docker compose config --quiet" in workflow
     assert "docker compose up -d --no-build" in workflow
+    assert "docker compose stop app" in workflow
+    assert "QA_FAKE_BEARER_DO_NOT_LOG" in workflow
+    assert "QA_FAKE_HEADER_NEVER_LOG" in workflow
+    assert "docker compose logs --no-color caddy" in workflow
     assert "docker compose down -v" not in workflow
 
 
