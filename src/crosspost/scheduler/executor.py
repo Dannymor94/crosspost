@@ -42,6 +42,7 @@ from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.db.vault import get_vault
+from crosspost.ops.health import SchedulerProgress
 from crosspost.orchestrator.adapter_factory import build_profile_adapter
 from crosspost.orchestrator.article_flow import StepResult, StepState, run_binding
 from crosspost.orchestrator.breaker import BreakerPolicy
@@ -86,6 +87,7 @@ class ScheduledExecutor:
         breaker_lease_seconds: float = 600.0,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: SleepFn = asyncio.sleep,
+        progress: SchedulerProgress | None = None,
     ) -> None:
         self._factory = session_factory
         self._max_attempts = max(1, max_attempts)
@@ -95,11 +97,17 @@ class ScheduledExecutor:
         self._breaker_policy = BreakerPolicy(breaker_cooldown_seconds, breaker_lease_seconds)
         self._clock = clock
         self._sleep = sleep
+        self.progress = progress or SchedulerProgress()
 
     # ── Конфигурация ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_env(cls, session_factory: async_sessionmaker[AsyncSession]) -> ScheduledExecutor:
+    def from_env(
+        cls,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        progress: SchedulerProgress | None = None,
+    ) -> ScheduledExecutor:
         """Построить исполнитель из env (значения инжектит load_config в lifespan)."""
         return cls(
             session_factory,
@@ -111,6 +119,7 @@ class ScheduledExecutor:
             ),
             breaker_cooldown_seconds=BreakerPolicy.from_env().cooldown_seconds,
             breaker_lease_seconds=BreakerPolicy.from_env().lease_seconds,
+            progress=progress,
         )
 
     # ── Публичный API ─────────────────────────────────────────────────────────
@@ -131,13 +140,17 @@ class ScheduledExecutor:
             self._max_attempts,
         )
         while True:
+            self.progress.pulse()
             try:
                 await self.run_once()
             except asyncio.CancelledError:
                 logger.info("scheduler executor stopped")
                 raise
             except Exception:  # noqa: BLE001 — тик не должен ронять демона
+                self.progress.failed()
                 logger.exception("scheduler tick failed")
+            else:
+                self.progress.succeeded()
             await self._sleep(self._poll)
 
     async def run_once(self, *, now: datetime | None = None) -> list[int]:
@@ -156,6 +169,7 @@ class ScheduledExecutor:
                 await self._sleep(self._pacing)  # разнос отправок (анти-бан)
             await self._process_post(post_id, now=moment)
             processed.append(post_id)
+            self.progress.pulse()
         return processed
 
     # ── Обработка одного поста ────────────────────────────────────────────────
