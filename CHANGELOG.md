@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-22 — OPS-207: комплект восстановления сервиса (Draft PR)
+
+- Новый операторский `scripts/recovery_bundle.py` использует существующий
+  WAL-safe SQLite backup и копирует медиа, браузерные профили и runtime settings.
+- Полный список файлов, размеры и SHA256 привязаны HMAC к внешнему `VAULT_KEY`;
+  missing/corrupt/extra files блокируют восстановление, существующий target
+  не перезаписывается. Восстановление выполняется только в новый staging-каталог.
+- Ключи не включаются; локальный архив не шифруется. Операторские выключение
+  записи, шифрованная offsite-копия, проверка escrow, no-egress drill и rollback
+  на собственном сервере остаются обязательными до production-ready.
+
 ## 2026-11-19 — safety fixes T-203-R2
 
 - Подтверждённые ban/auth сохраняют Connection даже для legacy credential без строки подключения; INSERT и UPDATE защищены снимком credential blob.
