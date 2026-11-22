@@ -1,0 +1,79 @@
+name: Docker deployment smoke
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - .github/workflows/docker.yml
+      - tests/deployment/**
+
+jobs:
+  build-and-persist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate disposable smoke credentials
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import secrets
+
+          values = {
+              "VAULT_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+              "SESSION_SECRET": secrets.token_hex(32),
+              "MEDIA_URL_SECRET": secrets.token_hex(32),
+              "SCHEDULER_ENABLED": "false",
+              "HEALTH_CHECK_ENABLED": "false",
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              for key, value in values.items():
+                  print(f"::add-mask::{value}")
+                  out.write(f"{key}={value}\n")
+          PY
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build Python and Chromium image
+        run: docker compose build --pull
+
+      - name: Start without external channels
+        run: docker compose up -d --no-build
+
+      - name: Verify application and persistent SQLite
+        run: |
+          ok=0
+          for _ in $(seq 1 45); do
+            if curl --silent --show-error --fail http://127.0.0.1:8001/ -o /dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then
+            docker compose logs --tail=150 app
+            exit 1
+          fi
+          docker compose exec -T app python -c 'import sqlite3; db = sqlite3.connect("runtime/db.sqlite3"); assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",); assert db.execute("select name from sqlite_master where type=\x27table\x27 and name=\x27profiles\x27").fetchone()'
+          docker compose exec -T app sh -c 'umask 077; printf T301-v1 > /app/runtime/.t301-volume-marker'
+
+      - name: Preserve both volumes across recreation
+        run: |
+          docker compose down
+          docker compose up -d --no-build
+          docker compose exec -T app sh -c 'test "$(cat /app/runtime/.t301-volume-marker)" = T301-v1'
+          docker compose exec -T app test -f /app/runtime/db.sqlite3
+          docker compose exec -T app python -c 'import sys; assert sys.version_info[:2] == (3, 13)'
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --tail=150 app
+
+      - name: Stop test services without deleting persistent volumes
+        if: always()
+        run: docker compose down

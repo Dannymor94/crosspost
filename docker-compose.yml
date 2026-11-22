@@ -1,17 +1,46 @@
-services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+# T-301 only: loopback HTTP for a future TLS reverse proxy (T-302).
+# Set required secrets in the server environment/secret manager, never in Git.
+name: crosspost
 
-  postgres:
-    image: postgres:16-alpine
+services:
+  app:
+    build: .
+    image: crosspost:local
+    init: true
+    restart: unless-stopped
+    # Do not expose unaudited admin routes on the public network before T-302/T-409.
+    ports:
+      - "127.0.0.1:${CROSSPOST_PORT:-8001}:8001"
     environment:
-      POSTGRES_USER: crosspost
-      POSTGRES_PASSWORD: crosspost
-      POSTGRES_DB: crosspost
-    ports: ["5432:5432"]
+      SESSION_SECRET: "${SESSION_SECRET:?Set SESSION_SECRET in the server environment}"
+      VAULT_KEY: "${VAULT_KEY:?Set VAULT_KEY in the server environment}"
+      MEDIA_URL_SECRET: "${MEDIA_URL_SECRET:?Set MEDIA_URL_SECRET in the server environment}"
+      DB_URL: "sqlite+aiosqlite:///runtime/db.sqlite3"
+      MEDIA_DIR: "runtime/media"
+      SCREENSHOT_DIR: "runtime/screenshots"
+      RUNTIME_SETTINGS_PATH: "runtime/settings.json"
+      BROWSER_PROFILES_DIR: "runtime/profiles"
+      BROWSER_HEADLESS: "${BROWSER_HEADLESS:-true}"
+      SCHEDULER_ENABLED: "${SCHEDULER_ENABLED:-true}"
+      SCHEDULER_POLL_SECONDS: "${SCHEDULER_POLL_SECONDS:-30}"
+      SCHEDULER_PACING_SECONDS: "${SCHEDULER_PACING_SECONDS:-5}"
+      SCHEDULER_MAX_ATTEMPTS: "${SCHEDULER_MAX_ATTEMPTS:-3}"
+      HEALTH_CHECK_ENABLED: "${HEALTH_CHECK_ENABLED:-true}"
+      HEALTH_CHECK_POLL_SECONDS: "${HEALTH_CHECK_POLL_SECONDS:-300}"
+      INSTAGRAM_PUBLIC_BASE_URL: "${INSTAGRAM_PUBLIC_BASE_URL:-}"
+      INSTAGRAM_PROXY_URL: "${INSTAGRAM_PROXY_URL:-}"
+      VK_PROXY_URL: "${VK_PROXY_URL:-}"
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - crosspost_runtime:/app/runtime
+      - crosspost_backups:/app/backups
+    shm_size: "1gb"  # Chromium: avoid /dev/shm exhaustion.
+    stop_grace_period: 120s
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
-  pgdata:
+  crosspost_runtime: {}
+  crosspost_backups: {}
