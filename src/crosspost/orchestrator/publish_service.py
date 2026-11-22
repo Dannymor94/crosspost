@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 # Статусы, которые считаем успехом канала (для single-shot step связки статьи).
 _SUCCESS_STATUSES = {PublicationStatus.DONE.value, PublicationStatus.SUBMITTED.value}
 
+_VERIFY_REASON_ALLOWLIST: frozenset[str] = frozenset({"no_match"})
+
+
+def _safe_verify_reason(raw: str | None) -> str | None:
+    """Persist only fixed verification reason codes, never adapter error contents."""
+    return raw if isinstance(raw, str) and raw in _VERIFY_REASON_ALLOWLIST else None
+
 
 def _error_str(exc: Exception) -> str:
     """Only the category is safe: platform text may echo credentials or signed URLs."""
@@ -431,7 +438,10 @@ class PublishService:
         )
         # Second line of defence: redact any signed media token an adapter's error
         # might carry before it reaches the DB or the API response.
-        safe_error = f"Ошибка площадки ({result.failure_kind.value})" if result.error else None
+        if status == PublicationStatus.SUBMITTED:
+            safe_error = _safe_verify_reason(result.error)
+        else:
+            safe_error = f"Ошибка площадки ({result.failure_kind.value})" if result.error else None
         await self._repo.set_status(
             publication_id,
             channel,
