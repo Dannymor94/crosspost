@@ -54,9 +54,7 @@ def test_prototype_role_and_moderation(width: int) -> None:
             assert view.locator(".item").filter(has_text="Проверка UX").count() == 0
             page.locator("#theme").click()
             assert page.locator("html").get_attribute("data-theme") == "dark"
-            assert page.evaluate(
-                "document.documentElement.scrollWidth <= innerWidth"
-            )
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors
             assert not requests
         finally:
