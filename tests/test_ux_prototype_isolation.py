@@ -18,7 +18,7 @@ def test_prototype_network_isolation_contract() -> None:
 
 @pytest.mark.parametrize("width", [390, 1440])
 def test_prototype_role_and_moderation(width: int) -> None:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import Request, sync_playwright
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -26,12 +26,11 @@ def test_prototype_role_and_moderation(width: int) -> None:
         errors: list[str] = []
         requests: list[str] = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on(
-            "request",
-            lambda request: requests.append(request.url)
-            if request.url.startswith(("http:", "https:"))
-            else None,
-        )
+        def record_request(request: Request) -> None:
+            if request.url.startswith(("http:", "https:")):
+                requests.append(request.url)
+
+        page.on("request", record_request)
         try:
             page.goto(PROTOTYPE.as_uri())
             view = page.locator("#view")
