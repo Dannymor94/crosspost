@@ -88,7 +88,8 @@ def test_prototype_r2_calendar_attention_and_layout(width: int) -> None:
             assert view.locator("#date").input_value() == "2026-11-27"
             page.locator("#role").select_option("admin")
             page.locator("#profile").select_option("yoga")
-            assert view.locator('[data-action="metric:attention"] b').inner_text() == "1"
+            count = view.locator('[data-action="metric:attention"] b')
+            assert count.inner_text() == "1"
             if width > 640:
                 page.locator("#collapse").click()
                 assert page.locator(".shell.collapsed").count() == 1
