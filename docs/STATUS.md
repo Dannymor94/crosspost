@@ -113,3 +113,7 @@ CLI (`python -m crosspost post --to …`) использует свой набо
 проверка SHA256/HMAC и `VAULT_KEY`, восстановление только в новый файл, контролируемая
 ротация. Боевой бэкап и операторское восстановление реальной копии ещё **не выполнялись**;
 production-ready не заявляется. Подробности: [OPERATIONS.md §6](OPERATIONS.md).
+
+## UX 2.0 — планирование (2026-11-24)
+
+Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.

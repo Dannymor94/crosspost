@@ -93,3 +93,7 @@ UI показывает нейтральное состояние, без зел
 
 Точное подтверждение для VK вернётся после живого smoke владельца в фазе 3,
 в рамках T-502 (реальные квитанции); новые DOM-селекторы/форматы ответов не угадываются.
+
+## 2026-11-24 — Crosspost UX 2.0, Web first, Telegram later
+
+Владелец согласовал направление UX 2.0 и включение будущего Telegram-бота, но не его текущую реализацию. Единый backend/БД/планировщик, разделение admin/client, mobile-first, общая дизайн-система, модульность без обязательного переписывания frontend. Критические инварианты до UI-функций: server-side moderation, durable request idempotency, timezone contract, сохранность черновиков. T-212 не разблокируется; T-209 сохраняется. Telegram Companion и optional Mini App только после основного Web и отдельного согласования, те же права и guards. Детали и критерии: [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Цвета, внутренние persistence/time миграции, индивидуальные тексты и расширения API уточняются в своих задачах; production gates не меняются.
