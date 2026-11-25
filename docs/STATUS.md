@@ -121,3 +121,6 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 ## T-216 — persistent admission ledger (draft, first slice)
 
 Added isolated reservation repository and additive Alembic migration; one winner, stable publication ID, scoped conflict, replay never reacquires after restart. No HTTP route or UI wired yet. No guarantee against current production duplicates until integration and QA. See [T-216.md](T-216.md). Retention policy, scope lifecycle, completion/reconciliation and atomic scheduled insertion require review before activation.
+
+### T-216 second slice (draft)
+Opt-in immediate HTTP admission via Idempotency-Key, with generic replay conflict and no redispatch. Legacy API without key, scheduled, and client UI not protected by this slice. Result recovery still open. CI and integration with T-215 pending.

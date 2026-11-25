@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from crosspost.channels.validators import PLATFORM_ORDER, VALIDATORS
@@ -51,6 +51,7 @@ from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
+from crosspost.web.operation_admission import reserve_immediate
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,8 @@ async def publish_targets(
 async def publish_now(
     profile_id: int,
     session: SessionDep,
+    user: CurrentUser,
+    operation_key: str | None = Header(None, alias="Idempotency-Key"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -582,7 +585,25 @@ async def publish_now(
         video_bytes=_vbytes,
     )
 
-    publication_id = new_publication_id()
+    if operation_key is None:
+        publication_id = new_publication_id()
+    else:
+        publication_id = await reserve_immediate(
+            session,
+            actor_id=user.id,
+            profile_id=profile_id,
+            operation_key=operation_key,
+            fields={
+                "content_type": content_type,
+                "text": text,
+                "title": title,
+                "channels": [[s.channel, s.target_id] for s in selections],
+                "article_text": article_text,
+                "link_phrase": link_phrase,
+                "image": image,
+            },
+            media=media,
+        )
     media_paths = await _save_media(media, publication_id)
     if not media_paths and image.strip():
         from crosspost.db.settings_repo import ProfileSettingsRepository

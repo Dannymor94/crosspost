@@ -2995,3 +2995,41 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t216_keyed_immediate_only_dispatches_once(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    adapter = _MockAdapter("telegram")
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): adapter})
+    headers = {"Idempotency-Key": "a" * 32}
+    data = {"text": "once", "channels": '["telegram"]'}
+    url = f"/api/profiles/{pid}/publish"
+    with ctx:
+        first = await client.post(url, data=data, headers=headers, files=_post_files())
+        assert first.status_code == 200, first.text
+        publish._RUNS.clear()
+        replay = await client.post(url, data=data, headers=headers, files=_post_files())
+        changed = await client.post(
+            url, data={**data, "text": "changed"}, headers=headers, files=_post_files()
+        )
+        new = await client.post(
+            url, data=data, headers={"Idempotency-Key": "b" * 32}, files=_post_files()
+        )
+    assert replay.status_code == changed.status_code == 409
+    assert replay.json() == changed.json()
+    assert new.status_code == 200, new.text
+    assert first.json()["publication_id"] != new.json()["publication_id"]
+    assert len(calls) == 2
+
+
+async def test_t216_keyed_immediate_invalid_key_does_not_dispatch(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        response = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers={"Idempotency-Key": "bad"},
+        )
+    assert response.status_code == 422
+    assert calls == []
