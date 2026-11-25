@@ -73,3 +73,12 @@ def test_audit_does_not_modify_backup(tmp_path):
         "invalid",
     ]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+def test_utc_due_ignores_legacy_wall_time():
+    from crosspost.scheduler.schedule_time import schedule_is_due
+
+    wall = datetime(2027, 1, 1, 23)
+    instant = datetime(2027, 1, 1, 10)
+    assert not schedule_is_due(wall, instant, datetime(2027, 1, 1, 9, 59, tzinfo=UTC))
+    assert schedule_is_due(wall, instant, datetime(2027, 1, 1, 10, tzinfo=UTC))

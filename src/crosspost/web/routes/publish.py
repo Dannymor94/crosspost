@@ -23,11 +23,11 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from crosspost.channels.validators import PLATFORM_ORDER, VALIDATORS
@@ -49,7 +49,7 @@ from crosspost.orchestrator.publish_service import (
 )
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
-from crosspost.scheduler.schedule_time import legacy_schedule_time
+from crosspost.scheduler.schedule_time import legacy_schedule_time, parse_instant, schedule_iso
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.signed_media import redact_media_tokens
@@ -184,6 +184,7 @@ class ScheduledOut(BaseModel):
     # Round-trip формы сохраняется; нормализацию в единицы делает executor.
     channels: list[str | dict]
     scheduled_at: str
+    time_basis: str = "legacy_local"
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
     media_paths: list[str] = []  # пути к файлам медиа (для показа в форме редактирования)
@@ -706,6 +707,7 @@ async def schedule_post(
     session: SessionDep,
     user: CurrentUser,
     scheduled_at: str = Form(...),
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -718,8 +720,16 @@ async def schedule_post(
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
 
+    utc_time = None
+    if time_contract not in (None, "utc-v1"):
+        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
     try:
-        when = legacy_schedule_time(scheduled_at)
+        if time_contract == "utc-v1":
+            instant = parse_instant(scheduled_at)
+            utc_time = instant.replace(tzinfo=None)
+            when = instant.astimezone().replace(tzinfo=None)
+        else:
+            when = legacy_schedule_time(scheduled_at)
     except (ValueError, OverflowError) as exc:
         raise HTTPException(
             status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
@@ -782,6 +792,7 @@ async def schedule_post(
         media_paths=media_paths,
         channels=channel_list,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         article_text=article_text or None,
         link_phrase=link_phrase or None,
         initial_status=initial_status,
@@ -850,7 +861,7 @@ async def scheduled_report(
                 id=post.id,
                 content_type=post.content_type,
                 text=post.text,
-                scheduled_at=post.scheduled_at.isoformat(),
+                scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
                 cursor=post.published_at.isoformat(),
                 overall=_overall_status(outcomes),
                 outcomes=outcomes,
@@ -959,7 +970,11 @@ RescheduleBody = PatchScheduledBody
 
 @router.patch("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
 async def reschedule(
-    profile_id: int, scheduled_id: int, body: PatchScheduledBody, session: SessionDep
+    profile_id: int,
+    scheduled_id: int,
+    body: PatchScheduledBody,
+    session: SessionDep,
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
 ) -> ScheduledOut:
     """Редактировать запланированный пост: текст, цели, время. Изоляция по profile_id."""
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -982,14 +997,27 @@ async def reschedule(
         )
 
     when: datetime | None = None
+    utc_time: datetime | None = None
+    if time_contract not in (None, "utc-v1"):
+        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
     if body.scheduled_at is not None:
         try:
-            when = legacy_schedule_time(body.scheduled_at)
+            if time_contract == "utc-v1" or post.scheduled_at_utc is not None:
+                instant = parse_instant(body.scheduled_at)
+                utc_time = instant.replace(tzinfo=None)
+                when = instant.astimezone().replace(tzinfo=None)
+            else:
+                when = legacy_schedule_time(body.scheduled_at)
         except (ValueError, OverflowError) as exc:
             raise HTTPException(
                 status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
             ) from exc
-        if when < datetime.now() - timedelta(seconds=60):
+        past = (
+            utc_time < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=60)
+            if utc_time is not None
+            else when < datetime.now() - timedelta(seconds=60)
+        )
+        if past:
             raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
 
     # Разрешаем медиа ДО CAS: если источник невалиден — 422 без записи в БД.
@@ -1012,6 +1040,7 @@ async def reschedule(
         text=body.text,
         channels=body.channels,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         media_paths=new_media_paths,
         rewind_failed=True,
     )
@@ -1333,7 +1362,8 @@ def _scheduled_out(post) -> ScheduledOut:
         text=post.text,
         title=post.title,
         channels=list(post.channels or []),
-        scheduled_at=post.scheduled_at.isoformat(),
+        scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
+        time_basis="utc" if post.scheduled_at_utc is not None else "legacy_local",
         status=str(post.status),
         has_article=bool(post.article_text),
         media_paths=list(post.media_paths or []),

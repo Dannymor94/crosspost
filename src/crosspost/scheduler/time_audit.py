@@ -26,7 +26,7 @@ def audit(path: Path, assumed_zone: str) -> dict:
             "ORDER BY id"
         )
         for row_id, profile_id, status, value in result:
-            candidates = ()
+            candidates: tuple[datetime, ...] = ()
             try:
                 if not isinstance(value, str):
                     raise ValueError("Invalid timestamp type")

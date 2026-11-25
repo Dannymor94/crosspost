@@ -120,3 +120,6 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 ## T-217 — первая безопасная часть (draft)
 Create/PATCH use one offset-to-legacy-local helper, avoiding silent offset stripping on new writes. Existing naive rows unchanged. Added explicit UTC instant/DST primitives and read-only active-queue inventory on a backup. UTC storage cutover, profile zone, import, report and frontend still open; no production audit or migration executed. See [T-217.md](T-217.md). CI/QA pending.
+
+### T-217 second slice (draft)
+Opt-in UTC column and API contract, UTC due comparison and time-fenced claim. No rewrite of existing rows. Fixed audit type annotation. CI pending; T-216 migration graph reconciliation and legacy review required before activation.

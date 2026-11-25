@@ -47,3 +47,21 @@ def legacy_schedule_time(value: str) -> datetime:
     if first != instant or second != instant:
         raise ValueError("Ambiguous server-local time; choose another time")
     return wall
+
+
+def utc_naive(value: datetime) -> datetime:
+    """Explicit instant for SQLite; naive clock values retain legacy local meaning."""
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def schedule_is_due(wall: datetime, instant: datetime | None, now: datetime) -> bool:
+    if instant is not None:
+        return instant <= utc_naive(now)
+    local_now = now.astimezone().replace(tzinfo=None) if now.tzinfo is not None else now
+    return wall <= local_now
+
+
+def schedule_iso(wall: datetime, instant: datetime | None) -> str:
+    if instant is not None:
+        return instant.replace(tzinfo=UTC).isoformat()
+    return wall.isoformat()
