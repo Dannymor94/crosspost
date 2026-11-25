@@ -34,6 +34,7 @@ def test_prototype_role_and_moderation(width: int) -> None:
         page.on("request", record_request)
         try:
             page.goto(PROTOTYPE.as_uri())
+            page.get_by_role("button", name="Войти", exact=True).click()
             view = page.locator("#view")
             view.get_by_role("button", name="+ Создать пост", exact=True).click()
             page.locator("#post-text").fill("Проверка UX")
@@ -69,6 +70,7 @@ def test_prototype_r2_calendar_attention_and_layout(width: int) -> None:
         page = browser.new_page(viewport={"width": width, "height": 900})
         try:
             page.goto(PROTOTYPE.as_uri())
+            page.get_by_role("button", name="Войти", exact=True).click()
             view = page.locator("#view")
             attention = view.locator('[data-action="metric:attention"]')
             assert attention.locator("b").inner_text() == "3"
@@ -111,6 +113,7 @@ def test_prototype_client_onboarding(width: int) -> None:
         page = browser.new_page(viewport={"width": width, "height": 900})
         try:
             page.goto(PROTOTYPE.as_uri())
+            page.get_by_role("button", name="Войти", exact=True).click()
             view = page.locator("#view")
             page.locator("#role").select_option("admin")
             nav = page.locator("#nav" if width == 1440 else "#mobile")
@@ -135,6 +138,30 @@ def test_prototype_client_onboarding(width: int) -> None:
             page.locator("#role").select_option("admin")
             page.locator("#role").select_option("client")
             assert "Новый клиент (демо)" in page.locator("#context-name").inner_text()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        finally:
+            browser.close()
+
+
+def test_prototype_auth_entry_and_recovery() -> None:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 900})
+        try:
+            page.goto(PROTOTYPE.as_uri())
+            assert page.locator(".auth-shell").count() == 1
+            assert not page.locator("#mobile").is_visible()
+            page.locator("#login-pass").fill("incorrect-demo")
+            page.get_by_role("button", name="Войти", exact=True).click()
+            assert "Не удалось войти" in page.get_by_role("alert").inner_text()
+            page.get_by_role("button", name="Забыли пароль?").click()
+            assert "владельцу Crosspost" in page.locator("#view").inner_text()
+            page.get_by_role("button", name="Вернуться ко входу").click()
+            page.get_by_role("button", name="Войти", exact=True).click()
+            assert page.locator(".auth-shell").count() == 0
+            assert page.locator("#mobile").is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         finally:
             browser.close()

@@ -25,6 +25,11 @@ def main():
                 assert not errors, errors
                 print(f"PASS {width} {label}", flush=True)
 
+            shot("login-light")
+            page.get_by_role("button", name="Забыли пароль?").click()
+            shot("recover")
+            page.get_by_role("button", name="Вернуться ко входу").click()
+            page.get_by_role("button", name="Войти", exact=True).click()
             shot("client-home-light")
             nav.get_by_role("button", name="Календарь", exact=True).click()
             shot("client-calendar-week")
