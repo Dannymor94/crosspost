@@ -123,3 +123,6 @@ Create/PATCH use one offset-to-legacy-local helper, avoiding silent offset strip
 
 ### T-217 second slice (draft)
 Opt-in UTC column and API contract, UTC due comparison and time-fenced claim. No rewrite of existing rows. Fixed audit type annotation. CI pending; T-216 migration graph reconciliation and legacy review required before activation.
+
+### T-217 third slice (draft)
+Profile IANA timezone setting (admin write, scoped read), server wall-time resolution, DST rejection and UTC editor create/PATCH. Read-only audit uses SQLAlchemy. Import, full mixed-list display and integration remain open. CI/QA pending.

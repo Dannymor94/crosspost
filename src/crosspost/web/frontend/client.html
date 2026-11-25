@@ -333,6 +333,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="https://unpkg.com/preact@10.24.3/dist/preact.umd.js"></script>
 <script src="https://unpkg.com/preact@10.24.3/hooks/dist/hooks.umd.js"></script>
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+<script src="/static/schedule-time.js"></script>
 <script>
 const { useState, useEffect, useRef, useCallback } = preactHooks;
 const html = htm.bind(preact.h);
@@ -345,11 +346,11 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }),
-  postForm: (url, fd) => fetch(url, { method: 'POST', credentials: 'include', body: fd }),
+  postForm: (url, fd, headers) => fetch(url, { method: 'POST', credentials: 'include', body: fd, headers }),
   del: (url) => fetch(url, { method: 'DELETE', credentials: 'include' }),
-  patch: (url, body) => fetch(url, {
+  patch: (url, body, extraHeaders = {}) => fetch(url, {
     method: 'PATCH', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify(body)
   }),
 };
@@ -406,9 +407,22 @@ function LoginView({ onLogin }) {
   `;
 }
 
+function useScheduleZone(pid) {
+  const [zone, setZone] = useState(null);
+  useEffect(() => {
+    let active = true;
+    setZone(null);
+    window.CrosspostTime.get(`/api/profiles/${pid}`).then(z => { if (active) setZone(z); })
+      .catch(() => { if (active) setZone(null); });
+    return () => { active = false; };
+  }, [pid]);
+  return zone;
+}
+
 // ── Compose ────────────────────────────────────────────────────────────────────
 function ComposeView({ user }) {
   const pid = user.profile_id;
+  const zone = useScheduleZone(pid);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
   const [text, setText] = useState('');
@@ -496,17 +510,18 @@ function ComposeView({ user }) {
         if (feedback.error) { setErr(feedback.error); return; }
         setSuccess(feedback);
       } else {
-        fd.append('scheduled_at', new Date(scheduledAt).toISOString());
-        const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd);
-        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
+        const instant = await window.CrosspostTime.resolve(`/api/profiles/${pid}`, scheduledAt, zone);
+        fd.append('scheduled_at', instant);
+        const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd, {'X-Schedule-Time-Contract': 'utc-v1'});
+        if (!r.ok) { const body = await r.json().catch(() => ({})); setErr(body.detail || 'Не удалось запланировать.'); return; }
         const post = await r.json();
         if (post.status === 'pending_approval') {
           setSuccess({ msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' });
         } else {
-          setSuccess({ msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' });
+          setSuccess({ msg: `Пост выйдет ${window.CrosspostTime.label(post.scheduled_at, zone)}.`, sub: '' });
         }
       }
-    } catch { setErr('Нет связи. Попробуйте ещё раз.'); }
+    } catch (e) { setErr(e.message || 'Нет связи. Проверьте результат.'); }
     finally { setBusy(false); submitting.current = false; }
   }
 
@@ -583,6 +598,7 @@ function ComposeView({ user }) {
         </div>
         ${when === 'later' && html`
           <div style="margin-top:12px">
+            <p class="video-warn">${zone ? `Часовой пояс: ${zone}` : "Попросите администратора настроить часовой пояс профиля."}</p>
             <input type="datetime-local" value=${scheduledAt} onInput=${e => setScheduledAt(e.target.value)} />
           </div>
         `}
@@ -590,7 +606,7 @@ function ComposeView({ user }) {
 
       ${err && html`<div class="error-msg">${err}</div>`}
 
-      <button class="btn btn-primary" onClick=${submit} disabled=${busy || eligibleTargets.length === 0}>
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || (when === 'later' && !zone) || eligibleTargets.length === 0}>
         ${busy ? html`<span class="spinner"></span>` : null}
         ${busy ? 'Отправляем…' : 'Отправить'}
       </button>
@@ -609,7 +625,7 @@ function publicationFeedback(outcomes) {
 }
 
 // ── My Posts ───────────────────────────────────────────────────────────────────
-function PostCard({ post, onCancel }) {
+function PostCard({ post, onCancel, zone }) {
   const [editing, setEditing] = useState(false);
   const [newTime, setNewTime] = useState('');
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -624,12 +640,13 @@ function PostCard({ post, onCancel }) {
 
   return html`
     <div class="post-card">
-      <div class="post-meta">${fmtDate(post.scheduled_at)}</div>
+      <div class="post-meta">${window.CrosspostTime.label(post.scheduled_at, zone)}</div>
       ${badge}
       ${post.reject_reason && html`<div class="cancel-reason">Причина: ${post.reject_reason}</div>`}
       <div class="post-text">${post.text.slice(0, 80)}${post.text.length > 80 ? '…' : ''}</div>
       ${editing ? html`
         <div style="margin-bottom:10px">
+          <p>${zone || "Часовой пояс не настроен"}</p>
           <input type="datetime-local" value=${newTime} onInput=${e => setNewTime(e.target.value)}
             style="width:100%; margin-bottom:8px" />
           <div style="display:flex; gap:8px">
@@ -637,11 +654,12 @@ function PostCard({ post, onCancel }) {
               onClick=${async () => {
                 if (!newTime) return;
                 try {
+                  const instant = await window.CrosspostTime.resolve(`/api/profiles/${post._pid}`, newTime, zone);
                   const r = await api.patch(`/api/profiles/${post._pid}/scheduled/${post.id}`,
-                    { scheduled_at: new Date(newTime).toISOString() });
+                    { scheduled_at: instant }, {'X-Schedule-Time-Contract': 'utc-v1'});
                   if (r.ok) { onCancel(post.id, 'patched'); setEditing(false); }
                   else setErr('Не удалось изменить время.');
-                } catch { setErr('Нет связи.'); }
+                } catch (e) { setErr(e.message); }
               }}>Сохранить</button>
             <button class="btn btn-ghost" style="flex:1; font-size:15px; padding:10px"
               onClick=${() => setEditing(false)}>Отмена</button>
@@ -680,6 +698,7 @@ function PostCard({ post, onCancel }) {
 
 function PostsView({ user }) {
   const pid = user.profile_id;
+  const zone = useScheduleZone(pid);
   const [posts, setPosts] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -708,7 +727,7 @@ function PostsView({ user }) {
   return html`
     <div>
       <div class="section-title">Ближайшие</div>
-      ${posts.map(p => html`<${PostCard} key=${p.id} post=${p} onCancel=${handleAction} />`)}
+      ${posts.map(p => html`<${PostCard} key=${p.id} post=${p} onCancel=${handleAction} zone=${zone} />`)}
     </div>
   `;
 }

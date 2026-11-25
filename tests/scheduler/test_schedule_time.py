@@ -82,3 +82,20 @@ def test_utc_due_ignores_legacy_wall_time():
     instant = datetime(2027, 1, 1, 10)
     assert not schedule_is_due(wall, instant, datetime(2027, 1, 1, 9, 59, tzinfo=UTC))
     assert schedule_is_due(wall, instant, datetime(2027, 1, 1, 10, tzinfo=UTC))
+
+
+def test_audit_recognizes_canonical_utc_without_guessing(tmp_path):
+    path = tmp_path / "canonical.sqlite"
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(
+            "CREATE TABLE scheduled_posts "
+            "(id INTEGER, profile_id INTEGER, status TEXT, scheduled_at TEXT, scheduled_at_utc TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO scheduled_posts VALUES (1, 1, 'scheduled', ?, ?)",
+            ("2027-01-01T12:00:00", "2027-01-01T10:00:00"),
+        )
+        conn.commit()
+    row = audit(path, "Europe/Berlin")["rows"][0]
+    assert row["classification"] == "authoritative_utc"
+    assert row["utc_candidates"] == ["2027-01-01T10:00:00+00:00"]

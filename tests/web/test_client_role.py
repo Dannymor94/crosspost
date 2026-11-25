@@ -141,3 +141,22 @@ def test_reject_body_optional(seeded_app):
     # Post doesn't exist → 404/409, but no 422 (body parsing should succeed)
     r = c.post("/api/profiles/1/scheduled/9999/reject", json={})
     assert r.status_code in (404, 409)
+
+
+def test_schedule_timezone_scope_and_dst_resolution(seeded_app):
+    c = seeded_app
+    assert c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"}).status_code == 200
+    base = "/api/profiles/1"
+    assert c.get(base + "/settings/timezone").json() == {"zone": None}
+    assert c.put(base + "/settings/timezone", json={"zone": "Invalid/Zone"}).status_code == 422
+    assert c.put(base + "/settings/timezone", json={"zone": "Europe/Berlin"}).status_code == 200
+    assert c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"}).status_code == 200
+    assert c.get(base + "/settings/timezone").json() == {"zone": "Europe/Berlin"}
+    assert c.put(base + "/settings/timezone", json={"zone": "UTC"}).status_code == 403
+    assert c.get("/api/profiles/9999/settings/timezone").status_code == 403
+    url = base + "/scheduled/resolve-time"
+    for wall in ["2027-03-28T02:30", "2027-10-31T02:30"]:
+        assert c.post(url, json={"wall": wall, "zone": "Europe/Berlin"}).status_code == 422
+    result = c.post(url, json={"wall": "2027-01-01T12:00", "zone": "Europe/Berlin"})
+    assert result.json() == {"instant": "2027-01-01T11:00:00+00:00"}
+    assert c.post(url, json={"wall": "2027-01-01T12:00", "zone": "UTC"}).status_code == 409

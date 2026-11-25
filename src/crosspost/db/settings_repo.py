@@ -83,3 +83,12 @@ class ProfileSettingsRepository:
 
     async def set_client_moderation(self, enabled: bool) -> None:
         await self.set(_KEY_CLIENT_MODERATION, {"enabled": enabled})
+
+
+    async def get_schedule_timezone(self) -> str | None:
+        value = await self.get("schedule_timezone")
+        zone = value.get("zone") if value else None
+        return zone if isinstance(zone, str) else None
+
+    async def set_schedule_timezone(self, zone: str) -> None:
+        await self.set("schedule_timezone", {"zone": zone})
