@@ -2995,3 +2995,52 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t217_create_and_patch_share_offset_normalization(client, factory):
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    instant = datetime.now(UTC) + timedelta(days=30)
+    value = instant.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()
+    result = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={"text": "offset", "channels": '["telegram"]', "scheduled_at": value},
+    )
+    assert result.status_code == 200, result.text
+    sid = result.json()["id"]
+    expected = instant.astimezone().replace(tzinfo=None)
+    stored = await client.get(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert datetime.fromisoformat(stored.json()["scheduled_at"]) == expected
+    changed = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sid}",
+        json={"scheduled_at": instant.isoformat()},
+    )
+    assert changed.status_code == 200, changed.text
+    assert datetime.fromisoformat(changed.json()["scheduled_at"]) == expected
+
+
+async def test_t217_explicit_utc_round_trip_and_no_naive_downgrade(client, factory):
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    instant = (datetime.now(UTC) + timedelta(days=30)).replace(microsecond=0)
+    value = instant.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()
+    base = f"/api/profiles/{pid}/scheduled"
+    response = await client.post(
+        base,
+        data={"text": "utc", "channels": '["telegram"]', "scheduled_at": value},
+        headers={"X-Schedule-Time-Contract": "utc-v1"},
+    )
+    assert response.status_code == 200, response.text
+    post = response.json()
+    assert post["time_basis"] == "utc"
+    assert post["scheduled_at"] == instant.isoformat()
+    url = f"{base}/{post['id']}"
+    denied = await client.patch(url, json={"scheduled_at": "2099-01-01T10:00:00"})
+    assert denied.status_code == 422
+    later = instant + timedelta(hours=1)
+    updated = await client.patch(url, json={"scheduled_at": later.isoformat()})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["scheduled_at"] == later.isoformat()
+    assert updated.json()["time_basis"] == "utc"
