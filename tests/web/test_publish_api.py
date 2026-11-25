@@ -3269,3 +3269,52 @@ async def test_ux01_keyed_client_cannot_bypass_moderation(client, factory):
         "state": "scheduled_created",
         "outcomes": [{"scheduled_id": str(first.json()["id"]), "status": "pending_approval"}],
     }
+
+
+async def test_ux01_moderated_keyed_utc_schedule(client, factory):
+    from datetime import datetime, timedelta
+
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as session:
+        settings = ProfileSettingsRepository(session, profile_id=pid)
+        await settings.set_client_moderation(True)
+        await settings.set_schedule_timezone("Europe/Berlin")
+        user = await UserRepository(session).create_user(
+            "utc-client", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    base = f"/api/profiles/{pid}"
+    instant = (datetime.now(UTC) + timedelta(days=30)).replace(microsecond=0)
+    headers = {
+        "Idempotency-Key": "9" * 32,
+        "Idempotency-Recovery": "a" * 64,
+        "X-Schedule-Time-Contract": "utc-v1",
+    }
+    data = {
+        "text": "utc approval",
+        "channels": '["telegram"]',
+        "scheduled_at": instant.isoformat(),
+    }
+    denied = await client.post(base + "/publish", data=data, headers=headers)
+    assert denied.status_code == 403
+    first = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert first.status_code == 200, first.text
+    row = first.json()
+    assert row["status"] == "pending_approval"
+    assert row["time_basis"] == "utc"
+    assert row["scheduled_at"] == instant.isoformat()
+    repeat = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert repeat.status_code == 409
+    assert len((await client.get(base + "/scheduled")).json()) == 1
+    receipt = await client.get(base + "/operation-status", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    assert receipt.json()["state"] == "scheduled_created"
+    assert receipt.json()["outcomes"] == [
+        {"scheduled_id": str(row["id"]), "status": "pending_approval"}
+    ]
