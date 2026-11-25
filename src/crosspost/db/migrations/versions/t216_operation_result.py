@@ -17,15 +17,13 @@ def upgrade() -> None:
             "publication_operations", sa.Column("recovery_hash", sa.String(64), nullable=True)
         )
     if "result_summary" not in columns:
-        op.add_column("publication_operations", sa.Column("result_summary", sa.JSON(), nullable=True))
+        column = sa.Column("result_summary", sa.JSON(), nullable=True)
+        op.add_column("publication_operations", column)
 
 
 def downgrade() -> None:
-    count = (
-        op.get_bind()
-        .execute(sa.text("SELECT COUNT(*) FROM publication_operations"))
-        .scalar()
-    )
+    stmt = sa.text("SELECT COUNT(*) FROM publication_operations")
+    count = op.get_bind().execute(stmt).scalar()
     if count:
         raise RuntimeError("Refusing to discard operation recovery evidence")
     op.drop_column("publication_operations", "result_summary")

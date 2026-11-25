@@ -130,3 +130,6 @@ Read-only recovery with separate secret and bound scope; durable safe result sum
 
 ### T-216 fourth slice (draft)
 Keyed scheduled creation: reservation, post and initial receipt commit together; pre-commit rollback of both rows. Read-only creation receipt recovery. Legacy calls unchanged; keyed external URL media not supported yet. Direct-upload staging may retain orphan media. CI/QA pending.
+
+### T-216 fifth slice (draft)
+Both editors use shared operation guard with local pending proof, browser lock and read-only recovery. No automatic resend. Unknown operation remains blocked; no admin resolution yet. Direct-upload-only keyed scheduling, import and legacy API not covered. CI/QA pending.
