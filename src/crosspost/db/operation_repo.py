@@ -1,0 +1,85 @@
+"""T-216 admission primitive. No external effects and no automatic re-acquisition."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from crosspost.db.models import PublicationOperation
+from crosspost.orchestrator.task import new_publication_id
+
+
+class OperationConflict(Exception):
+    """Key is bound to another request or scope; never expose the existing row."""
+
+
+@dataclass(frozen=True)
+class Reservation:
+    publication_id: str
+    acquired: bool
+
+
+class OperationRepository:
+    """Reserve once in SQLite, using a dedicated short-lived session.
+
+    An acquired reservation MUST commit before an external side effect.
+    A replay only returns its stable ID: it must not dispatch, even after restart.
+    Authenticated actor and profile are supplied by the server, not the body.
+    """
+
+    def __init__(self, session: AsyncSession, *, profile_id: int, actor_id: int) -> None:
+        self._s = session
+        self._profile_id = profile_id
+        self._actor_id = actor_id
+
+    async def reserve(self, operation_id: str, *, kind: str, fingerprint: str) -> Reservation:
+        if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+            raise ValueError("invalid operation ID")
+        if kind not in {"immediate", "scheduled"}:
+            raise ValueError("invalid operation kind")
+        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            raise ValueError("invalid request fingerprint")
+        if self._profile_id <= 0 or self._actor_id <= 0:
+            raise ValueError("invalid operation scope")
+
+        candidate = new_publication_id()
+        stmt = (
+            insert(PublicationOperation)
+            .values(
+                operation_id=operation_id,
+                profile_id=self._profile_id,
+                actor_id=self._actor_id,
+                kind=kind,
+                fingerprint=fingerprint,
+                publication_id=candidate,
+            )
+            .on_conflict_do_nothing(index_elements=["operation_id"])
+            .returning(PublicationOperation.publication_id)
+        )
+        try:
+            inserted = (await self._s.execute(stmt)).scalar_one_or_none()
+            if inserted is not None:
+                await self._s.commit()
+                return Reservation(publication_id=inserted, acquired=True)
+            result = await self._s.execute(
+                select(PublicationOperation).where(
+                    PublicationOperation.operation_id == operation_id,
+                    PublicationOperation.profile_id == self._profile_id,
+                    PublicationOperation.actor_id == self._actor_id,
+                    PublicationOperation.kind == kind,
+                    PublicationOperation.fingerprint == fingerprint,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                raise OperationConflict("operation key conflict")
+            publication_id = existing.publication_id
+            await self._s.commit()
+            return Reservation(publication_id=publication_id, acquired=False)
+        except BaseException:
+            await self._s.rollback()
+            raise
