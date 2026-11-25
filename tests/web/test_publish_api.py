@@ -2996,3 +2996,46 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t215_moderated_schedule_requires_approval(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(s).create_user(
+            "moderated", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    response = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "text": "For approval",
+            "channels": '["telegram"]',
+            "scheduled_at": "2027-01-01T12:00:00",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending_approval"
+    sid = response.json()["id"]
+    response = await client.post(f"/api/profiles/{pid}/scheduled/{sid}/approve")
+    assert response.status_code == 403
+
+
+async def test_t215_cancel_claimed_returns_conflict(client, factory):
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sid = await _schedule_one(client, pid, ["telegram"])
+    async with factory() as s:
+        assert await SchedulerRepository(s).claim(sid)
+    result = await client.delete(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 409
+    result = await client.get(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 200
+    assert result.json()["status"] == "publishing"

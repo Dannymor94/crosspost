@@ -626,3 +626,33 @@ async def test_legacy_list_str_shape_still_executes(factory):
     rows = await _target_rows(factory, pid, post_id)
     assert str(rows[("telegram", "")].status) == "done"
     assert await _post_status(factory, post_id) == ScheduledPostStatus.DONE
+
+
+@pytest.mark.parametrize("cancel_first", [True, False])
+async def test_t215_cancel_claim_order(factory, cancel_first):
+    pid = await _make_profile(factory, ["telegram"])
+    post_id, media_dir = await _seed_post(factory, pid, datetime.now(), ["telegram"])
+    async with factory() as s:
+        repo = PublicationRepository(s, profile_id=pid)
+        scheduler = SchedulerRepository(s)
+        if cancel_first:
+            assert await repo.cancel_scheduled(post_id)
+            assert not await scheduler.claim(post_id)
+        else:
+            assert await scheduler.claim(post_id)
+            assert not await repo.cancel_scheduled(post_id)
+    expected = "cancelled" if cancel_first else "publishing"
+    assert await _post_status(factory, post_id) == expected
+    assert media_dir.exists()
+
+
+async def test_t215_publish_now_returns_false_when_cancelled(factory):
+    pid = await _make_profile(factory, ["telegram"])
+    post_id, _ = await _seed_post(factory, pid, datetime.now(), ["telegram"])
+    async with factory() as s:
+        assert await PublicationRepository(s, profile_id=pid).cancel_scheduled(post_id)
+    adapter = _MockAdapter("telegram")
+    executor = ScheduledExecutor(factory, pacing_seconds=0)
+    with _patch_adapters({"telegram": adapter}):
+        assert await executor.publish_post_now(post_id) is False
+    assert adapter.calls == 0
