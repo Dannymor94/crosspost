@@ -99,3 +99,38 @@ def test_prototype_r2_calendar_attention_and_layout(width: int) -> None:
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_prototype_client_onboarding(width: int) -> None:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": width, "height": 900})
+        try:
+            page.goto(PROTOTYPE.as_uri())
+            view = page.locator("#view")
+            page.locator("#role").select_option("admin")
+            nav = page.locator("#nav" if width == 1440 else "#mobile")
+            if width == 390:
+                nav.get_by_role("button", name="Ещё").click()
+                view.get_by_role("button", name="Клиенты", exact=True).click()
+            else:
+                nav.get_by_role("button", name="Клиенты", exact=True).click()
+            view.get_by_role("button", name="+ Пригласить клиента").click()
+            view.get_by_role("button", name="Создать приглашение (демо)").click()
+            view.get_by_role("button", name="Открыть как клиент").click()
+            view.get_by_role("button", name="Создать аккаунт (демо)").click()
+            assert "Подключено 0 из 5" in view.inner_text()
+            view.locator('[data-action="setup:tg"]').click()
+            assert "App configuration" in view.inner_text()
+            for _ in range(3):
+                view.get_by_role("button", name="Далее", exact=True).click()
+            view.get_by_role("button", name="Симулировать успешную проверку").click()
+            assert "Подключено 1 из 5" in view.inner_text()
+            view.get_by_role("button", name="Создать первую публикацию").click()
+            assert view.locator("#post-text").count() == 1
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        finally:
+            browser.close()
