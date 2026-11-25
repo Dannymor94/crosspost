@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -382,7 +382,6 @@ class PublicationRepository:
         _editable = (
             ScheduledPostStatus.SCHEDULED.value,
             ScheduledPostStatus.FAILED.value,
-            ScheduledPostStatus.PENDING_APPROVAL.value,
         )
         values: dict = {}
         if text is not None:
@@ -459,12 +458,17 @@ class PublicationRepository:
         return result.scalar_one_or_none() is not None
 
     async def cancel_scheduled(self, scheduled_id: int) -> bool:
-        """Удалить запланированный пост профиля. True если что-то удалено."""
+        """CAS: active post → CANCELLED; retain history and media."""
         result = await self._s.execute(
-            delete(ScheduledPost).where(
+            sql_update(ScheduledPost)
+            .where(
                 ScheduledPost.id == scheduled_id,
                 ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status.in_(
+                    (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PENDING_APPROVAL)
+                ),
             )
+            .values(status=ScheduledPostStatus.CANCELLED)
         )
         await self._s.commit()
         # rowcount есть у CursorResult (DELETE), но session.execute типизирован как

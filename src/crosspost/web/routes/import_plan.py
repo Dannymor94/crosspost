@@ -42,7 +42,8 @@ from crosspost.scheduler.import_plan import (
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.scheduler.remote_table import RemoteTableError, fetch_sheet_csv
 from crosspost.web import media as media_store
-from crosspost.web.deps import SessionDep, require_profile_access
+from crosspost.web.deps import CurrentUser, SessionDep, require_profile_access
+from crosspost.web.moderation import require_unmoderated_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["import"], dependencies=[Depends(require_profile_access)])
@@ -346,6 +347,7 @@ async def import_preview(
 async def import_commit(
     profile_id: int,
     session: SessionDep,
+    user: CurrentUser,
     table: UploadFile | None = File(None),  # noqa: B008
     sheet_url: str | None = Form(None),  # альтернатива файлу: ссылка на Google Таблицу
     media: list[UploadFile] = File(default=[]),  # noqa: B008
@@ -378,6 +380,7 @@ async def import_commit(
     if await profile_repo.get_profile(profile_id) is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    await require_unmoderated_action(user, session, profile_id)
     await _validate_channels(profile_repo, profile_id, channel_list, content_type, session=session)
 
     data, filename = await _load_table_bytes(table, sheet_url)

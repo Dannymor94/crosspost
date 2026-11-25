@@ -121,7 +121,7 @@ async def test_create_and_list_scheduled(session):
     assert listed[0].text == "позже"
 
 
-async def test_cancel_scheduled_removes_it(session):
+async def test_cancel_scheduled_retains_history(session):
     repo = _repo(session)
     post = await repo.create_scheduled(
         content_type="post",
@@ -133,6 +133,9 @@ async def test_cancel_scheduled_removes_it(session):
     )
     assert await repo.cancel_scheduled(post.id) is True
     assert await repo.list_scheduled() == []
+    retained = await repo.get_scheduled(post.id)
+    assert retained is not None
+    assert str(retained.status) == "cancelled"
     # Повторная отмена — no-op.
     assert await repo.cancel_scheduled(post.id) is False
 

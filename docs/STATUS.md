@@ -118,6 +118,13 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
 
+## T-215 — серверный guard (первая часть, PR draft)
+
+Для клиента при включённой модерации запрещены прямой publish, retry, publish-now расписания, PATCH расписания и commit импорта. Поддерживаемый путь — создание scheduled с PENDING_APPROVAL. Администратор не может вручную запустить pending до approve. Это первая часть задачи, не полная приёмка: CAS отмены, границы гонок при смене настройки модерации, UI и проверка всех переходов остаются открыты. CI и независимый QA обязательны. Не изменяет retry SUBMITTED или retention медиа.
+
+### T-215 follow-up (draft)
+CAS отмены сохраняет CANCELLED и медиа; claim и отмена взаимоисключающие. Исполнитель перечитывает снимок после claim, publish-now возвращает 409 при проигранном claim. Клиент читает только scoped настройку модерации и скрывает запрещённые действия; неизвестная настройка блокирует отправку. Политика применяется к новым запросам при проверке на входе; изменение настройки не отзывает уже допущенную операцию. Ретроактивная модерация существующей очереди не реализована. CI и независимое QA pending.
+
 ## T-216 — persistent admission ledger (draft, first slice)
 
 Added isolated reservation repository and additive Alembic migration; one winner, stable publication ID, scoped conflict, replay never reacquires after restart. No HTTP route or UI wired yet. No guarantee against current production duplicates until integration and QA. See [T-216.md](T-216.md). Retention policy, scope lifecycle, completion/reconciliation and atomic scheduled insertion require review before activation.
@@ -133,3 +140,7 @@ Keyed scheduled creation: reservation, post and initial receipt commit together;
 
 ### T-216 fifth slice (draft)
 Both editors use shared operation guard with local pending proof, browser lock and read-only recovery. No automatic resend. Unknown operation remains blocked; no admin resolution yet. Direct-upload-only keyed scheduling, import and legacy API not covered. CI/QA pending.
+
+## UX-01 integration rehearsal — T-215 + T-216
+
+Separate validation-only branch, not for merge. Inputs: PR #53 HEAD 917f38cd and PR #54 HEAD 31d98d2d, both CI green individually. Combined client guards and backend routes, retained cancellation CAS and operation ledger. Added keyed moderation integration regression. CI pending; owner-assisted recovery, import, mandatory rollout and independent QA remain open. Do not deploy or merge this rehearsal.
