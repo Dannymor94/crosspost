@@ -26,6 +26,7 @@ def test_prototype_role_and_moderation(width: int) -> None:
         errors: list[str] = []
         requests: list[str] = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+
         def record_request(request: Request) -> None:
             if request.url.startswith(("http:", "https:")):
                 requests.append(request.url)
@@ -47,7 +48,7 @@ def test_prototype_role_and_moderation(width: int) -> None:
             nav = page.locator("#nav" if width == 1440 else "#mobile")
             nav.get_by_role("button", name="Модерация").click()
             row = view.locator(".item").filter(has_text="Проверка UX")
-            row.get_by_role("button", name="Детали").click()
+            row.get_by_role("button", name="Детали: Проверка UX", exact=True).click()
             page.locator("#dialog").get_by_role("button", name="Одобрить").click()
             assert view.locator(".item").filter(has_text="Проверка UX").count() == 0
             page.locator("#theme").click()
@@ -131,6 +132,9 @@ def test_prototype_client_onboarding(width: int) -> None:
             assert "Подключено 1 из 5" in view.inner_text()
             view.get_by_role("button", name="Создать первую публикацию").click()
             assert view.locator("#post-text").count() == 1
+            page.locator("#role").select_option("admin")
+            page.locator("#role").select_option("client")
+            assert "Новый клиент (демо)" in page.locator("#context-name").inner_text()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         finally:
             browser.close()

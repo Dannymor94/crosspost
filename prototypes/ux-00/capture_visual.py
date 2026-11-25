@@ -43,6 +43,26 @@ def main():
             shot("admin-home-light")
             nav.get_by_role("button", name="Модерация", exact=True).click()
             shot("admin-moderation")
+            if width <= 640:
+                nav.get_by_role("button", name="Ещё").click()
+                view.get_by_role("button", name="Клиенты", exact=True).click()
+            else:
+                nav.get_by_role("button", name="Клиенты", exact=True).click()
+            view.get_by_role("button", name="+ Пригласить клиента").click()
+            shot("admin-invite")
+            view.get_by_role("button", name="Создать приглашение (демо)").click()
+            view.get_by_role("button", name="Открыть как клиент").click()
+            shot("client-accept")
+            view.get_by_role("button", name="Создать аккаунт (демо)").click()
+            shot("client-onboarding")
+            view.locator('[data-action="setup:tg"]').click()
+            shot("client-telegram-guide")
+            for _ in range(3):
+                view.get_by_role("button", name="Далее", exact=True).click()
+            view.get_by_role("button", name="Симулировать успешную проверку").click()
+            shot("client-connected")
+            view.get_by_role("button", name="Создать первую публикацию").click()
+            shot("client-first-editor")
             page.close()
         browser.close()
 

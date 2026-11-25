@@ -17,7 +17,15 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra dev --extra browser --extra infra --extra crypto
       - run: uv run playwright install chromium --with-deps
-      - run: uv run python prototypes/ux-00/capture_visual.py
+      - name: Show exact formatter diff (diagnostics)
+        if: always()
+        run: uv run ruff format --diff tests/test_ux_prototype_isolation.py
+        continue-on-error: true
+      - name: Prototype behavioral tests
+        run: uv run pytest -q tests/test_ux_prototype_isolation.py
+      - name: Capture screenshots
+        if: always()
+        run: uv run python prototypes/ux-00/capture_visual.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
