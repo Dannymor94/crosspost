@@ -1879,6 +1879,8 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     from sqlalchemy import update as _upd
 
     from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
 
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
@@ -1894,7 +1896,7 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
         await s.execute(
             _upd(ScheduledPost)
             .where(ScheduledPost.id == sched_id)
-            .values(media_paths=[str(old_file)], status="publishing")
+            .values(media_paths=[str(old_file)])
         )
         await s.commit()
 
@@ -1902,7 +1904,18 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     media_root = tmp_path / "media"
     dirs_before = {d.name for d in media_root.iterdir()}
 
-    with _patch_image_ctx():
+    original_patch = PublicationRepository.patch_scheduled_cas
+
+    async def claim_before_patch(repo, scheduled_id, **kwargs):
+        # Real state transition after media download and before the original CAS.
+        async with factory() as session:
+            assert await SchedulerRepository(session).claim(scheduled_id)
+        return await original_patch(repo, scheduled_id, **kwargs)
+
+    with (
+        _patch_image_ctx(),
+        patch.object(PublicationRepository, "patch_scheduled_cas", new=claim_before_patch),
+    ):
         r = await client.patch(
             f"/api/profiles/{pid}/scheduled/{sched_id}",
             json={"image": "https://example.com/new.jpg"},
@@ -1997,7 +2010,7 @@ class _FakeExecutor:
         self._factory = factory
         self._statuses = statuses  # channel → (status, error)
 
-    async def publish_post_now(self, post_id: int) -> None:
+    async def publish_post_now(self, post_id: int) -> bool:
         from crosspost.db.publication_repo import PublicationRepository
         from crosspost.scheduler.executor import scheduled_publication_id
 
@@ -2009,6 +2022,7 @@ class _FakeExecutor:
                 from crosspost.db.models import PublicationStatus
 
                 await repo.set_status(pubid, ch, PublicationStatus(st), error=err)
+        return True
 
 
 async def _schedule_one(client, pid, channels: list[str]) -> int:
@@ -2995,3 +3009,46 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t215_moderated_schedule_requires_approval(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(s).create_user(
+            "moderated", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    response = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "text": "For approval",
+            "channels": '["telegram"]',
+            "scheduled_at": "2027-01-01T12:00:00",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending_approval"
+    sid = response.json()["id"]
+    response = await client.post(f"/api/profiles/{pid}/scheduled/{sid}/approve")
+    assert response.status_code == 403
+
+
+async def test_t215_cancel_claimed_returns_conflict(client, factory):
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sid = await _schedule_one(client, pid, ["telegram"])
+    async with factory() as s:
+        assert await SchedulerRepository(s).claim(sid)
+    result = await client.delete(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 409
+    result = await client.get(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 200
+    assert result.json()["status"] == "publishing"
