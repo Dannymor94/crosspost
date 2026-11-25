@@ -51,6 +51,7 @@ from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
+from crosspost.web.moderation import require_unmoderated_action
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,7 @@ async def publish_targets(
 async def publish_now(
     profile_id: int,
     session: SessionDep,
+    user: CurrentUser,
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -568,6 +570,7 @@ async def publish_now(
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     selections = _parse_selections(channels)
     # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
@@ -651,10 +654,16 @@ async def publish_status(
     response_model=OutcomeOut,
 )
 async def publish_retry(
-    profile_id: int, publication_id: str, channel: str, session: SessionDep, target_id: str = ""
+    profile_id: int,
+    publication_id: str,
+    channel: str,
+    session: SessionDep,
+    user: CurrentUser,
+    target_id: str = "",
 ) -> OutcomeOut:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     run = _RUNS.get((profile_id, publication_id))
     if run is None:
@@ -956,11 +965,16 @@ RescheduleBody = PatchScheduledBody
 
 @router.patch("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
 async def reschedule(
-    profile_id: int, scheduled_id: int, body: PatchScheduledBody, session: SessionDep
+    profile_id: int,
+    scheduled_id: int,
+    body: PatchScheduledBody,
+    session: SessionDep,
+    user: CurrentUser,
 ) -> ScheduledOut:
     """Редактировать запланированный пост: текст, цели, время. Изоляция по profile_id."""
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     # 404 если пост не найден или чужой профиль — до CAS, чтобы не палить существование.
     post = await pub_repo.get_scheduled(scheduled_id)
@@ -1042,7 +1056,7 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
 
 @router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/publish-now")
 async def publish_scheduled_now(
-    profile_id: int, scheduled_id: int, request: Request, session: SessionDep
+    profile_id: int, scheduled_id: int, request: Request, session: SessionDep, user: CurrentUser
 ) -> dict:
     """Немедленно опубликовать запланированный пост, не дожидаясь тика исполнителя.
 
@@ -1050,10 +1064,13 @@ async def publish_scheduled_now(
     """
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+    if str(post.status) == "pending_approval":
+        raise HTTPException(status_code=409, detail="Пост ожидает одобрения модератором")
 
     executor = getattr(request.app.state, "executor", None)
     if executor is None:
