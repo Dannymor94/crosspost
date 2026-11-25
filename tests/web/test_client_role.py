@@ -171,3 +171,14 @@ def test_unmoderated_client_keeps_direct_publish_validation(seeded_app):
     assert login.status_code == 200
     response = c.post("/api/profiles/1/publish", data={"channels": "[]", "text": "test"})
     assert response.status_code == 422
+
+
+
+def test_client_can_read_own_moderation_but_not_foreign(seeded_app):
+    c = seeded_app
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
+    own = c.get("/api/profiles/1/settings/moderation")
+    assert own.status_code == 200
+    assert own.json() == {"enabled": False}
+    assert c.get("/api/profiles/9999/settings/moderation").status_code == 403

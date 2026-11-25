@@ -115,12 +115,12 @@ class ScheduledExecutor:
 
     # ── Публичный API ─────────────────────────────────────────────────────────
 
-    async def publish_post_now(self, post_id: int) -> None:
+    async def publish_post_now(self, post_id: int) -> bool:
         """Немедленно опубликовать запланированный пост, не дожидаясь тика.
 
         Идемпотентно: если пост уже исполнен или отменён — ничего не делает.
         """
-        await self._process_post(post_id)
+        return await self._process_post(post_id)
 
     async def run_forever(self) -> None:
         """Бесконечный цикл поллинга. Отменяется через task.cancel() в lifespan."""
@@ -160,20 +160,24 @@ class ScheduledExecutor:
 
     # ── Обработка одного поста ────────────────────────────────────────────────
 
-    async def _process_post(self, post_id: int, *, now: datetime | None = None) -> None:
+    async def _process_post(self, post_id: int, *, now: datetime | None = None) -> bool:
         moment = now if now is not None else self._clock()
         async with self._factory() as session:
             sched_repo = SchedulerRepository(session)
             post = await sched_repo.get(post_id)
             if post is None or str(post.status) != "scheduled":
-                return  # отменён/уже исполнен между сканом и обработкой
+                return False  # отменён/уже исполнен между сканом и обработкой
             if not await sched_repo.claim(post_id):
-                return  # атомарный клейм не удался — пост уже взят/изменён
+                return False  # атомарный клейм не удался — пост уже взят/изменён
 
+            # PATCH may have committed between the first read and claim.
+            # The claimed snapshot is the only one that may be dispatched.
+            post = await sched_repo.get(post_id)
+            assert post is not None
             selections = selections_from_stored(post.channels)
             if not selections:
                 await sched_repo.finalize(post_id, success=True)  # нечего слать → закрыть
-                return
+                return True
 
             pub_repo = PublicationRepository(session, profile_id=post.profile_id)
             pubid = scheduled_publication_id(post_id)
@@ -210,11 +214,12 @@ class ScheduledExecutor:
             # pending → не финализируем: вернуть в SCHEDULED, следующий тик добьёт.
             if flow.pending:
                 await sched_repo.release(post_id)
-                return
+                return True
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
+            return True
 
     def _ceiling_step(
         self,

@@ -981,6 +981,9 @@ async def reschedule(
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
 
+    if str(post.status) not in {"scheduled", "failed"}:
+        raise HTTPException(status_code=409, detail="Пост не подлежит редактированию")
+
     # Валидация каналов и capability ДО CAS и ДО скачивания медиа — 422 не меняет данные.
     effective_channels = body.channels if body.channels is not None else list(post.channels or [])
     try:
@@ -1049,7 +1052,8 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
-    await pub_repo.cancel_scheduled(scheduled_id)
+    if not await pub_repo.cancel_scheduled(scheduled_id):
+        raise HTTPException(status_code=409, detail="Пост уже исполняется или не подлежит отмене")
     # T-209: media not deleted on cancel — retained indefinitely until T-214.
     return {"cancelled": True}
 
@@ -1069,8 +1073,8 @@ async def publish_scheduled_now(
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
-    if str(post.status) == "pending_approval":
-        raise HTTPException(status_code=409, detail="Пост ожидает одобрения модератором")
+    if str(post.status) != "scheduled":
+        raise HTTPException(status_code=409, detail="Пост не готов к немедленному исполнению")
 
     executor = getattr(request.app.state, "executor", None)
     if executor is None:
@@ -1078,7 +1082,8 @@ async def publish_scheduled_now(
             status_code=503, detail="Исполнитель расписания недоступен (SCHEDULER_ENABLED=false)"
         )
 
-    await executor.publish_post_now(scheduled_id)
+    if not await executor.publish_post_now(scheduled_id):
+        raise HTTPException(status_code=409, detail="Пост уже взят в работу или отменён")
 
     # Читаем итоги из БД (executor пишет в свои сессии, коммитит до return)
     from crosspost.scheduler.executor import scheduled_publication_id
@@ -1272,8 +1277,8 @@ class ModerationSetting(BaseModel):
 
 
 @router.get("/api/profiles/{profile_id}/settings/moderation", response_model=ModerationSetting)
-async def get_moderation(profile_id: int, session: SessionDep, _: AdminUser) -> ModerationSetting:
-    """Настройка режима модерации клиентских постов (только admin)."""
+async def get_moderation(profile_id: int, session: SessionDep) -> ModerationSetting:
+    """Read-only setting for the scoped profile; modification is admin-only."""
     from crosspost.db.settings_repo import ProfileSettingsRepository
 
     enabled = await ProfileSettingsRepository(

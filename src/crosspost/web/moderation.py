@@ -9,9 +9,7 @@ from crosspost.db.models import Role, User
 from crosspost.db.settings_repo import ProfileSettingsRepository
 
 
-async def require_unmoderated_action(
-    user: User, session: AsyncSession, profile_id: int
-) -> None:
+async def require_unmoderated_action(user: User, session: AsyncSession, profile_id: int) -> None:
     """Reject direct actions when the profile requires client approval.
 
     Call only after profile access has been checked. The existing scheduled

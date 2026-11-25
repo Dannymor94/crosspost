@@ -1997,7 +1997,7 @@ class _FakeExecutor:
         self._factory = factory
         self._statuses = statuses  # channel → (status, error)
 
-    async def publish_post_now(self, post_id: int) -> None:
+    async def publish_post_now(self, post_id: int) -> bool:
         from crosspost.db.publication_repo import PublicationRepository
         from crosspost.scheduler.executor import scheduled_publication_id
 
@@ -2009,6 +2009,7 @@ class _FakeExecutor:
                 from crosspost.db.models import PublicationStatus
 
                 await repo.set_status(pubid, ch, PublicationStatus(st), error=err)
+        return True
 
 
 async def _schedule_one(client, pid, channels: list[str]) -> int:

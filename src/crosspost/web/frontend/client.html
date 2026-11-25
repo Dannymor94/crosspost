@@ -406,15 +406,45 @@ function LoginView({ onLogin }) {
   `;
 }
 
+// Read the scoped policy before displaying actions. Unknown policy is fail-closed.
+function useModeration(pid) {
+  const [enabled, setEnabled] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setEnabled(null); setFailed(false);
+    api.get(`/api/profiles/${pid}/settings/moderation`)
+      .then(data => {
+        if (!active) return;
+        if (typeof data.enabled !== 'boolean') { setFailed(true); return; }
+        setEnabled(data.enabled);
+      })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [pid, attempt]);
+  return { enabled, failed, reload: () => { setEnabled(null); setAttempt(x => x + 1); } };
+}
+
+async function actionError(response, fallback) {
+  try {
+    const body = await response.json();
+    if (typeof body.detail === 'string') return body.detail;
+  } catch {}
+  return fallback;
+}
+
 // ── Compose ────────────────────────────────────────────────────────────────────
 function ComposeView({ user }) {
   const pid = user.profile_id;
+  const policy = useModeration(pid);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
   const [text, setText] = useState('');
   const [targets, setTargets] = useState([]);
   const [checked, setChecked] = useState({});
   const [when, setWhen] = useState('now'); // 'now' | 'later'
+  useEffect(() => { if (policy.enabled === true) setWhen('later'); }, [policy.enabled]);
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -473,7 +503,8 @@ function ComposeView({ user }) {
   }
 
   async function submit() {
-    if (submitting.current || busy) return;
+    if (submitting.current || busy || policy.enabled === null) return;
+    if (policy.enabled && when !== 'later') { setWhen('later'); return; }
     setErr('');
     const channelsList = buildChannelsList();
     if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
@@ -490,7 +521,11 @@ function ComposeView({ user }) {
 
       if (when === 'now') {
         const r = await api.postForm(`/api/profiles/${pid}/publish`, fd);
-        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
+        if (!r.ok) {
+          setErr(await actionError(r, 'Не удалось отправить публикацию.'));
+          if (r.status === 403) policy.reload();
+          return;
+        }
         const result = await r.json();
         const feedback = publicationFeedback(result.outcomes || []);
         if (feedback.error) { setErr(feedback.error); return; }
@@ -506,13 +541,13 @@ function ComposeView({ user }) {
           setSuccess({ msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' });
         }
       }
-    } catch { setErr('Нет связи. Попробуйте ещё раз.'); }
+    } catch { setErr('Нет связи. Результат неизвестен. Проверьте публикацию перед повторной отправкой.'); }
     finally { setBusy(false); submitting.current = false; }
   }
 
   function reset() {
     setMediaFile(null); setMediaPreview(null);
-    setText(''); setWhen('now'); setScheduledAt('');
+    setText(''); setWhen(policy.enabled ? 'later' : 'now'); setScheduledAt('');
     setErr(''); setSuccess(null);
   }
 
@@ -578,7 +613,7 @@ function ComposeView({ user }) {
       <div class="field">
         <label class="label">Когда</label>
         <div class="when-pills">
-          <button class=${'pill' + (when === 'now' ? ' active' : '')} onClick=${() => setWhen('now')}>Сейчас</button>
+          ${policy.enabled === false && html`<button class=${'pill' + (when === 'now' ? ' active' : '')} onClick=${() => setWhen('now')}>Сейчас</button>`}
           <button class=${'pill' + (when === 'later' ? ' active' : '')} onClick=${() => setWhen('later')}>Выбрать дату и время</button>
         </div>
         ${when === 'later' && html`
@@ -590,9 +625,11 @@ function ComposeView({ user }) {
 
       ${err && html`<div class="error-msg">${err}</div>`}
 
-      <button class="btn btn-primary" onClick=${submit} disabled=${busy || eligibleTargets.length === 0}>
+      ${policy.enabled === true && html`<p class="video-warn">Пост будет отправлен на проверку администратору. Укажите желаемое время.</p>`}
+      ${policy.enabled === null && html`<p class="video-warn">${policy.failed ? 'Не удалось получить правила публикации.' : 'Проверяем правила публикации…'} ${policy.failed && html`<button class="btn btn-ghost" onClick=${policy.reload}>Повторить проверку</button>`}</p>`}
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || policy.enabled === null || eligibleTargets.length === 0}>
         ${busy ? html`<span class="spinner"></span>` : null}
-        ${busy ? 'Отправляем…' : 'Отправить'}
+        ${busy ? 'Отправляем…' : policy.enabled ? 'На проверку' : when === 'later' ? 'Запланировать' : 'Отправить'}
       </button>
     </div>
   `;
@@ -609,7 +646,7 @@ function publicationFeedback(outcomes) {
 }
 
 // ── My Posts ───────────────────────────────────────────────────────────────────
-function PostCard({ post, onCancel }) {
+function PostCard({ post, onCancel, canEdit }) {
   const [editing, setEditing] = useState(false);
   const [newTime, setNewTime] = useState('');
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -628,7 +665,7 @@ function PostCard({ post, onCancel }) {
       ${badge}
       ${post.reject_reason && html`<div class="cancel-reason">Причина: ${post.reject_reason}</div>`}
       <div class="post-text">${post.text.slice(0, 80)}${post.text.length > 80 ? '…' : ''}</div>
-      ${editing ? html`
+      ${editing && canEdit && post.status === 'scheduled' ? html`
         <div style="margin-bottom:10px">
           <input type="datetime-local" value=${newTime} onInput=${e => setNewTime(e.target.value)}
             style="width:100%; margin-bottom:8px" />
@@ -650,7 +687,7 @@ function PostCard({ post, onCancel }) {
       ` : null}
       ${err && html`<div class="error-msg" style="margin-bottom:8px">${err}</div>`}
       <div class="post-actions">
-        ${!editing && html`
+        ${!editing && canEdit && post.status === 'scheduled' && html`
           <button class="btn btn-ghost" style="flex:1; font-size:15px; padding:10px; min-height:44px"
             onClick=${() => { setEditing(true); setNewTime(''); }}>
             Изменить время
@@ -665,7 +702,7 @@ function PostCard({ post, onCancel }) {
               try {
                 const r = await api.del(`/api/profiles/${post._pid}/scheduled/${post.id}`);
                 if (r.ok) onCancel(post.id, 'deleted');
-                else setErr('Не удалось отменить — попробуйте позже.');
+                else setErr(await actionError(r, 'Не удалось отменить публикацию.'));
               } catch { setErr('Нет связи.'); }
               setConfirmCancel(false);
             }}>Да</button>
@@ -680,6 +717,7 @@ function PostCard({ post, onCancel }) {
 
 function PostsView({ user }) {
   const pid = user.profile_id;
+  const policy = useModeration(pid);
   const [posts, setPosts] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -708,7 +746,7 @@ function PostsView({ user }) {
   return html`
     <div>
       <div class="section-title">Ближайшие</div>
-      ${posts.map(p => html`<${PostCard} key=${p.id} post=${p} onCancel=${handleAction} />`)}
+      ${posts.map(p => html`<${PostCard} key=${p.id} post=${p} onCancel=${handleAction} canEdit=${policy.enabled === false} />`)}
     </div>
   `;
 }
