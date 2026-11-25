@@ -173,7 +173,6 @@ def test_unmoderated_client_keeps_direct_publish_validation(seeded_app):
     assert response.status_code == 422
 
 
-
 def test_client_can_read_own_moderation_but_not_foreign(seeded_app):
     c = seeded_app
     login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
