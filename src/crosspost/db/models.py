@@ -295,6 +295,8 @@ class ScheduledPost(Base):
     media_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Non-null marks an explicitly supplied instant; SQLite stores naive UTC.
+    scheduled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     status: Mapped[ScheduledPostStatus] = mapped_column(
         String(32), default=ScheduledPostStatus.SCHEDULED, nullable=False
     )

@@ -52,6 +52,7 @@ from crosspost.orchestrator.publish_service import (
     selections_from_stored,
 )
 from crosspost.scheduler.browser_cooldown import BrowserCooldown
+from crosspost.scheduler.schedule_time import schedule_is_due
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,9 @@ class ScheduledExecutor:
         moment = now if now is not None else self._clock()
         async with self._factory() as session:
             active = await SchedulerRepository(session).list_scheduled_active()
-        due_ids = [p.id for p in active if _as_naive(p.scheduled_at) <= _as_naive(moment)]
+        due_ids = [
+            p.id for p in active if schedule_is_due(p.scheduled_at, p.scheduled_at_utc, moment)
+        ]
 
         processed: list[int] = []
         for i, post_id in enumerate(due_ids):
@@ -167,7 +170,12 @@ class ScheduledExecutor:
             post = await sched_repo.get(post_id)
             if post is None or str(post.status) != "scheduled":
                 return False  # отменён/уже исполнен между сканом и обработкой
-            if not await sched_repo.claim(post_id):
+            if now is not None and not schedule_is_due(
+                post.scheduled_at, post.scheduled_at_utc, moment
+            ):
+                return False
+            expected = (post.scheduled_at, post.scheduled_at_utc) if now is not None else None
+            if not await sched_repo.claim(post_id, expected_time=expected):
                 return False  # атомарный клейм не удался — пост уже взят/изменён
 
             # PATCH may have committed between the first read and claim.

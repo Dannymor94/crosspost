@@ -1239,6 +1239,7 @@ body {
 <div id="root"></div>
 
 <script src="/static/operation-guard.js"></script>
+<script src="/static/schedule-time.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3066,20 +3067,44 @@ function OutcomeCard({ o, onRetry, retrying }) {
   );
 }
 
-function ScheduleModal({ onClose, onConfirm }) {
-  const now = new Date(Date.now() + 3600_000);
-  const pad = (n) => String(n).padStart(2, "0");
-  const local = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const [when, setWhen] = useState(local);
+function ScheduleModal({ base, onClose, onConfirm }) {
+  const time = window.CrosspostTime;
+  const [zone, setZone] = useState(null);
+  const [draftZone, setDraftZone] = useState(time.deviceZone());
+  const [when, setWhen] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    time.get(base).then(z => { if (active) { setZone(z); if (z) setDraftZone(z); } })
+      .catch(e => { if (active) setError(e.message); });
+    return () => { active = false; };
+  }, [base]);
+  async function saveZone() {
+    setBusy(true); setError("");
+    try { setZone(await time.set(base, draftZone.trim())); setWhen(""); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+  async function confirm() {
+    setBusy(true); setError("");
+    try { const instant = await time.resolve(base, when, zone); onConfirm(instant); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
   return h(Modal, { title: "Запланировать публикацию", onClose },
     h("div", { className: "form-group" },
+      h("label", { className: "form-label" }, "Часовой пояс профиля"),
+      h("input", { className: "form-input", value: draftZone, onChange: e => setDraftZone(e.target.value) }),
+      h("button", { className: "btn btn-ghost", disabled: busy || !draftZone.trim(), onClick: saveZone }, "Сохранить часовой пояс"),
+      h("p", { className: "form-hint" }, zone ? "Выбор времени: " + zone : "Подтвердите часовой пояс. Предложен пояс устройства."),
       h("label", { className: "form-label", htmlFor: "sched-when" }, "Дата и время"),
       h("input", { id: "sched-when", className: "form-input", type: "datetime-local",
-        value: when, onChange: (e) => setWhen(e.target.value) }),
-      h("p", { className: "form-hint" }, "Пост уйдёт сам в указанное время (местное). Планировщик публикует по расписанию."),
+        value: when, disabled: !zone || busy || draftZone.trim() !== zone, onChange: e => setWhen(e.target.value) }),
+      error && h("p", { className: "outcome-err", role: "alert" }, error),
     ),
     h("div", { className: "flex-gap mt-2" },
-      h("button", { className: "btn btn-primary", onClick: () => onConfirm(when), disabled: !when }, "Сохранить в план"),
+      h("button", { className: "btn btn-primary", onClick: confirm, disabled: busy || !when || !zone || draftZone.trim() !== zone }, "Сохранить в план"),
       h("button", { className: "btn btn-ghost", onClick: onClose }, "Отмена"),
     ),
   );
@@ -3418,7 +3443,7 @@ function PublishView({ profile, user }) {
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
       await ops.run(opScope, async headers => {
-        const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), headers);
+        const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), {...headers, "X-Schedule-Time-Contract": "utc-v1"});
         if (!value?.id) throw new Error("Результат неизвестен.");
         return value;
       });
@@ -3581,7 +3606,7 @@ function PublishView({ profile, user }) {
     // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
     h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore, onRefresh: loadReportInitial }),
 
-    showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
+    showSchedule && h(ScheduleModal, { base, onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
 }
 
@@ -3742,7 +3767,16 @@ function _schedStatusNote(status) {
 // и через модальное окно из журнала (ReportRow). post — объект ScheduledOut.
 function SchedEditForm({ base, post, onSaved, onClose }) {
   const [text, setText] = useState(() => post.text);
-  const [when, setWhen] = useState(() => toLocalInput(post.scheduled_at));
+  const [zone, setZone] = useState(null);
+  const [when, setWhen] = useState("");
+  const [timeChanged, setTimeChanged] = useState(false);
+  useEffect(() => {
+    let active = true;
+    window.CrosspostTime.get(base).then(z => {
+      if (active) { setZone(z); setWhen(window.CrosspostTime.wallInput(post.scheduled_at, z)); }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [base, post.scheduled_at]);
   const [selected, setSelected] = useState(() => _channelsToSet(post.channels));
   const [targets, setTargets] = useState(null);
   // Медиа: null = не менялось (шлём без поля image), "" = удалить (не поддержано API),
@@ -3767,7 +3801,7 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     setBusy(true); setFieldErr({});
     const patch = {};
     if (text !== post.text) patch.text = text;
-    if (when !== toLocalInput(post.scheduled_at)) patch.scheduled_at = when;
+    if (timeChanged) patch.scheduled_at = when;
     const origSet = _channelsToSet(post.channels);
     if (!_setsEqual(selected, origSet))
       patch.channels = [...selected].map(parseSelKey)
@@ -3776,10 +3810,11 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     if (showImageInput && imageInput.trim()) patch.image = imageInput.trim();
     if (!Object.keys(patch).length) { onClose?.(); setBusy(false); return; }
     try {
+      if (timeChanged) patch.scheduled_at = await window.CrosspostTime.resolve(base, when, zone);
       // Используем fetch напрямую — нужен статус-код для различения 409/422/404.
       const r = await fetch(`${base}/scheduled/${post.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Schedule-Time-Contract": "utc-v1" },
         body: JSON.stringify(patch),
       });
       if (r.ok) { onSaved?.(); return; }
@@ -3805,9 +3840,10 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
 
   return h("div", { className: "sched-edit-form" },
     h("div", { className: "sched-edit-field" },
-      h("label", { className: "form-label" }, "Время публикации"),
-      h("input", { className: "form-input", type: "datetime-local", value: when,
-        onChange: (e) => setWhen(e.target.value), style: { maxWidth: "220px" } }),
+      h("label", { className: "form-label" }, "Время публикации · " + (zone || "пояс не настроен")),
+      post.time_basis !== "utc" && h("p", {className: "form-hint"}, "Старое время сервера. При изменении выберите время в поясе профиля."),
+      h("input", { className: "form-input", type: "datetime-local", value: when, disabled: !zone,
+        onChange: (e) => { setWhen(e.target.value); setTimeChanged(true); }, style: { maxWidth: "220px" } }),
       fieldErr.scheduled_at && h("div", { className: "outcome-err" }, fieldErr.scheduled_at),
     ),
     h("div", { className: "sched-edit-field" },
@@ -3930,7 +3966,7 @@ function SchedItem({ base, s, onChanged }) {
 
   return h("div", { className: "sched-item" },
     h("div", { className: "sched-main" },
-      !editing && h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
+      !editing && h("div", { className: "sched-when mono" }, window.CrosspostTime.label(s.scheduled_at, window.CrosspostTime.deviceZone())),
       !editing && h("div", { className: "sched-text" },
         s.text || "(без текста)",
         s.has_article && h("span", { className: "sched-badge",
@@ -4128,6 +4164,7 @@ function ImportReportView({ report }) {
   return h("div", null,
     // Сводка.
     h("div", { className: "plan-preview-summary" },
+      report.schedule_zone && h("span", { className: "chip" }, report.schedule_zone),
       h("span", { className: "chip ok" }, `✓ ${report.resolved_count} готово`),
       warnings.length > 0 && h("span", { className: "chip warn" }, `⚠ ${warnings.length} без фото`),
       problems.length > 0 && h("span", { className: "chip err" }, `✕ ${problems.length} пропущено`),
@@ -4154,7 +4191,7 @@ function ImportReportView({ report }) {
             return h("tr", { key: `r${i}`, className: warn ? "row-warn" : "" },
               h("td", { className: "plan-row-status" }, warn ? "⚠" : "✓"),
               h("td", null, h("span", { className: "mono", style: { fontSize: "11px", color: "var(--accent)" } },
-                new Date(r.scheduled_at).toLocaleString("ru-RU", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))),
+                window.CrosspostTime.label(r.scheduled_at, report.schedule_zone))),
               h("td", null,
                 r.file
                   ? h("span", null,
@@ -4194,6 +4231,12 @@ function ImportReportView({ report }) {
 
 function ImportView({ profile }) {
   const base = `/api/profiles/${profile.id}`;
+  const [zone, setZone] = useState(null);
+  useEffect(() => {
+    let active = true;
+    window.CrosspostTime.get(base).then(z => { if (active) setZone(z); }).catch(() => {});
+    return () => { active = false; };
+  }, [base]);
   const [table, setTable] = useState(null);
   const [sheetUrl, setSheetUrl] = useState("");
   const [images, setImages] = useState([]);
@@ -4246,6 +4289,8 @@ function ImportView({ profile }) {
     setSelected((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
   }
   function appendRule(fd) {
+    if (!zone) throw new Error("Настройте часовой пояс профиля в редакторе публикаций.");
+    fd.append("schedule_zone", zone);
     if (startDate) fd.append("start_date", startDate);
     if (times.trim()) fd.append("times_csv", times);
     fd.append("interval", interval);
@@ -4281,6 +4326,7 @@ function ImportView({ profile }) {
   function applyMapping(m) { setMapping(m); preview(m); }
 
   async function commit() {
+    if (!zone || report?.schedule_zone !== zone) { setAlert({type:"error", text:"Повторите предпросмотр после настройки часового пояса."}); return; }
     setCommitting(true); setAlert(null); setCommitInfo(null);
     try {
       const fd = new FormData();
@@ -4305,8 +4351,8 @@ function ImportView({ profile }) {
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
   const needsMapping = !!(report && report.needs_mapping);
   const folderDirty = folder.trim() !== folderSaved;
-  const canPreview = hasTableSource && !busy;
-  const canCommit = hasTableSource && selected.size > 0 && report
+  const canPreview = !!zone && hasTableSource && !busy;
+  const canCommit = !!zone && report?.schedule_zone === zone && hasTableSource && selected.size > 0 && report
     && !needsMapping && report.resolved_count > 0 && !committing;
 
   const [openStep, setOpenStep] = useState(1);
@@ -4321,7 +4367,7 @@ function ImportView({ profile }) {
     monthly: "раз в месяц",
   }[interval];
   const ruleSummary = startDate
-    ? `${intervalLabel} · от ${startDate.split("-").reverse().join(".")} · ${times.trim() || "—"}`
+    ? `${zone || "пояс не задан"} · ${intervalLabel} · от ${startDate.split("-").reverse().join(".")} · ${times.trim() || "—"}`
     : null;
   const targetsSummary = selected.size > 0 ? `${selected.size} выбрано` : null;
 
@@ -4340,6 +4386,7 @@ function ImportView({ profile }) {
 
   return h("div", null,
     h("h1", { className: "page-title" }, "Импорт контент-плана"),
+    h("p", { className: "form-hint" }, zone ? "Часовой пояс импорта: " + zone : "Настройте часовой пояс профиля в редакторе публикаций, затем обновите страницу."),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
 
     h(ImportStep, { num: 1, title: "Таблица плана", summary: tableSummary, done: !!tableSummary },
@@ -4600,7 +4647,7 @@ function ModerationView({ profiles, onApproved, onRejected }) {
           h("div", { key: post.id, className: "mod-card" },
             h("div", { className: "mod-card-meta" },
               h("span", null, profile.name),
-              h("span", null, new Date(post.scheduled_at).toLocaleString("ru")),
+              h("span", null, window.CrosspostTime.label(post.scheduled_at, window.CrosspostTime.deviceZone())),
               h("span", null, (post.channels || []).join(", ")),
             ),
             post.text && h("div", { className: "mod-card-text" }, post.text),

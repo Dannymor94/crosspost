@@ -23,8 +23,9 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
@@ -50,6 +51,12 @@ from crosspost.orchestrator.publish_service import (
 )
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
+from crosspost.scheduler.schedule_time import (
+    legacy_schedule_time,
+    parse_instant,
+    schedule_iso,
+    wall_candidates,
+)
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.moderation import require_unmoderated_action
@@ -192,6 +199,7 @@ class ScheduledOut(BaseModel):
     # Round-trip формы сохраняется; нормализацию в единицы делает executor.
     channels: list[str | dict]
     scheduled_at: str
+    time_basis: str = "legacy_local"
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
     media_paths: list[str] = []  # пути к файлам медиа (для показа в форме редактирования)
@@ -797,6 +805,7 @@ async def schedule_post(
     session: SessionDep,
     user: CurrentUser,
     scheduled_at: str = Form(...),
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
     operation_key: str | None = Header(None, alias="Idempotency-Key"),
     recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
     content_type: str = Form("post"),
@@ -811,10 +820,24 @@ async def schedule_post(
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
 
+    utc_time = None
+    if time_contract not in (None, "utc-v1"):
+        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
     try:
-        when = datetime.fromisoformat(scheduled_at)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="scheduled_at: ISO-8601 дата/время") from exc
+        if time_contract == "utc-v1":
+            instant = parse_instant(scheduled_at)
+            if instant < datetime.now(UTC) - timedelta(seconds=60):
+                raise HTTPException(
+                    status_code=422, detail="scheduled_at: нельзя назначить в прошлое"
+                )
+            utc_time = instant.replace(tzinfo=None)
+            when = instant.astimezone().replace(tzinfo=None)
+        else:
+            when = legacy_schedule_time(scheduled_at)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(
+            status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
+        ) from exc
     try:
         channel_list = json.loads(channels)
     except (ValueError, TypeError) as exc:
@@ -864,7 +887,8 @@ async def schedule_post(
                 "text": text,
                 "title": title,
                 "channels": channel_list,
-                "scheduled_at": when.isoformat(),
+                "scheduled_at": schedule_iso(when, utc_time),
+                "time_contract": time_contract,
                 "article_text": article_text,
                 "link_phrase": link_phrase,
                 "image": image,
@@ -924,6 +948,7 @@ async def schedule_post(
         media_paths=media_paths,
         channels=channel_list,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         article_text=article_text or None,
         link_phrase=link_phrase or None,
         initial_status=initial_status,
@@ -1000,7 +1025,7 @@ async def scheduled_report(
                 id=post.id,
                 content_type=post.content_type,
                 text=post.text,
-                scheduled_at=post.scheduled_at.isoformat(),
+                scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
                 cursor=post.published_at.isoformat(),
                 overall=_overall_status(outcomes),
                 outcomes=outcomes,
@@ -1114,6 +1139,7 @@ async def reschedule(
     body: PatchScheduledBody,
     session: SessionDep,
     user: CurrentUser,
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
 ) -> ScheduledOut:
     """Редактировать запланированный пост: текст, цели, время. Изоляция по profile_id."""
     profile_repo, pub_repo = _repos(session, profile_id)
@@ -1140,18 +1166,27 @@ async def reschedule(
         )
 
     when: datetime | None = None
+    utc_time: datetime | None = None
+    if time_contract not in (None, "utc-v1"):
+        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
     if body.scheduled_at is not None:
         try:
-            when = datetime.fromisoformat(body.scheduled_at)
-        except ValueError as exc:
+            if time_contract == "utc-v1" or post.scheduled_at_utc is not None:
+                instant = parse_instant(body.scheduled_at)
+                utc_time = instant.replace(tzinfo=None)
+                when = instant.astimezone().replace(tzinfo=None)
+            else:
+                when = legacy_schedule_time(body.scheduled_at)
+        except (ValueError, OverflowError) as exc:
             raise HTTPException(
-                status_code=422, detail="scheduled_at: ISO-8601 дата/время"
+                status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
             ) from exc
-        # Нормализуем в naive-local (конвенция хранения — как datetime.combine в import_plan):
-        # aware → конвертируем в локальное время системы, потом снимаем tzinfo.
-        # Голый .replace(tzinfo=None) НЕЛЬЗЯ — он молча сдвигает стену на величину offset.
-        when = when.astimezone().replace(tzinfo=None) if when.tzinfo is not None else when
-        if when < datetime.now() - timedelta(seconds=60):
+        past = (
+            utc_time < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=60)
+            if utc_time is not None
+            else when < datetime.now() - timedelta(seconds=60)
+        )
+        if past:
             raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
 
     # Разрешаем медиа ДО CAS: если источник невалиден — 422 без записи в БД.
@@ -1174,6 +1209,7 @@ async def reschedule(
         text=body.text,
         channels=body.channels,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         media_paths=new_media_paths,
         rewind_failed=True,
     )
@@ -1413,6 +1449,87 @@ def _overall_status(outcomes: list[OutcomeOut]) -> str:
     return "done"
 
 
+# ── Profile schedule timezone ──────────────────────────────────────────────
+
+
+class ScheduleTimezone(BaseModel):
+    zone: str | None = None
+
+
+class ScheduleWallTime(BaseModel):
+    wall: str
+    zone: str
+
+
+class ResolvedScheduleTime(BaseModel):
+    instant: str
+
+
+def _schedule_zone(value: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(value)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail="Некорректный часовой пояс IANA") from exc
+
+
+@router.get("/api/profiles/{profile_id}/settings/timezone", response_model=ScheduleTimezone)
+async def get_schedule_timezone(profile_id: int, session: SessionDep) -> ScheduleTimezone:
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _ = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    zone = await settings.get_schedule_timezone()
+    return ScheduleTimezone(zone=zone)
+
+
+@router.put("/api/profiles/{profile_id}/settings/timezone", response_model=ScheduleTimezone)
+async def set_schedule_timezone(
+    profile_id: int, body: ScheduleTimezone, session: SessionDep, _: AdminUser
+) -> ScheduleTimezone:
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    if body.zone is None:
+        raise HTTPException(status_code=422, detail="Укажите часовой пояс")
+    _schedule_zone(body.zone)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    await settings.set_schedule_timezone(body.zone)
+    return body
+
+
+@router.post(
+    "/api/profiles/{profile_id}/scheduled/resolve-time", response_model=ResolvedScheduleTime
+)
+async def resolve_schedule_time(
+    profile_id: int, body: ScheduleWallTime, session: SessionDep
+) -> ResolvedScheduleTime:
+    """Resolve only the explicitly displayed profile zone; never select a DST fold."""
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _ = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    configured = await settings.get_schedule_timezone()
+    if configured is None or configured != body.zone:
+        raise HTTPException(status_code=409, detail="Часовой пояс изменился или не настроен")
+    zone = _schedule_zone(configured)
+    try:
+        wall = datetime.fromisoformat(body.wall)
+        if "T" not in body.wall:
+            raise ValueError("Expected local date and time")
+        candidates = wall_candidates(wall, zone)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail="Некорректное местное время") from exc
+    if len(candidates) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Это время пропущено или повторяется при переводе часов. Выберите другое.",
+        )
+    return ResolvedScheduleTime(instant=candidates[0].isoformat())
+
+
 # ── Модерация клиентских постов (только admin) ────────────────────────────────
 
 
@@ -1500,7 +1617,8 @@ def _scheduled_out(post) -> ScheduledOut:
         text=post.text,
         title=post.title,
         channels=list(post.channels or []),
-        scheduled_at=post.scheduled_at.isoformat(),
+        scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
+        time_basis="utc" if post.scheduled_at_utc is not None else "legacy_local",
         status=str(post.status),
         has_article=bool(post.article_text),
         media_paths=list(post.media_paths or []),

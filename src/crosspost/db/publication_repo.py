@@ -206,6 +206,7 @@ class PublicationRepository:
         article_text: str | None = None,
         link_phrase: str | None = None,
         initial_status: ScheduledPostStatus = ScheduledPostStatus.SCHEDULED,
+        scheduled_at_utc: datetime | None = None,
         commit: bool = True,
     ) -> ScheduledPost:
         post = ScheduledPost(
@@ -216,6 +217,7 @@ class PublicationRepository:
             media_paths=media_paths,
             channels=channels,
             scheduled_at=scheduled_at,
+            scheduled_at_utc=scheduled_at_utc,
             article_text=article_text,
             link_phrase=link_phrase,
             status=initial_status,
@@ -334,6 +336,7 @@ class PublicationRepository:
             .where(
                 ScheduledPost.id == scheduled_id,
                 ScheduledPost.profile_id == self._pid,
+                ScheduledPost.scheduled_at_utc.is_(None),
             )
             .values(scheduled_at=new_time)
         )
@@ -369,6 +372,7 @@ class PublicationRepository:
         text: str | None = None,
         channels: list | None = None,
         scheduled_at: datetime | None = None,
+        scheduled_at_utc: datetime | None = None,
         media_paths: list[str] | None = None,
         rewind_failed: bool = False,
     ) -> bool:
@@ -390,6 +394,7 @@ class PublicationRepository:
             values["channels"] = channels
         if scheduled_at is not None:
             values["scheduled_at"] = scheduled_at
+            values["scheduled_at_utc"] = scheduled_at_utc
         if media_paths is not None:
             values["media_paths"] = media_paths
 
@@ -410,6 +415,8 @@ class PublicationRepository:
             .values(**values)
             .returning(ScheduledPost.status)
         )
+        if scheduled_at is not None and scheduled_at_utc is None:
+            stmt = stmt.where(ScheduledPost.scheduled_at_utc.is_(None))
         result = await self._s.execute(stmt)
         row = result.fetchone()
         if row is None:

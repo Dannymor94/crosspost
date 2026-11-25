@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -41,6 +43,7 @@ from crosspost.scheduler.import_plan import (
 )
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.scheduler.remote_table import RemoteTableError, fetch_sheet_csv
+from crosspost.scheduler.schedule_time import wall_candidates
 from crosspost.web import media as media_store
 from crosspost.web.deps import CurrentUser, SessionDep, require_profile_access
 from crosspost.web.moderation import require_unmoderated_action
@@ -75,6 +78,7 @@ class PreviewOut(BaseModel):
     unmatched_files: list[str]
     resolved_count: int
     problem_count: int
+    schedule_zone: str | None = None
     # Фолбэк распознавания колонок: если обязательная колонка не угадана,
     # превью НЕ падает — просит сопоставить руками (маппинг колонка→поле).
     needs_mapping: bool = False
@@ -196,7 +200,7 @@ def _needs_mapping_preview(headers: list[str], detected_idx: dict[str, int], mis
     )
 
 
-def _to_preview(report: ImportReport) -> PreviewOut:
+def _to_preview(report: ImportReport, zone: ZoneInfo | None = None) -> PreviewOut:
     return PreviewOut(
         resolved=[
             ResolvedOut(
@@ -221,7 +225,43 @@ def _to_preview(report: ImportReport) -> PreviewOut:
         unmatched_files=report.unmatched_files,
         resolved_count=report.matched_count,
         problem_count=len(report.problems),
+        schedule_zone=zone.key if zone is not None else None,
     )
+
+
+async def _import_zone(
+    settings: ProfileSettingsRepository, requested: str | None
+) -> ZoneInfo | None:
+    """Legacy requests remain compatible; explicit imports pin a configured zone."""
+    if requested is None:
+        return None
+    configured = await settings.get_schedule_timezone()
+    if configured is None or requested != configured:
+        raise HTTPException(status_code=409, detail="Часовой пояс изменился или не настроен")
+    try:
+        return ZoneInfo(configured)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail="Некорректный часовой пояс IANA") from exc
+
+
+def _resolve_import_times(report: ImportReport, zone: ZoneInfo, now: datetime) -> None:
+    """Resolve before any media writes; invalid rows never enter the schedule."""
+    valid = []
+    for row in report.resolved:
+        try:
+            candidates = wall_candidates(row.scheduled_at, zone)
+        except (ValueError, OverflowError):
+            candidates = ()
+        if len(candidates) != 1:
+            reason = "Неоднозначное или несуществующее местное время"
+        elif candidates[0] <= now:
+            reason = "Время публикации уже прошло"
+        else:
+            row.scheduled_at = candidates[0]
+            valid.append(row)
+            continue
+        report.problems.append(RowProblem(row.row_number, row.file, reason))
+    report.resolved = sorted(valid, key=lambda row: row.scheduled_at)
 
 
 def _basename_lower(name: str) -> str:
@@ -293,6 +333,7 @@ async def import_preview(
     interval_n: int = Form(1),  # шаг для every_n_days
     weekdays_csv: str | None = Form(None),  # для weekly: '0,2,4' (пн,ср,пт)
     column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
+    schedule_zone: str | None = Form(None),
 ) -> PreviewOut:
     """Stateless превью: таблица + имена картинок → отчёт связывания без записи в БД.
 
@@ -314,6 +355,7 @@ async def import_preview(
     data, filename = await _load_table_bytes(table, sheet_url)
 
     settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    zone = await _import_zone(settings, schedule_zone)
     explicit_mapping = _parse_mapping(column_mapping)
     mapping = explicit_mapping or await settings.get_column_mapping()
 
@@ -336,11 +378,13 @@ async def import_preview(
     )
     folder = await settings.get_media_folder()
     report = build_plan(rows, file_list, rule, folder_configured=bool(folder))
+    if zone is not None:
+        _resolve_import_times(report, zone, datetime.now(UTC))
 
     # Явно присланный рабочий маппинг запоминаем для профиля.
     if explicit_mapping:
         await settings.set_column_mapping(explicit_mapping)
-    return _to_preview(report)
+    return _to_preview(report, zone)
 
 
 @router.post("/api/profiles/{profile_id}/import/commit", response_model=CommitOut)
@@ -359,6 +403,7 @@ async def import_commit(
     interval_n: int = Form(1),  # шаг для every_n_days
     weekdays_csv: str | None = Form(None),  # для weekly: '0,2,4' (пн,ср,пт)
     column_mapping: str | None = Form(None),  # JSON {logical: заголовок} — ручной маппинг
+    schedule_zone: str | None = Form(None),
 ) -> CommitOut:
     """Создать ScheduledPost на каждую строку плана (без исполнения).
 
@@ -385,6 +430,7 @@ async def import_commit(
 
     data, filename = await _load_table_bytes(table, sheet_url)
     settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    zone = await _import_zone(settings, schedule_zone)
     explicit_mapping = _parse_mapping(column_mapping)
     mapping = explicit_mapping or await settings.get_column_mapping()
     rows = _parse_table_or_422(data, filename, mapping=mapping)
@@ -407,6 +453,8 @@ async def import_commit(
     )
     folder = await settings.get_media_folder()
     report = build_plan(rows, available_names, rule, folder_configured=bool(folder))
+    if zone is not None:
+        _resolve_import_times(report, zone, datetime.now(UTC))
 
     problems: list[RowProblem] = list(report.problems)
     commit_warnings: list[RowProblem] = list(report.warnings)
@@ -476,13 +524,23 @@ async def import_commit(
         if _skip:
             continue
 
+        if zone is not None and rrow.scheduled_at <= datetime.now(UTC):
+            problems.append(RowProblem(rrow.row_number, rrow.file, "Время публикации уже прошло"))
+            continue
+        utc_time = rrow.scheduled_at.replace(tzinfo=None) if zone is not None else None
+        wall = (
+            rrow.scheduled_at.astimezone().replace(tzinfo=None)
+            if zone is not None
+            else rrow.scheduled_at
+        )
         await pub_repo.create_scheduled(
             content_type=content_type,
             text=rrow.text,
             title=None,
             media_paths=saved_paths,
             channels=channel_list,
-            scheduled_at=rrow.scheduled_at,
+            scheduled_at=wall,
+            scheduled_at_utc=utc_time,
             article_text=rrow.article_text or None,
         )
         created += 1

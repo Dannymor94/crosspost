@@ -118,6 +118,18 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
 
+## T-217 — первая безопасная часть (draft)
+Create/PATCH use one offset-to-legacy-local helper, avoiding silent offset stripping on new writes. Existing naive rows unchanged. Added explicit UTC instant/DST primitives and read-only active-queue inventory on a backup. UTC storage cutover, profile zone, import, report and frontend still open; no production audit or migration executed. See [T-217.md](T-217.md). CI/QA pending.
+
+### T-217 second slice (draft)
+Opt-in UTC column and API contract, UTC due comparison and time-fenced claim. No rewrite of existing rows. Fixed audit type annotation. CI pending; T-216 migration graph reconciliation and legacy review required before activation.
+
+### T-217 third slice (draft)
+Profile IANA timezone setting (admin write, scoped read), server wall-time resolution, DST rejection and UTC editor create/PATCH. Read-only audit uses SQLAlchemy. Import, full mixed-list display and integration remain open. CI/QA pending.
+
+### T-217 fourth slice (draft)
+Explicit-zone import preview/commit with UTC resolution and row-level DST/past rejection. Fixed previous formatter findings. Legacy import remains compatible. No immutable preview binding or batch idempotency yet; CI/QA pending.
+
 ## T-215 — серверный guard (первая часть, PR draft)
 
 Для клиента при включённой модерации запрещены прямой publish, retry, publish-now расписания, PATCH расписания и commit импорта. Поддерживаемый путь — создание scheduled с PENDING_APPROVAL. Администратор не может вручную запустить pending до approve. Это первая часть задачи, не полная приёмка: CAS отмены, границы гонок при смене настройки модерации, UI и проверка всех переходов остаются открыты. CI и независимый QA обязательны. Не изменяет retry SUBMITTED или retention медиа.
@@ -144,3 +156,6 @@ Both editors use shared operation guard with local pending proof, browser lock a
 ## UX-01 integration rehearsal — T-215 + T-216
 
 Separate validation-only branch, not for merge. Inputs: PR #53 HEAD 917f38cd and PR #54 HEAD 31d98d2d, both CI green individually. Combined client guards and backend routes, retained cancellation CAS and operation ledger. Added keyed moderation integration regression. CI pending; owner-assisted recovery, import, mandatory rollout and independent QA remain open. Do not deploy or merge this rehearsal.
+
+## UX-01 integration rehearsal — T-215 + T-216 + T-217
+Validation only; migration chain t216_operation_result → t217_schedule_utc, canonical UTC inside keyed schedule transaction. CI and independent QA pending; legacy migration, batch import idempotency and unknown-operation resolution remain open. Do not merge or deploy this rehearsal.
