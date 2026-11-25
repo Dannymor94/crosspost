@@ -1879,6 +1879,8 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     from sqlalchemy import update as _upd
 
     from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
 
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
@@ -1894,7 +1896,7 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
         await s.execute(
             _upd(ScheduledPost)
             .where(ScheduledPost.id == sched_id)
-            .values(media_paths=[str(old_file)], status="publishing")
+            .values(media_paths=[str(old_file)])
         )
         await s.commit()
 
@@ -1902,7 +1904,18 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     media_root = tmp_path / "media"
     dirs_before = {d.name for d in media_root.iterdir()}
 
-    with _patch_image_ctx():
+    original_patch = PublicationRepository.patch_scheduled_cas
+
+    async def claim_before_patch(repo, scheduled_id, **kwargs):
+        # Real state transition after media download and before the original CAS.
+        async with factory() as session:
+            assert await SchedulerRepository(session).claim(scheduled_id)
+        return await original_patch(repo, scheduled_id, **kwargs)
+
+    with (
+        _patch_image_ctx(),
+        patch.object(PublicationRepository, "patch_scheduled_cas", new=claim_before_patch),
+    ):
         r = await client.patch(
             f"/api/profiles/{pid}/scheduled/{sched_id}",
             json={"image": "https://example.com/new.jpg"},
