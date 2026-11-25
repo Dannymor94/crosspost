@@ -2995,3 +2995,138 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t216_keyed_immediate_only_dispatches_once(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    adapter = _MockAdapter("telegram")
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): adapter})
+    headers = {"Idempotency-Key": "a" * 32}
+    data = {"text": "once", "channels": '["telegram"]'}
+    url = f"/api/profiles/{pid}/publish"
+    with ctx:
+        first = await client.post(url, data=data, headers=headers, files=_post_files())
+        assert first.status_code == 200, first.text
+        publish._RUNS.clear()
+        replay = await client.post(url, data=data, headers=headers, files=_post_files())
+        changed = await client.post(
+            url, data={**data, "text": "changed"}, headers=headers, files=_post_files()
+        )
+        new = await client.post(
+            url, data=data, headers={"Idempotency-Key": "b" * 32}, files=_post_files()
+        )
+    assert replay.status_code == changed.status_code == 409
+    assert replay.json() == changed.json()
+    assert new.status_code == 200, new.text
+    assert first.json()["publication_id"] != new.json()["publication_id"]
+    assert len(calls) == 2
+
+
+async def test_t216_keyed_immediate_invalid_key_does_not_dispatch(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        response = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers={"Idempotency-Key": "bad"},
+        )
+    assert response.status_code == 422
+    assert calls == []
+
+
+async def test_t216_recover_recorded_result_without_resend(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    headers = {"Idempotency-Key": "c" * 32, "Idempotency-Recovery": "d" * 64}
+    base = f"/api/profiles/{pid}"
+    with ctx:
+        sent = await client.post(
+            base + "/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers=headers,
+        )
+        assert sent.status_code == 200, sent.text
+        publish._RUNS.clear()
+        recovered = await client.get(base + "/operation-status", headers=headers)
+        denied = await client.get(
+            base + "/operation-status", headers={**headers, "Idempotency-Recovery": "e" * 64}
+        )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json() == {
+        "state": "recorded",
+        "outcomes": [{"channel": "telegram", "target": "", "status": "done"}],
+    }
+    assert denied.status_code == 404
+    assert len(calls) == 1
+
+
+async def test_t216_reserved_without_result_is_unknown(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "f" * 32, "Idempotency-Recovery": "a" * 64}
+    base = f"/api/profiles/{pid}"
+    with patch("crosspost.web.routes.publish._save_media", side_effect=RuntimeError("crash")):
+        with pytest.raises(RuntimeError, match="crash"):
+            await client.post(
+                base + "/publish",
+                data={"text": "once", "channels": '["telegram"]'},
+                headers=headers,
+            )
+    recovered = await client.get(base + "/operation-status", headers=headers)
+    assert recovered.status_code == 200
+    assert recovered.json() == {"state": "unknown", "outcomes": []}
+    replay = await client.post(
+        base + "/publish",
+        data={"text": "once", "channels": '["telegram"]'},
+        headers=headers,
+    )
+    assert replay.status_code == 409
+
+
+async def test_t216_schedule_replay_does_not_create_second_post(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "1" * 32, "Idempotency-Recovery": "2" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    first = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert first.status_code == 200, first.text
+    repeat = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert repeat.status_code == 409
+    changed = await client.post(
+        base + "/scheduled", data={**data, "text": "different"}, headers=headers
+    )
+    assert changed.status_code == 409
+    rows = await client.get(base + "/scheduled")
+    assert len(rows.json()) == 1
+    status = await client.get(base + "/operation-status", headers=headers)
+    assert status.status_code == 200
+    assert status.json() == {
+        "state": "scheduled_created",
+        "outcomes": [{"scheduled_id": str(first.json()["id"]), "status": "scheduled"}],
+    }
+
+
+async def test_t216_schedule_completion_failure_rolls_back_both_rows(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "3" * 32, "Idempotency-Recovery": "4" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    with patch(
+        "crosspost.db.operation_repo.OperationRepository.finish",
+        side_effect=RuntimeError("commit boundary"),
+    ):
+        with pytest.raises(RuntimeError, match="commit boundary"):
+            await client.post(base + "/scheduled", data=data, headers=headers)
+    assert (await client.get(base + "/scheduled")).json() == []
+    assert (await client.get(base + "/operation-status", headers=headers)).status_code == 404
+    result = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert result.status_code == 200, result.text
+    assert len((await client.get(base + "/scheduled")).json()) == 1

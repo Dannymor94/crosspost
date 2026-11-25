@@ -117,3 +117,19 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 ## UX 2.0 — планирование (2026-11-24)
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
+
+## T-216 — persistent admission ledger (draft, first slice)
+
+Added isolated reservation repository and additive Alembic migration; one winner, stable publication ID, scoped conflict, replay never reacquires after restart. No HTTP route or UI wired yet. No guarantee against current production duplicates until integration and QA. See [T-216.md](T-216.md). Retention policy, scope lifecycle, completion/reconciliation and atomic scheduled insertion require review before activation.
+
+### T-216 second slice (draft)
+Opt-in immediate HTTP admission via Idempotency-Key, with generic replay conflict and no redispatch. Legacy API without key, scheduled, and client UI not protected by this slice. Result recovery still open. CI and integration with T-215 pending.
+
+### T-216 third slice (draft)
+Read-only recovery with separate secret and bound scope; durable safe result summary, unknown if no recorded outcome. No resends, no changes to adapter retry policy. Requires CI/QA; scheduled and UI not integrated.
+
+### T-216 fourth slice (draft)
+Keyed scheduled creation: reservation, post and initial receipt commit together; pre-commit rollback of both rows. Read-only creation receipt recovery. Legacy calls unchanged; keyed external URL media not supported yet. Direct-upload staging may retain orphan media. CI/QA pending.
+
+### T-216 fifth slice (draft)
+Both editors use shared operation guard with local pending proof, browser lock and read-only recovery. No automatic resend. Unknown operation remains blocked; no admin resolution yet. Direct-upload-only keyed scheduling, import and legacy API not covered. CI/QA pending.

@@ -206,6 +206,7 @@ class PublicationRepository:
         article_text: str | None = None,
         link_phrase: str | None = None,
         initial_status: ScheduledPostStatus = ScheduledPostStatus.SCHEDULED,
+        commit: bool = True,
     ) -> ScheduledPost:
         post = ScheduledPost(
             profile_id=self._pid,
@@ -220,7 +221,10 @@ class PublicationRepository:
             status=initial_status,
         )
         self._s.add(post)
-        await self._s.commit()
+        if commit:
+            await self._s.commit()
+        else:
+            await self._s.flush()
         await self._s.refresh(post)
         return post
 

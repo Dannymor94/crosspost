@@ -422,3 +422,21 @@ class ProfileSetting(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile")
+
+
+class PublicationOperation(Base):
+    """Durable admission tombstone; never implies a confirmed publication."""
+
+    __tablename__ = "publication_operations"
+
+    operation_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    publication_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    recovery_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_summary: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now(), nullable=False
+    )

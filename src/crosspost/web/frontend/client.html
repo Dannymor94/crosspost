@@ -333,6 +333,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="https://unpkg.com/preact@10.24.3/dist/preact.umd.js"></script>
 <script src="https://unpkg.com/preact@10.24.3/hooks/dist/hooks.umd.js"></script>
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+<script src="/static/operation-guard.js"></script>
 <script>
 const { useState, useEffect, useRef, useCallback } = preactHooks;
 const html = htm.bind(preact.h);
@@ -345,7 +346,7 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }),
-  postForm: (url, fd) => fetch(url, { method: 'POST', credentials: 'include', body: fd }),
+  postForm: (url, fd, headers) => fetch(url, { method: 'POST', credentials: 'include', body: fd, headers }),
   del: (url) => fetch(url, { method: 'DELETE', credentials: 'include' }),
   patch: (url, body) => fetch(url, {
     method: 'PATCH', credentials: 'include',
@@ -409,6 +410,20 @@ function LoginView({ onLogin }) {
 // ── Compose ────────────────────────────────────────────────────────────────────
 function ComposeView({ user }) {
   const pid = user.profile_id;
+  const ops = window.CrosspostOperations;
+  const opScope = ops.scope(user, pid);
+  const [pending, setPending] = useState(() => ops.pending(opScope));
+  const [receipt, setReceipt] = useState(null);
+  async function checkOperation() {
+    if (submitting.current) return;
+    setErr('');
+    try { setReceipt(await ops.recover(opScope, `/api/profiles/${pid}`)); }
+    catch (e) { setErr(e.message); }
+  }
+  async function acknowledgeOperation() {
+    await ops.acknowledge(opScope, receipt);
+    setPending(ops.pending(opScope)); setReceipt(null);
+  }
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
   const [text, setText] = useState('');
@@ -473,7 +488,7 @@ function ComposeView({ user }) {
   }
 
   async function submit() {
-    if (submitting.current || busy) return;
+    if (submitting.current || busy || ops.pending(opScope)) { setPending(ops.pending(opScope)); return; }
     setErr('');
     const channelsList = buildChannelsList();
     if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
@@ -489,25 +504,34 @@ function ComposeView({ user }) {
       if (mediaFile) fd.append('media', mediaFile, mediaFile.name);
 
       if (when === 'now') {
-        const r = await api.postForm(`/api/profiles/${pid}/publish`, fd);
-        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
-        const result = await r.json();
+        const result = await ops.run(opScope, async headers => {
+          const r = await api.postForm(`/api/profiles/${pid}/publish`, fd, headers);
+          if (!r.ok) throw new Error('Отправка не подтверждена. Проверьте исходную операцию.');
+          const value = await r.json();
+          if (!value.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
+            throw new Error('Результат неизвестен.');
+          return value;
+        });
         const feedback = publicationFeedback(result.outcomes || []);
         if (feedback.error) { setErr(feedback.error); return; }
         setSuccess(feedback);
       } else {
         fd.append('scheduled_at', new Date(scheduledAt).toISOString());
-        const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd);
-        if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
-        const post = await r.json();
+        const post = await ops.run(opScope, async headers => {
+          const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd, headers);
+          if (!r.ok) throw new Error('Создание поста не подтверждено. Проверьте операцию.');
+          const value = await r.json();
+          if (!value.id) throw new Error('Результат неизвестен.');
+          return value;
+        });
         if (post.status === 'pending_approval') {
           setSuccess({ msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' });
         } else {
           setSuccess({ msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' });
         }
       }
-    } catch { setErr('Нет связи. Попробуйте ещё раз.'); }
-    finally { setBusy(false); submitting.current = false; }
+    } catch (e) { setErr(e.message || 'Результат неизвестен. Проверьте операцию.'); }
+    finally { setPending(ops.pending(opScope)); setBusy(false); submitting.current = false; }
   }
 
   function reset() {
@@ -590,7 +614,13 @@ function ComposeView({ user }) {
 
       ${err && html`<div class="error-msg">${err}</div>`}
 
-      <button class="btn btn-primary" onClick=${submit} disabled=${busy || eligibleTargets.length === 0}>
+      ${pending && html`<div class="field" role="status">
+        <p>Есть незавершённая операция. Повторная отправка заблокирована.</p>
+        <button class="btn btn-ghost" onClick=${checkOperation} disabled=${busy}>Проверить результат</button>
+        ${receipt && html`<p>${receipt.message}</p>`}
+        ${receipt?.known && html`<button class="btn btn-ghost" onClick=${acknowledgeOperation}>Результат проверен</button>`}
+      </div>`}
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || pending || eligibleTargets.length === 0}>
         ${busy ? html`<span class="spinner"></span>` : null}
         ${busy ? 'Отправляем…' : 'Отправить'}
       </button>
@@ -602,7 +632,7 @@ function publicationFeedback(outcomes) {
   if (outcomes.some(o => o.status === 'failed' || o.status === 'needs_relogin')) {
     return { error: 'Некоторые каналы не приняли публикацию. Проверьте результаты у администратора.' };
   }
-  const unconfirmed = outcomes.some(o => o.status === 'submitted');
+  const unconfirmed = !outcomes.length || outcomes.some(o => o.status !== 'done');
   return { unconfirmed,
     msg: unconfirmed ? 'Отправлено, подтверждение недоступно' : 'Пост опубликован.',
     sub: unconfirmed ? 'Проверьте публикацию в выбранных каналах.' : '' };

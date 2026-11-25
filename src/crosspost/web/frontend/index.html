@@ -1238,6 +1238,7 @@ body {
 <body>
 <div id="root"></div>
 
+<script src="/static/operation-guard.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3168,7 +3169,7 @@ function BlockPreview({ profileId, text }) {
   );
 }
 
-function PublishView({ profile }) {
+function PublishView({ profile, user }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
   const [articleTitle, setArticleTitle] = useState("");
@@ -3193,6 +3194,21 @@ function PublishView({ profile }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
+  const ops = window.CrosspostOperations;
+  const opScope = ops.scope(user, profile.id);
+  const [pendingOperation, setPendingOperation] = useState(() => ops.pending(opScope));
+  const [receipt, setReceipt] = useState(null);
+  const operationBusy = useRef(false);
+  async function checkOperation() {
+    if (operationBusy.current) return;
+    try { setReceipt(await ops.recover(opScope, base)); }
+    catch (e) { setAlert({type: "error", text: e.message}); }
+  }
+  async function acknowledgeOperation() {
+    await ops.acknowledge(opScope, receipt);
+    setPendingOperation(ops.pending(opScope)); setReceipt(null);
+    loadScheduled();
+  }
 
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
 
@@ -3331,7 +3347,7 @@ function PublishView({ profile }) {
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
     : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
-  const canSend = selected.size > 0 && hasContent && !busy;
+  const canSend = selected.size > 0 && hasContent && !busy && !pendingOperation;
 
   function validateArticle() {
     if (contentType !== "article") return true;
@@ -3340,11 +3356,12 @@ function PublishView({ profile }) {
     return true;
   }
 
-  function postFormWithProgress(url, fd) {
+  function postFormWithProgress(url, fd, headers) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
       xhr.withCredentials = true;
+      Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
       };
@@ -3364,15 +3381,21 @@ function PublishView({ profile }) {
   }
 
   async function publishNow() {
-    if (!validateArticle()) return;
+    if (operationBusy.current || !validateArticle()) return;
+    operationBusy.current = true;
     setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
-      const res = await postFormWithProgress(`${base}/publish`, buildForm());
+      const res = await ops.run(opScope, async headers => {
+        const value = await postFormWithProgress(`${base}/publish`, buildForm(), headers);
+        if (!value?.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
+          throw new Error("Результат неизвестен.");
+        return value;
+      });
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); setUploadProgress(null); }
+    finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
   }
 
   async function retry(o) {
@@ -3388,17 +3411,23 @@ function PublishView({ profile }) {
   }
 
   async function doSchedule(whenLocal) {
-    if (!validateArticle()) { setShowSchedule(false); return; }
+    if (operationBusy.current || !validateArticle()) { setShowSchedule(false); return; }
+    if (mediaUrl.trim()) { setShowSchedule(false); setAlert({type: "error", text: "Для защищённого планирования загрузите файл напрямую."}); return; }
+    operationBusy.current = true;
     setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
+      await ops.run(opScope, async headers => {
+        const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), headers);
+        if (!value?.id) throw new Error("Результат неизвестен.");
+        return value;
+      });
       setAlert({ type: "success", text: "Пост запланирован." });
       setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
       setMediaUrl(""); setMediaThumb(null); setMediaErr("");
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); setUploadProgress(null); }
+    finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
@@ -3406,6 +3435,12 @@ function PublishView({ profile }) {
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
+    pendingOperation && h("div", { className: "form-panel", role: "status" },
+      h("p", null, "Есть незавершённая операция. Повторная отправка заблокирована."),
+      h("button", {className: "btn btn-ghost", onClick: checkOperation, disabled: busy}, "Проверить результат"),
+      receipt && h("p", null, receipt.message),
+      receipt?.known && h("button", {className: "btn btn-ghost", onClick: acknowledgeOperation}, "Результат проверен")),
+
 
     // Content type switch
     h("div", { className: "ctype-switch" },
@@ -4795,7 +4830,7 @@ function App() {
       ? h("div", null,
           h(ViewTabs, { view, onChange: setView }),
           view === "publish"
-            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active }))
+            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active, user: me }))
             : view === "import"
               ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
               : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),

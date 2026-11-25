@@ -195,9 +195,9 @@ ID задачи: `T-<фаза><NN>`. Шаблон и статусы — [`WORKFL
 - **Затрагивает горячие точки:** routes/publish.py, publication_repo.py, frontend
 
 ### T-216 · UX-01d/g — устойчивая идемпотентность HTTP
-- **Статус:** todo
+- **Статус:** in_progress
 - **Фаза:** 2 · **Приоритет:** P0
-- **Исполнитель:** не назначен; при старте по WORKFLOW. Независимый QA — не автор PR.
+- **Исполнитель:** ChatGPT; первый этап — operation ledger. Независимый QA — не автор PR.
 - **Зачем / что сделать:** Operation ledger и recovery status по C2; не менять T-212.
 - **Готово, когда:** Повтор, конкуренция, crash и lost response не создают дубли; см. [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md).
 - **Затрагивает горячие точки:** models.py, Alembic, publish routes
