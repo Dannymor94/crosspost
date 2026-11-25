@@ -49,6 +49,7 @@ from crosspost.orchestrator.publish_service import (
 )
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
+from crosspost.scheduler.schedule_time import legacy_schedule_time
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.signed_media import redact_media_tokens
@@ -718,9 +719,11 @@ async def schedule_post(
     await _require_profile(profile_repo, profile_id)
 
     try:
-        when = datetime.fromisoformat(scheduled_at)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="scheduled_at: ISO-8601 дата/время") from exc
+        when = legacy_schedule_time(scheduled_at)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(
+            status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
+        ) from exc
     try:
         channel_list = json.loads(channels)
     except (ValueError, TypeError) as exc:
@@ -981,15 +984,11 @@ async def reschedule(
     when: datetime | None = None
     if body.scheduled_at is not None:
         try:
-            when = datetime.fromisoformat(body.scheduled_at)
-        except ValueError as exc:
+            when = legacy_schedule_time(body.scheduled_at)
+        except (ValueError, OverflowError) as exc:
             raise HTTPException(
-                status_code=422, detail="scheduled_at: ISO-8601 дата/время"
+                status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
             ) from exc
-        # Нормализуем в naive-local (конвенция хранения — как datetime.combine в import_plan):
-        # aware → конвертируем в локальное время системы, потом снимаем tzinfo.
-        # Голый .replace(tzinfo=None) НЕЛЬЗЯ — он молча сдвигает стену на величину offset.
-        when = when.astimezone().replace(tzinfo=None) if when.tzinfo is not None else when
         if when < datetime.now() - timedelta(seconds=60):
             raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
 
