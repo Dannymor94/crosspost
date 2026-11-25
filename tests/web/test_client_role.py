@@ -141,3 +141,36 @@ def test_reject_body_optional(seeded_app):
     # Post doesn't exist → 404/409, but no 422 (body parsing should succeed)
     r = c.post("/api/profiles/1/scheduled/9999/reject", json={})
     assert r.status_code in (404, 409)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("POST", "/publish", {"data": {"channels": '["telegram"]', "text": "test"}}),
+        ("POST", "/publish/example/retry/telegram", {}),
+        ("POST", "/scheduled/1/publish-now", {}),
+        ("PATCH", "/scheduled/1", {"json": {"text": "changed"}}),
+        ("POST", "/import/commit", {"data": {"channels": '["telegram"]'}}),
+    ],
+)
+def test_moderated_client_cannot_bypass_approval(seeded_app, method, path, kwargs):
+    c = seeded_app
+    assert c.post(
+        "/api/auth/login", json={"login": "admin", "password": "adminpass"}
+    ).status_code == 200
+    assert c.put("/api/profiles/1/settings/moderation", json={"enabled": True}).status_code == 200
+    assert c.post(
+        "/api/auth/login", json={"login": "client1", "password": "clientpass"}
+    ).status_code == 200
+    response = c.request(method, "/api/profiles/1" + path, **kwargs)
+    assert response.status_code == 403
+    assert "модерац" in response.json()["detail"].lower()
+
+
+def test_unmoderated_client_keeps_direct_publish_validation(seeded_app):
+    c = seeded_app
+    assert c.post(
+        "/api/auth/login", json={"login": "client1", "password": "clientpass"}
+    ).status_code == 200
+    response = c.post("/api/profiles/1/publish", data={"channels": "[]", "text": "test"})
+    assert response.status_code == 422
