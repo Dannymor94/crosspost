@@ -1325,7 +1325,7 @@ async def set_schedule_timezone(
 ) -> ScheduleTimezone:
     from crosspost.db.settings_repo import ProfileSettingsRepository
 
-    profile_repo, _ = _repos(session, profile_id)
+    profile_repo, _pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
     if body.zone is None:
         raise HTTPException(status_code=422, detail="Укажите часовой пояс")
