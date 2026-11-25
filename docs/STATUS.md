@@ -124,3 +124,6 @@ Added isolated reservation repository and additive Alembic migration; one winner
 
 ### T-216 second slice (draft)
 Opt-in immediate HTTP admission via Idempotency-Key, with generic replay conflict and no redispatch. Legacy API without key, scheduled, and client UI not protected by this slice. Result recovery still open. CI and integration with T-215 pending.
+
+### T-216 third slice (draft)
+Read-only recovery with separate secret and bound scope; durable safe result summary, unknown if no recorded outcome. No resends, no changes to adapter retry policy. Requires CI/QA; scheduled and UI not integrated.

@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +37,14 @@ class OperationRepository:
         self._profile_id = profile_id
         self._actor_id = actor_id
 
-    async def reserve(self, operation_id: str, *, kind: str, fingerprint: str) -> Reservation:
+    async def reserve(
+        self,
+        operation_id: str,
+        *,
+        kind: str,
+        fingerprint: str,
+        recovery_hash: str | None = None,
+    ) -> Reservation:
         if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
             raise ValueError("invalid operation ID")
         if kind not in {"immediate", "scheduled"}:
@@ -45,6 +53,9 @@ class OperationRepository:
             raise ValueError("invalid request fingerprint")
         if self._profile_id <= 0 or self._actor_id <= 0:
             raise ValueError("invalid operation scope")
+
+        if recovery_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", recovery_hash):
+            raise ValueError("invalid recovery proof")
 
         candidate = new_publication_id()
         stmt = (
@@ -56,6 +67,7 @@ class OperationRepository:
                 kind=kind,
                 fingerprint=fingerprint,
                 publication_id=candidate,
+                recovery_hash=recovery_hash,
             )
             .on_conflict_do_nothing(index_elements=["operation_id"])
             .returning(PublicationOperation.publication_id)
@@ -72,6 +84,7 @@ class OperationRepository:
                     PublicationOperation.actor_id == self._actor_id,
                     PublicationOperation.kind == kind,
                     PublicationOperation.fingerprint == fingerprint,
+                    PublicationOperation.recovery_hash == recovery_hash,
                 )
             )
             existing = result.scalar_one_or_none()
@@ -83,3 +96,33 @@ class OperationRepository:
         except BaseException:
             await self._s.rollback()
             raise
+
+    async def finish(self, publication_id: str, summary: list[dict[str, str]]) -> None:
+        """Write the first observed result, never overwrite an existing summary."""
+        result = await self._s.execute(
+            sql_update(PublicationOperation)
+            .where(
+                PublicationOperation.publication_id == publication_id,
+                PublicationOperation.profile_id == self._profile_id,
+                PublicationOperation.actor_id == self._actor_id,
+                PublicationOperation.result_summary.is_(None),
+            )
+            .values(result_summary=summary)
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            await self._s.rollback()
+            raise OperationConflict("operation completion conflict")
+        await self._s.commit()
+
+    async def recover(self, operation_id: str, recovery_hash: str) -> PublicationOperation | None:
+        """Read-only lookup requires a separate recovery proof and matching scope."""
+        result = await self._s.execute(
+            select(PublicationOperation).where(
+                PublicationOperation.operation_id == operation_id,
+                PublicationOperation.profile_id == self._profile_id,
+                PublicationOperation.actor_id == self._actor_id,
+                PublicationOperation.recovery_hash == recovery_hash,
+                PublicationOperation.kind == "immediate",
+            )
+        )
+        return result.scalar_one_or_none()

@@ -27,7 +27,8 @@ def upgrade() -> None:
         pk = inspector.get_pk_constraint("publication_operations")["constrained_columns"]
         unique = inspector.get_unique_constraints("publication_operations")
         if (
-            columns != expected
+            not expected <= columns
+            or columns - expected - {"recovery_hash", "result_summary"}
             or pk != ["operation_id"]
             or not any(c["column_names"] == ["publication_id"] for c in unique)
         ):

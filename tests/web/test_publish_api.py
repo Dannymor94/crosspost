@@ -3033,3 +3033,51 @@ async def test_t216_keyed_immediate_invalid_key_does_not_dispatch(client, factor
         )
     assert response.status_code == 422
     assert calls == []
+
+
+async def test_t216_recover_recorded_result_without_resend(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    headers = {"Idempotency-Key": "c" * 32, "Idempotency-Recovery": "d" * 64}
+    base = f"/api/profiles/{pid}"
+    with ctx:
+        sent = await client.post(
+            base + "/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers=headers,
+        )
+        assert sent.status_code == 200, sent.text
+        publish._RUNS.clear()
+        recovered = await client.get(base + "/operation-status", headers=headers)
+        denied = await client.get(
+            base + "/operation-status", headers={**headers, "Idempotency-Recovery": "e" * 64}
+        )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json() == {
+        "state": "recorded",
+        "outcomes": [{"channel": "telegram", "target": "", "status": "done"}],
+    }
+    assert denied.status_code == 404
+    assert len(calls) == 1
+
+
+async def test_t216_reserved_without_result_is_unknown(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "f" * 32, "Idempotency-Recovery": "a" * 64}
+    base = f"/api/profiles/{pid}"
+    with patch("crosspost.web.routes.publish._save_media", side_effect=RuntimeError("crash")):
+        with pytest.raises(RuntimeError, match="crash"):
+            await client.post(
+                base + "/publish",
+                data={"text": "once", "channels": '["telegram"]'},
+                headers=headers,
+            )
+    recovered = await client.get(base + "/operation-status", headers=headers)
+    assert recovered.status_code == 200
+    assert recovered.json() == {"state": "unknown", "outcomes": []}
+    replay = await client.post(
+        base + "/publish",
+        data={"text": "once", "channels": '["telegram"]'},
+        headers=headers,
+    )
+    assert replay.status_code == 409

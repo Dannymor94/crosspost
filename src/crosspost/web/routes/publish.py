@@ -37,6 +37,7 @@ from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, PublicationStatus
+from crosspost.db.operation_repo import OperationRepository
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -51,7 +52,7 @@ from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
-from crosspost.web.operation_admission import reserve_immediate
+from crosspost.web.operation_admission import recovery_digest, reserve_immediate
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -560,6 +561,7 @@ async def publish_now(
     session: SessionDep,
     user: CurrentUser,
     operation_key: str | None = Header(None, alias="Idempotency-Key"),
+    recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -585,6 +587,14 @@ async def publish_now(
         video_bytes=_vbytes,
     )
 
+    proof = None
+    if recovery_secret is not None:
+        if operation_key is None:
+            raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+        profile = await profile_repo.get_profile(profile_id)
+        assert profile is not None
+        proof = recovery_digest(recovery_secret, user, profile)
+
     if operation_key is None:
         publication_id = new_publication_id()
     else:
@@ -603,6 +613,7 @@ async def publish_now(
                 "image": image,
             },
             media=media,
+            recovery_hash=proof,
         )
     media_paths = await _save_media(media, publication_id)
     if not media_paths and image.strip():
@@ -630,6 +641,21 @@ async def publish_now(
         link_phrase=link_phrase or None,
     )
 
+    if proof is not None:
+        # Durable evidence before cleanup, logging or returning the response.
+        allowed = {status.value for status in PublicationStatus}
+        summary = [
+            {
+                "channel": o.channel,
+                "target": o.target,
+                "status": o.status if o.status in allowed else "unknown",
+            }
+            for o in outcomes
+        ]
+        await OperationRepository(session, profile_id=profile_id, actor_id=user.id).finish(
+            publication_id, summary
+        )
+
     _RUNS[(profile_id, publication_id)] = _Run(
         content,
         selections,
@@ -645,6 +671,37 @@ async def publish_now(
         publication_id=publication_id,
         outcomes=[_outcome_out(o, names) for o in outcomes],
     )
+
+
+class OperationResultOut(BaseModel):
+    state: str
+    outcomes: list[dict[str, str]]
+
+
+@router.get("/api/profiles/{profile_id}/operation-status", response_model=OperationResultOut)
+async def operation_status(
+    profile_id: int,
+    session: SessionDep,
+    user: CurrentUser,
+    operation_key: str = Header(..., alias="Idempotency-Key"),
+    recovery_secret: str = Header(..., alias="Idempotency-Recovery"),
+) -> OperationResultOut:
+    """Read-only recovery; missing and unauthorized operations are indistinguishable."""
+    profile_repo, _ = _repos(session, profile_id)
+    profile = await profile_repo.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Операция недоступна")
+    proof = recovery_digest(recovery_secret, user, profile)
+    operation = await OperationRepository(
+        session, profile_id=profile_id, actor_id=user.id
+    ).recover(operation_key, proof)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Операция недоступна")
+    summary = operation.result_summary
+    if not summary:
+        return OperationResultOut(state="unknown", outcomes=[])
+    # A recorded dispatch result is not a claim of platform delivery.
+    return OperationResultOut(state="recorded", outcomes=summary)
 
 
 @router.get("/api/profiles/{profile_id}/publish/{publication_id}", response_model=list[OutcomeOut])

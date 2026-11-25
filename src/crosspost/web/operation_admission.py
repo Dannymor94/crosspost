@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from crosspost.db.models import Profile, User
 from crosspost.db.operation_repo import OperationConflict, OperationRepository
 
 _CHUNK_SIZE = 1024 * 1024
@@ -38,6 +39,27 @@ async def immediate_fingerprint(fields: dict, media: Sequence[UploadFile]) -> st
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def recovery_digest(secret: str, user: User, profile: Profile) -> str:
+    """Bind the proof to the current account and workspace incarnation.
+
+    Password changes deliberately invalidate recovery. The salted password hash
+    is never returned, logged or stored in the ledger. The separate random
+    secret is required even when numeric database IDs have been recycled.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", secret):
+        raise HTTPException(status_code=422, detail="Invalid recovery proof")
+    material = [
+        "recovery-v1",
+        secret,
+        user.id,
+        user.created_at.isoformat(),
+        user.password_hash,
+        profile.id,
+        profile.created_at.isoformat(),
+    ]
+    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
+
+
 async def reserve_immediate(
     session: AsyncSession,
     *,
@@ -46,6 +68,7 @@ async def reserve_immediate(
     operation_key: str,
     fields: dict,
     media: Sequence[UploadFile],
+    recovery_hash: str | None = None,
 ) -> str:
     """Only the first committed reservation may proceed to media save and send.
 
@@ -61,7 +84,9 @@ async def reserve_immediate(
     await session.rollback()
     repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
     try:
-        reservation = await repo.reserve(operation_key, kind="immediate", fingerprint=fingerprint)
+        reservation = await repo.reserve(
+            operation_key, kind="immediate", fingerprint=fingerprint, recovery_hash=recovery_hash
+        )
     except OperationConflict:
         reservation = None
     if reservation is None or not reservation.acquired:
