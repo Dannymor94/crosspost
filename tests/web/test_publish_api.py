@@ -3081,3 +3081,52 @@ async def test_t216_reserved_without_result_is_unknown(client, factory):
         headers=headers,
     )
     assert replay.status_code == 409
+
+
+async def test_t216_schedule_replay_does_not_create_second_post(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "1" * 32, "Idempotency-Recovery": "2" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    first = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert first.status_code == 200, first.text
+    repeat = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert repeat.status_code == 409
+    changed = await client.post(
+        base + "/scheduled", data={**data, "text": "different"}, headers=headers
+    )
+    assert changed.status_code == 409
+    rows = await client.get(base + "/scheduled")
+    assert len(rows.json()) == 1
+    status = await client.get(base + "/operation-status", headers=headers)
+    assert status.status_code == 200
+    assert status.json() == {
+        "state": "scheduled_created",
+        "outcomes": [{"scheduled_id": str(first.json()["id"]), "status": "scheduled"}],
+    }
+
+
+async def test_t216_schedule_completion_failure_rolls_back_both_rows(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "3" * 32, "Idempotency-Recovery": "4" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    with patch(
+        "crosspost.db.operation_repo.OperationRepository.finish",
+        side_effect=RuntimeError("commit boundary"),
+    ):
+        with pytest.raises(RuntimeError, match="commit boundary"):
+            await client.post(base + "/scheduled", data=data, headers=headers)
+    assert (await client.get(base + "/scheduled")).json() == []
+    assert (await client.get(base + "/operation-status", headers=headers)).status_code == 404
+    result = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert result.status_code == 200, result.text
+    assert len((await client.get(base + "/scheduled")).json()) == 1

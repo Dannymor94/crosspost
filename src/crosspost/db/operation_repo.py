@@ -44,11 +44,14 @@ class OperationRepository:
         kind: str,
         fingerprint: str,
         recovery_hash: str | None = None,
+        commit: bool = True,
     ) -> Reservation:
         if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
             raise ValueError("invalid operation ID")
         if kind not in {"immediate", "scheduled"}:
             raise ValueError("invalid operation kind")
+        if not commit and kind != "scheduled":
+            raise ValueError("only scheduled admission may share a transaction")
         if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
             raise ValueError("invalid request fingerprint")
         if self._profile_id <= 0 or self._actor_id <= 0:
@@ -75,7 +78,8 @@ class OperationRepository:
         try:
             inserted = (await self._s.execute(stmt)).scalar_one_or_none()
             if inserted is not None:
-                await self._s.commit()
+                if commit:
+                    await self._s.commit()
                 return Reservation(publication_id=inserted, acquired=True)
             result = await self._s.execute(
                 select(PublicationOperation).where(
@@ -91,7 +95,8 @@ class OperationRepository:
             if existing is None:
                 raise OperationConflict("operation key conflict")
             publication_id = existing.publication_id
-            await self._s.commit()
+            if commit:
+                await self._s.commit()
             return Reservation(publication_id=publication_id, acquired=False)
         except BaseException:
             await self._s.rollback()
@@ -122,7 +127,15 @@ class OperationRepository:
                 PublicationOperation.profile_id == self._profile_id,
                 PublicationOperation.actor_id == self._actor_id,
                 PublicationOperation.recovery_hash == recovery_hash,
-                PublicationOperation.kind == "immediate",
             )
         )
         return result.scalar_one_or_none()
+
+    async def exists(self, operation_id: str) -> bool:
+        """Admission preflight only; caller returns the same generic conflict."""
+        result = await self._s.execute(
+            select(PublicationOperation.operation_id).where(
+                PublicationOperation.operation_id == operation_id
+            )
+        )
+        return result.scalar_one_or_none() is not None

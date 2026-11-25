@@ -16,7 +16,9 @@ from crosspost.db.operation_repo import OperationConflict, OperationRepository
 _CHUNK_SIZE = 1024 * 1024
 
 
-async def immediate_fingerprint(fields: dict, media: Sequence[UploadFile]) -> str:
+async def immediate_fingerprint(
+    fields: dict, media: Sequence[UploadFile], *, kind: str = "immediate"
+) -> str:
     """Versioned exact fields, canonical targets, ordered media bytes and metadata.
 
     External image is a source identifier, not a claim that its contents are immutable.
@@ -34,7 +36,7 @@ async def immediate_fingerprint(fields: dict, media: Sequence[UploadFile]) -> st
         finally:
             await upload.seek(0)
         uploads.append([upload.filename, upload.content_type, digest.hexdigest()])
-    payload = {"version": 1, "kind": "immediate", "fields": fields, "uploads": uploads}
+    payload = {"version": 1, "kind": kind, "fields": fields, "uploads": uploads}
     encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -95,3 +97,15 @@ async def reserve_immediate(
             detail="Операция уже использована. Не отправляйте повторно; проверьте результат.",
         )
     return reservation.publication_id
+
+
+def validate_operation_key(key: str) -> None:
+    if not re.fullmatch(r"[0-9a-f]{32}", key):
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key")
+
+
+def operation_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Операция уже использована. Не отправляйте повторно; проверьте результат.",
+    )

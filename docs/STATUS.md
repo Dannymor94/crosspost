@@ -127,3 +127,6 @@ Opt-in immediate HTTP admission via Idempotency-Key, with generic replay conflic
 
 ### T-216 third slice (draft)
 Read-only recovery with separate secret and bound scope; durable safe result summary, unknown if no recorded outcome. No resends, no changes to adapter retry policy. Requires CI/QA; scheduled and UI not integrated.
+
+### T-216 fourth slice (draft)
+Keyed scheduled creation: reservation, post and initial receipt commit together; pre-commit rollback of both rows. Read-only creation receipt recovery. Legacy calls unchanged; keyed external URL media not supported yet. Direct-upload staging may retain orphan media. CI/QA pending.

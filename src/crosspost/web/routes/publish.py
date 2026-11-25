@@ -37,7 +37,7 @@ from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, PublicationStatus
-from crosspost.db.operation_repo import OperationRepository
+from crosspost.db.operation_repo import OperationConflict, OperationRepository
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -52,7 +52,13 @@ from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
-from crosspost.web.operation_admission import recovery_digest, reserve_immediate
+from crosspost.web.operation_admission import (
+    immediate_fingerprint,
+    operation_conflict,
+    recovery_digest,
+    reserve_immediate,
+    validate_operation_key,
+)
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -692,16 +698,16 @@ async def operation_status(
     if profile is None:
         raise HTTPException(status_code=404, detail="Операция недоступна")
     proof = recovery_digest(recovery_secret, user, profile)
-    operation = await OperationRepository(
-        session, profile_id=profile_id, actor_id=user.id
-    ).recover(operation_key, proof)
+    repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    operation = await repo.recover(operation_key, proof)
     if operation is None:
         raise HTTPException(status_code=404, detail="Операция недоступна")
     summary = operation.result_summary
     if not summary:
         return OperationResultOut(state="unknown", outcomes=[])
     # A recorded dispatch result is not a claim of platform delivery.
-    return OperationResultOut(state="recorded", outcomes=summary)
+    state = "scheduled_created" if operation.kind == "scheduled" else "recorded"
+    return OperationResultOut(state=state, outcomes=summary)
 
 
 @router.get("/api/profiles/{profile_id}/publish/{publication_id}", response_model=list[OutcomeOut])
@@ -783,6 +789,8 @@ async def schedule_post(
     session: SessionDep,
     user: CurrentUser,
     scheduled_at: str = Form(...),
+    operation_key: str | None = Header(None, alias="Idempotency-Key"),
+    recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -824,6 +832,39 @@ async def schedule_post(
         video_bytes=_vbytes,
     )
 
+    operation_repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    proof = None
+    fingerprint = None
+    if recovery_secret is not None and operation_key is None:
+        raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+    if operation_key is not None:
+        validate_operation_key(operation_key)
+        if image.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Для защищённого планирования загрузите файл напрямую.",
+            )
+        if await operation_repo.exists(operation_key):
+            raise operation_conflict()
+        if recovery_secret is not None:
+            profile = await profile_repo.get_profile(profile_id)
+            assert profile is not None
+            proof = recovery_digest(recovery_secret, user, profile)
+        fingerprint = await immediate_fingerprint(
+            {
+                "content_type": content_type,
+                "text": text,
+                "title": title,
+                "channels": channel_list,
+                "scheduled_at": when.isoformat(),
+                "article_text": article_text,
+                "link_phrase": link_phrase,
+                "image": image,
+            },
+            media,
+            kind="scheduled",
+        )
+
     key = f"sched-{new_publication_id()}"
     media_paths = await _save_media(media, key)
     if not media_paths and image.strip():
@@ -841,6 +882,24 @@ async def schedule_post(
 
     from crosspost.db.models import Role, ScheduledPostStatus
     from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    reservation = None
+    if operation_key is not None:
+        assert fingerprint is not None
+        await session.rollback()
+        try:
+            reservation = await operation_repo.reserve(
+                operation_key,
+                kind="scheduled",
+                fingerprint=fingerprint,
+                recovery_hash=proof,
+                commit=False,
+            )
+        except OperationConflict as exc:
+            raise operation_conflict() from exc
+        if not reservation.acquired:
+            await session.rollback()
+            raise operation_conflict()
 
     initial_status = ScheduledPostStatus.SCHEDULED
     if user.role == Role.CLIENT:
@@ -860,7 +919,15 @@ async def schedule_post(
         article_text=article_text or None,
         link_phrase=link_phrase or None,
         initial_status=initial_status,
+        commit=reservation is None,
     )
+    if reservation is not None:
+        response = _scheduled_out(post)
+        await operation_repo.finish(
+            reservation.publication_id,
+            [{"scheduled_id": str(post.id), "status": str(post.status)}],
+        )
+        return response
     return _scheduled_out(post)
 
 
