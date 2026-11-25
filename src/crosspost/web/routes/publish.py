@@ -1329,15 +1329,11 @@ async def set_schedule_timezone(
     if body.zone is None:
         raise HTTPException(status_code=422, detail="Укажите часовой пояс")
     _schedule_zone(body.zone)
-    await ProfileSettingsRepository(session, profile_id=profile_id).set_schedule_timezone(
-        body.zone
-    )
+    await ProfileSettingsRepository(session, profile_id=profile_id).set_schedule_timezone(body.zone)
     return body
 
 
-@router.post(
-    "/api/profiles/{profile_id}/scheduled/resolve-time", response_model=ResolvedScheduleTime
-)
+@router.post("/api/profiles/{profile_id}/scheduled/resolve-time", response_model=ResolvedScheduleTime)
 async def resolve_schedule_time(
     profile_id: int, body: ScheduleWallTime, session: SessionDep
 ) -> ResolvedScheduleTime:
@@ -1346,9 +1342,8 @@ async def resolve_schedule_time(
 
     profile_repo, _ = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
-    configured = await ProfileSettingsRepository(
-        session, profile_id=profile_id
-    ).get_schedule_timezone()
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    configured = await settings.get_schedule_timezone()
     if configured is None or configured != body.zone:
         raise HTTPException(status_code=409, detail="Часовой пояс изменился или не настроен")
     zone = _schedule_zone(configured)

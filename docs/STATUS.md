@@ -126,3 +126,6 @@ Opt-in UTC column and API contract, UTC due comparison and time-fenced claim. No
 
 ### T-217 third slice (draft)
 Profile IANA timezone setting (admin write, scoped read), server wall-time resolution, DST rejection and UTC editor create/PATCH. Read-only audit uses SQLAlchemy. Import, full mixed-list display and integration remain open. CI/QA pending.
+
+### T-217 fourth slice (draft)
+Explicit-zone import preview/commit with UTC resolution and row-level DST/past rejection. Fixed previous formatter findings. Legacy import remains compatible. No immutable preview binding or batch idempotency yet; CI/QA pending.

@@ -145,12 +145,14 @@ def test_reject_body_optional(seeded_app):
 
 def test_schedule_timezone_scope_and_dst_resolution(seeded_app):
     c = seeded_app
-    assert c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"}).status_code == 200
+    login = c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    assert login.status_code == 200
     base = "/api/profiles/1"
     assert c.get(base + "/settings/timezone").json() == {"zone": None}
     assert c.put(base + "/settings/timezone", json={"zone": "Invalid/Zone"}).status_code == 422
     assert c.put(base + "/settings/timezone", json={"zone": "Europe/Berlin"}).status_code == 200
-    assert c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"}).status_code == 200
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
     assert c.get(base + "/settings/timezone").json() == {"zone": "Europe/Berlin"}
     assert c.put(base + "/settings/timezone", json={"zone": "UTC"}).status_code == 403
     assert c.get("/api/profiles/9999/settings/timezone").status_code == 403
