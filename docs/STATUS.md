@@ -183,3 +183,6 @@ Dedicated mocked client browser acceptance passed at 4d2c629b (run 45790819952).
 
 ### Screenshot run recovery
 Run 45812196139 failed before browser execution: stale Ubuntu package URLs returned HTTP 404. General CI 45812195771 also stopped on test formatting. Pin rehearsal runners to Ubuntu 24.04 and refresh apt indexes before Playwright dependency installation; simplify formatting-sensitive test statements and print formatter diff before checks. Screenshot archive still unverified until new run passes. No changes to main or production.
+
+### Desktop browser rehearsal
+Client browser run 45881474479 passed and artifact 15147880520 was reviewed by owner. General CI 45881474573 stopped on three formatter findings; applied exact diff. Static audit exposed missing admin recovery banner and content-switch selection reset in merged editor; restored them. Added desktop Chromium test of actual admin page, test-only dependency substitution to pinned React UMD, synthetic API, saved draft reload, UTC schedule lost response, recovery unknown and persistent block. No real platform access. New CI/browser runs pending; admin screenshots separate `ux-admin-preview`. Validation branch only, no merge/deploy. Independent QA and remaining UX-01 production gates still open.

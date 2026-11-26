@@ -1,4 +1,4 @@
-name: UX browser acceptance (mocked client)
+name: UX browser acceptance (mocked editors)
 
 on:
   push:
@@ -25,14 +25,24 @@ jobs:
           sudo apt-get update
           uv run playwright install chromium --with-deps
       - name: Install exact client library versions without lifecycle scripts
-        run: npm install --prefix "$RUNNER_TEMP/ux-browser" --no-save --ignore-scripts --no-audit --no-fund preact@10.24.3 htm@3.1.1
+        run: npm install --prefix "$RUNNER_TEMP/ux-browser" --no-save --ignore-scripts --no-audit --no-fund preact@10.24.3 htm@3.1.1 react@18.3.1 react-dom@18.3.1
       - name: Run actual client editor in Chromium
         run: UX_BROWSER_ASSETS="$RUNNER_TEMP/ux-browser/node_modules" UX_SCREENSHOTS="$RUNNER_TEMP/ux-screenshots" uv run pytest -q tests/web/test_client_editor_acceptance.py
+      - name: Run admin editor in Chromium
+        run: UX_BROWSER_ASSETS="$RUNNER_TEMP/ux-browser/node_modules" UX_SCREENSHOTS="$RUNNER_TEMP/ux-screenshots" uv run pytest -q tests/web/test_admin_editor_acceptance.py
       - name: Upload client screenshots for visual review
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ux-client-preview
-          path: ${{ runner.temp }}/ux-screenshots/*.png
+          path: ${{ runner.temp }}/ux-screenshots/0*.png
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload admin screenshots for visual review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ux-admin-preview
+          path: ${{ runner.temp }}/ux-screenshots/admin-*.png
           if-no-files-found: warn
           retention-days: 14

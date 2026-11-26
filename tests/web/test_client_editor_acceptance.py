@@ -56,7 +56,12 @@ def test_client_draft_reload_media_loss_and_unknown_send():
         elif path.endswith("/settings/timezone"):
             route.fulfill(json={"zone": "Europe/Moscow"})
         elif path.endswith("/publish/targets"):
-            telegram = {"channel": "telegram", "target_id": "", "eligible": True, "title": "Telegram"}
+            telegram = {
+                "channel": "telegram",
+                "target_id": "",
+                "eligible": True,
+                "title": "Telegram",
+            }
             vk = {"channel": "vk", "target_id": "", "eligible": True, "title": "VK"}
             route.fulfill(json=[telegram, vk])
         elif path.endswith("/editor-draft"):
@@ -112,13 +117,17 @@ def test_client_draft_reload_media_loss_and_unknown_send():
             page.get_by_role("button", name="Без вложения").click()
             expect(send).to_be_enabled(timeout=10000)
             send.click()
-            expect(page.get_by_text("Повторная отправка заблокирована.", exact=False)).to_be_visible()
+            expect(
+                page.get_by_text("Повторная отправка заблокирована.", exact=False)
+            ).to_be_visible()
             assert sends == 1
             assert draft["data"]["text"] == draft_text
             page.reload()
             expect(text).to_have_value(draft_text)
             expect(send).to_be_disabled()
-            expect(page.get_by_text("Повторная отправка заблокирована.", exact=False)).to_be_visible()
+            expect(
+                page.get_by_text("Повторная отправка заблокирована.", exact=False)
+            ).to_be_visible()
             assert sends == 1
             capture(page, "03-repeat-blocked.png")
             assert not errors, errors

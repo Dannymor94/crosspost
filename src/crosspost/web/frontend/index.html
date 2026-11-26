@@ -3330,6 +3330,7 @@ function PublishView({ profile, user }) {
   }, [loadScheduled, loadReportDelta]);
 
   function toggle(t) {
+    if (targetState !== "ready") return;
     const k = selKey(t.channel, t.target_id);
     setSelected((prev) => {
       const next = new Set(prev);
@@ -3502,11 +3503,11 @@ function PublishView({ profile, user }) {
     h("div", { className: "ctype-switch" },
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "post" ? "active" : ""}`,
-        onClick: () => { setContentType("post"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "post") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("post"); setTitleErr(""); },
       }, "Пост"),
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "article" ? "active" : ""}`,
-        onClick: () => { setContentType("article"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "article") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("article"); setTitleErr(""); },
       }, "Статья"),
     ),
 
@@ -3597,7 +3598,7 @@ function PublishView({ profile, user }) {
 
     // Каналы
     h("p", { className: "section-title" }, "Куда публикуем"),
-    targets === null
+    targetState === "error" ? null : targets === null || targetState === "loading"
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
       : eligibleCount === 0
         ? h("div", { className: "empty-inline" },
@@ -3606,6 +3607,12 @@ function PublishView({ profile, user }) {
               : "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
         : h(PlatformTargets, { targets, selected, onToggle: toggle, setSelected }),
 
+    pendingOperation && h("div", {className:"form-panel", role:"status"},
+      h("p", null, "Есть незавершённая операция. Повторная отправка заблокирована."),
+      h("button", {className:"btn btn-ghost", disabled:busy, onClick:checkOperation}, "Проверить результат"),
+      receipt && h("p", null, receipt.message),
+      receipt?.known && h("button", {className:"btn btn-ghost", disabled:busy, onClick:acknowledgeOperation}, "Результат проверен"),
+    ),
     // Действия
     h("div", { className: "publish-actions" },
       h("button", { className: "btn btn-primary", onClick: publishNow, disabled: !canSend },
