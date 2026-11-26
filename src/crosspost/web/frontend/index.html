@@ -1238,6 +1238,7 @@ body {
 <body>
 <div id="root"></div>
 
+<script src="/static/editor-targets.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3183,6 +3184,9 @@ function PublishView({ profile }) {
   const [uploadProgress, setUploadProgress] = useState(null); // 0-100 | null
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
+  const [targetState, setTargetState] = useState('loading');
+  const targetFence = useRef(window.CrosspostEditorTargets.latest());
+  const mediaFence = useRef(window.CrosspostEditorTargets.latest());
   const [outcomes, setOutcomes] = useState(null);
   const [pubId, setPubId] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -3197,14 +3201,17 @@ function PublishView({ profile }) {
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
 
   const loadTargets = useCallback(async (hv) => {
+    const current = targetFence.current.begin();
+    setTargetState('loading');
     const videoFlag = hv != null ? hv : ((mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl));
     try {
       const t = await api.get(`${base}/publish/targets?content_type=${contentType}&has_video=${videoFlag ? "true" : "false"}`);
+      if (!current()) return;
+      if (!Array.isArray(t)) throw new Error('invalid targets');
       setTargets(t);
-      // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
-      setSelected((prev) => new Set([...prev].filter((k) =>
-        t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
-    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+      setSelected(prev => new Set(window.CrosspostEditorTargets.intersection(prev, t, x => selKey(x.channel, x.target_id)).retained));
+      setTargetState('ready');
+    } catch { if (current()) setTargetState('error'); }
   }, [base, contentType, mediaFile, mediaUrl]);
 
   const loadScheduled = useCallback(async () => {
@@ -3249,7 +3256,9 @@ function PublishView({ profile }) {
     } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); loadScheduled(); loadReportInitial(); }, [loadTargets, loadScheduled, loadReportInitial]);
+  useEffect(() => { loadTargets(); return () => targetFence.current.invalidate(); }, [loadTargets]);
+  useEffect(() => { loadScheduled(); loadReportInitial(); }, [loadScheduled, loadReportInitial]);
+  useEffect(() => () => { mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current); }, []);
 
   // Поллинг без перезагрузки: планировщик — фоновый процесс, отправляет посты сам.
   // Очередь меняется часто → поллим каждые 10 сек; журнал — только инкремент (since).
@@ -3277,6 +3286,8 @@ function PublishView({ profile }) {
   }
 
   function onMediaFileChange(f) {
+    mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+    targetFence.current.invalidate(); setTargetState('loading');
     setMediaFile(f);
     if (f) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
     // reload targets with updated video flag
@@ -3284,6 +3295,8 @@ function PublishView({ profile }) {
   }
 
   function onMediaUrlChange(url) {
+    const current = mediaFence.current.begin();
+    targetFence.current.invalidate(); setTargetState('loading');
     setMediaUrl(url);
     setMediaThumb(null);
     setMediaErr("");
@@ -3302,12 +3315,11 @@ function PublishView({ profile }) {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
         const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
-        if (r.ok) { setMediaThumb(await r.json()); }
-        else {
-          const b = await r.json().catch(() => ({ detail: r.statusText }));
-          setMediaErr(b.detail || "Не удалось загрузить изображение");
-        }
-      } catch (ex) { setMediaErr(ex.message); }
+        const b = await r.json().catch(() => null);
+        if (!current()) return;
+        if (r.ok && b) setMediaThumb(b);
+        else setMediaErr("Не удалось загрузить изображение");
+      } catch { if (current()) setMediaErr("Не удалось загрузить изображение"); }
     }, 600);
   }
 
@@ -3331,7 +3343,7 @@ function PublishView({ profile }) {
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
     : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
-  const canSend = selected.size > 0 && hasContent && !busy;
+  const canSend = selected.size > 0 && hasContent && !busy && targetState === 'ready';
 
   function validateArticle() {
     if (contentType !== "article") return true;
@@ -3364,7 +3376,7 @@ function PublishView({ profile }) {
   }
 
   async function publishNow() {
-    if (!validateArticle()) return;
+    if (!canSend || !validateArticle()) return;
     setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       const res = await postFormWithProgress(`${base}/publish`, buildForm());
@@ -3388,7 +3400,7 @@ function PublishView({ profile }) {
   }
 
   async function doSchedule(whenLocal) {
-    if (!validateArticle()) { setShowSchedule(false); return; }
+    if (!canSend || !validateArticle()) { setShowSchedule(false); return; }
     setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
@@ -3406,16 +3418,19 @@ function PublishView({ profile }) {
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
+    targetState === "loading" && h("p", {role: "status"}, "Проверяем каналы…"),
+    targetState === "error" && h("div", {role: "alert"}, "Не удалось загрузить каналы. ", h("button", {className:"btn btn-ghost", onClick: () => loadTargets()}, "Повторить")),
+    targetState === "ready" && eligibleCount === 0 && h("p", null, "Нет доступных каналов."),
 
     // Content type switch
     h("div", { className: "ctype-switch" },
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "post" ? "active" : ""}`,
-        onClick: () => { setContentType("post"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "post") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("post"); setTitleErr(""); },
       }, "Пост"),
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "article" ? "active" : ""}`,
-        onClick: () => { setContentType("article"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "article") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("article"); setTitleErr(""); },
       }, "Статья"),
     ),
 

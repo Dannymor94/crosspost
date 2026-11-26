@@ -117,3 +117,6 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 ## UX 2.0 — планирование (2026-11-24)
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
+
+## T-218 first slice (draft)
+Client/admin target intersection, stale request fence and error/empty distinction; no auto-expansion of targets. Shared browser regression added. Draft persistence design only, no durable media or text storage yet. Integration with T-215/216/217 and independent QA pending.
