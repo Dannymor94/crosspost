@@ -661,7 +661,7 @@ function publicationFeedback(outcomes) {
   if (outcomes.some(o => o.status === 'failed' || o.status === 'needs_relogin')) {
     return { error: 'Некоторые каналы не приняли публикацию. Проверьте результаты у администратора.' };
   }
-  const unconfirmed = !window.CrosspostDraft.confirmed(outcomes);
+  const unconfirmed = outcomes.length === 0 || outcomes.some(o => o.status !== 'done');
   return { unconfirmed,
     msg: unconfirmed ? 'Отправлено, подтверждение недоступно' : 'Пост опубликован.',
     sub: unconfirmed ? 'Проверьте публикацию в выбранных каналах.' : '' };

@@ -129,3 +129,6 @@ Both editors load/autosave scoped drafts with acknowledged revisions, conflict h
 
 ### T-218 fourth slice (draft)
 Exact revision clearing on confirmed publication or scheduling receipt, preserve partial/unknown and changed snapshots. Regression tests added; formatter fix; CI, full browser lifecycle and T-216 integration pending.
+
+### T-218 CI regression fix
+1293 passed / 3 failed at d7482b67; pure feedback helper no longer depends on browser globals. Added empty/unknown/deferred regression cases. New CI pending.
