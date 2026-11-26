@@ -186,3 +186,6 @@ Run 45812196139 failed before browser execution: stale Ubuntu package URLs retur
 
 ### Desktop browser rehearsal
 Client browser run 45881474479 passed and artifact 15147880520 was reviewed by owner. General CI 45881474573 stopped on three formatter findings; applied exact diff. Static audit exposed missing admin recovery banner and content-switch selection reset in merged editor; restored them. Added desktop Chromium test of actual admin page, test-only dependency substitution to pinned React UMD, synthetic API, saved draft reload, UTC schedule lost response, recovery unknown and persistent block. No real platform access. New CI/browser runs pending; admin screenshots separate `ux-admin-preview`. Validation branch only, no merge/deploy. Independent QA and remaining UX-01 production gates still open.
+
+### Desktop browser finding (UX-01)
+General CI 45884359516 passed at 05600b97. Client browser passed, but desktop scenario 45884359462 failed because target loading never transitioned to ready: merged loadTargets retained the legacy success/error handler. Restore current-request fencing, eligibility intersection and ready/error transitions. Correct test expectation to actual admin selection key telegram plus separator (U+241F). Failure screenshots enabled. New CI and browser run pending; independent QA remains required; no main or deployment changes.

@@ -135,7 +135,7 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             target.click()
             schedule = page.get_by_role("button", name="Запланировать", exact=True)
             expect(schedule).to_be_enabled(timeout=10000)
-            assert draft["data"]["targets"] == ["telegram"]
+            assert draft["data"]["targets"] == ["telegram␟"]
             capture(page, "admin-01-editor.png")
             page.reload()
             expect(text).to_have_value(draft_text)
@@ -161,5 +161,8 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             assert sends == 1 and recoveries == 1
             capture(page, "admin-03-repeat-blocked.png")
             assert not errors, errors
+        except Exception:
+            capture(page, "admin-failure.png")
+            raise
         finally:
             browser.close()

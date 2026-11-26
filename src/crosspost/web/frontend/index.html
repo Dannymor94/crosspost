@@ -3260,11 +3260,16 @@ function PublishView({ profile, user }) {
     const videoFlag = hv != null ? hv : ((mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl));
     try {
       const t = await api.get(`${base}/publish/targets?content_type=${contentType}&has_video=${videoFlag ? "true" : "false"}`);
+      if (!current()) return;
+      if (!Array.isArray(t)) throw new Error("invalid targets");
       setTargets(t);
-      // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
-      setSelected((prev) => new Set([...prev].filter((k) =>
-        t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
-    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+      setSelected(prev => new Set(window.CrosspostEditorTargets.intersection(
+        prev, t, x => selKey(x.channel, x.target_id)
+      ).retained));
+      setTargetState("ready");
+    } catch {
+      if (current()) setTargetState("error");
+    }
   }, [base, contentType, mediaFile, mediaUrl]);
 
   const loadScheduled = useCallback(async () => {
