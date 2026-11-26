@@ -174,3 +174,6 @@ Separate validation-only branch, not for merge. Inputs: PR #53 HEAD 917f38cd and
 
 ## UX-01 integration rehearsal — T-215 + T-216 + T-217
 Validation only; migration chain t216_operation_result → t217_schedule_utc, canonical UTC inside keyed schedule transaction. CI and independent QA pending; legacy migration, batch import idempotency and unknown-operation resolution remain open. Do not merge or deploy this rehearsal.
+
+## UX-01 browser acceptance rehearsal
+Integration 40581ba2 passed CI (run 45781351710); T-218 3dba39f0 passed CI (45781133269). Added dedicated Chromium client-page scenario with pinned Preact/HTM assets and mocked HTTP, no real credentials or external publishes. Exercises actual client.html with draft CAS, reload, missing attachment, unknown send and pending guard. Separate workflow must pass; admin full browser and live owner smoke still pending. Validation branch only; do not deploy or merge.

@@ -71,6 +71,9 @@ _EXPECTED: list[tuple[str, str]] = [
     ("DELETE", "/api/profiles/{*}/channels/{*}/targets/{*}"),
     ("POST", "/api/profiles/{*}/channels/telegram/targets/from-link"),
     ("POST", "/api/profiles/{*}/channels/telegram/targets/bulk"),
+    # editor draft
+    ("GET", "/api/profiles/{*}/editor-draft"),
+    ("PUT", "/api/profiles/{*}/editor-draft"),
     # publish
     ("GET", "/api/profiles/{*}/publish/targets"),
     ("POST", "/api/profiles/{*}/publish/{*}/retry/{*}"),
