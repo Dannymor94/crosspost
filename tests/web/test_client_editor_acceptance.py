@@ -38,9 +38,7 @@ def test_client_draft_reload_media_loss_and_unknown_send():
         elif path == "/client":
             route.fulfill(path=FRONTEND / "client.html", content_type="text/html")
         elif path.startswith("/static/") and path.endswith(".js"):
-            route.fulfill(
-                path=FRONTEND / Path(path).name, content_type="application/javascript"
-            )
+            route.fulfill(path=FRONTEND / Path(path).name, content_type="application/javascript")
         elif path == "/api/auth/me":
             route.fulfill(json={"id": 1, "login": "test-client", "role": "client", "profile_id": 1})
         elif path.endswith("/settings/moderation"):
