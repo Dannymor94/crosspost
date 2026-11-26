@@ -430,7 +430,7 @@ function ComposeView({ user }) {
   const fileInputRef = useRef();
   const [mediaMissing, setMediaMissing] = useState(false);
   const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
-    base: `/api/profiles/${pid}`, actor: user.id, paused: busy || !!success,
+    base: `/api/profiles/${pid}`, actor: user.id, paused: busy || !!success, mediaIdentity: mediaFile,
     data: {text, targets: Object.keys(checked).filter(k => checked[k]), when, scheduled_at: scheduledAt, media_required: !!mediaFile || mediaMissing},
     hydrate: value => {
       setText(value.text); setWhen(value.when); setScheduledAt(value.scheduled_at);
@@ -521,6 +521,8 @@ function ComposeView({ user }) {
     if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
     if (when === 'later' && !scheduledAt) { setErr('Укажите дату и время публикации'); return; }
 
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
     submitting.current = true;
     setBusy(true);
     try {
@@ -536,17 +538,23 @@ function ComposeView({ user }) {
         const result = await r.json();
         const feedback = publicationFeedback(result.outcomes || []);
         if (feedback.error) { setErr(feedback.error); return; }
-        setSuccess(feedback);
+        if (window.CrosspostDraft.confirmed(result.outcomes)) {
+          if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+          else setErr('Публикация подтверждена. Черновик не очищен: проверьте изменения перед новой отправкой.');
+        } else {
+          setErr('Результат не подтверждён полностью. Черновик сохранён. Проверьте публикации, не отправляйте повторно.');
+        }
       } else {
         fd.append('scheduled_at', new Date(scheduledAt).toISOString());
         const r = await api.postForm(`/api/profiles/${pid}/scheduled`, fd);
         if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
         const post = await r.json();
-        if (post.status === 'pending_approval') {
-          setSuccess({ msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' });
-        } else {
-          setSuccess({ msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' });
-        }
+        if (!post.id || !['scheduled','pending_approval'].includes(post.status)) { setErr('Создание поста не подтверждено. Черновик сохранён.'); return; }
+        const feedback = post.status === 'pending_approval'
+          ? { msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' }
+          : { msg: `Пост выйдет ${fmtDate(post.scheduled_at)}.`, sub: '' };
+        if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+        else setErr('Пост создан. Черновик не очищен: проверьте изменения перед новой отправкой.');
       }
     } catch { setErr('Нет связи. Попробуйте ещё раз.'); }
     finally { setBusy(false); submitting.current = false; }
@@ -653,7 +661,7 @@ function publicationFeedback(outcomes) {
   if (outcomes.some(o => o.status === 'failed' || o.status === 'needs_relogin')) {
     return { error: 'Некоторые каналы не приняли публикацию. Проверьте результаты у администратора.' };
   }
-  const unconfirmed = outcomes.some(o => o.status === 'submitted');
+  const unconfirmed = !window.CrosspostDraft.confirmed(outcomes);
   return { unconfirmed,
     msg: unconfirmed ? 'Отправлено, подтверждение недоступно' : 'Пост опубликован.',
     sub: unconfirmed ? 'Проверьте публикацию в выбранных каналах.' : '' };

@@ -13,15 +13,13 @@ depends_on = None
 def upgrade() -> None:
     if "editor_drafts" in sa.inspect(op.get_bind()).get_table_names():
         return
+    user_fk = sa.ForeignKey("users.id", ondelete="CASCADE")
+    profile_fk = sa.ForeignKey("profiles.id", ondelete="CASCADE")
     op.create_table(
         "editor_drafts",
         sa.Column("scope", sa.String(64), primary_key=True),
-        sa.Column(
-            "user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-        ),
-        sa.Column(
-            "profile_id", sa.Integer(), sa.ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
-        ),
+        sa.Column("user_id", sa.Integer(), user_fk, nullable=False),
+        sa.Column("profile_id", sa.Integer(), profile_fk, nullable=False),
         sa.Column("revision", sa.String(32), nullable=False),
         sa.Column("data", sa.JSON(), nullable=False),
     )

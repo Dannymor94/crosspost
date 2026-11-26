@@ -34,7 +34,8 @@
       throw new Error("Invalid draft response");
     return row;
   }
-  function useDraft({useState,useRef,useEffect}, {base, actor, data, hydrate, paused}) {
+  const confirmed = outcomes => Array.isArray(outcomes) && outcomes.length > 0 && outcomes.every(o => o.status === "done");
+  function useDraft({useState,useRef,useEffect}, {base, actor, data, hydrate, paused, mediaIdentity}) {
     const [status,setStatus] = useState("loading");
     const [loaded,setLoaded] = useState(false);
     const [saved,setSaved] = useState(null);
@@ -42,6 +43,8 @@
     const receipt = useRef(null);
     const generation = useRef(null);
     const latest = useRef("");
+    const latestMedia = useRef(null);
+    latestMedia.current = mediaIdentity;
     const snapshot = serialize(data);
     latest.current = snapshot;
     const dirty = loaded && snapshot !== saved;
@@ -93,6 +96,30 @@
       leaveChecks.add(check); window.addEventListener("beforeunload",onUnload);
       return () => { leaveChecks.delete(check); window.removeEventListener("beforeunload",onUnload); };
     }, []);
+    function capture() {
+      if (!loaded || dirty || !receipt.current || !["ready","saved"].includes(status)) return null;
+      return {scope:receipt.current.scope, revision:receipt.current.revision, snapshot, media:latestMedia.current, controller:generation.current};
+    }
+    function unchanged(token) {
+      return !!token && token.controller === generation.current && !token.controller.signal.aborted && latest.current === token.snapshot && latestMedia.current === token.media;
+    }
+    async function clearSubmitted(token) {
+      if (!unchanged(token) || receipt.current?.scope !== token.scope || receipt.current?.revision !== token.revision) return false;
+      setStatus("saving");
+      try {
+        const row = await request(base,actor,token.controller.signal,{scope:token.scope,revision:token.revision,data:null});
+        if (token.controller.signal.aborted || row.scope !== token.scope) return false;
+        receipt.current = row;
+        const same = unchanged(token);
+        if (same) hydrate(blank());
+        setSaved(serialize(blank()));
+        setStatus("saved");
+        return same;
+      } catch(e) {
+        if (!token.controller.signal.aborted) setStatus(e.status === 409 ? "conflict" : e.status === 401 || e.status === 403 ? "auth" : "save-error");
+        return false;
+      }
+    }
     const reload = () => {
       if (dirty && !window.confirm("Несохранённые изменения будут потеряны. Загрузить сохранённый черновик?")) return;
       generation.current?.abort();
@@ -107,7 +134,7 @@
       : status === "saving" ? "Сохраняем черновик…"
       : dirty ? "Есть несохранённые изменения"
       : status === "saved" ? "Черновик сохранён" : "Нет сохранённого черновика";
-    return {loaded,dirty,status,label,retry,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
+    return {loaded,dirty,status,label,retry,capture,unchanged,clearSubmitted,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
   }
-  window.CrosspostDraft = Object.freeze({useDraft,canLeave,normalize});
+  window.CrosspostDraft = Object.freeze({useDraft,canLeave,normalize,confirmed});
 })();

@@ -3200,7 +3200,7 @@ function PublishView({ profile, user }) {
   const base = `/api/profiles/${profile.id}`;
   const [mediaMissing, setMediaMissing] = useState(false);
   const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
-    base, actor: user.id, paused: busy,
+    base, actor: user.id, paused: busy, mediaIdentity: mediaFile || mediaUrl,
     data: {content_type:contentType,text,article_title:articleTitle,article_text:articleText,link_phrase:linkPhrase,targets:[...selected],media_required:!!mediaFile||!!mediaUrl.trim()||mediaMissing},
     hydrate: value => {
       setContentType(value.content_type); setText(value.text); setArticleTitle(value.article_title);
@@ -3389,11 +3389,16 @@ function PublishView({ profile, user }) {
 
   async function publishNow() {
     if (!canSend || !validateArticle()) return;
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
     setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       const res = await postFormWithProgress(`${base}/publish`, buildForm());
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
+      if (window.CrosspostDraft.confirmed(res.outcomes)) {
+        if (!await draft.clearSubmitted(submittedDraft)) setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
+      } else setAlert({type:"error", text:"Не все публикации подтверждены. Черновик сохранён."});
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); setUploadProgress(null); }
@@ -3413,13 +3418,15 @@ function PublishView({ profile, user }) {
 
   async function doSchedule(whenLocal) {
     if (!canSend || !validateArticle()) { setShowSchedule(false); return; }
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
     setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
-      setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
-      setMediaUrl(""); setMediaThumb(null); setMediaErr(""); setMediaMissing(false); setSelected(new Set());
+      const post = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
+      if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
+      const cleared = await draft.clearSubmitted(submittedDraft);
+      setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); setUploadProgress(null); }
@@ -4842,9 +4849,9 @@ function App() {
       onSelect: selectProfile,
       onNew: () => setShowNewProfile(true),
       onNewClient: () => setShowNewClient(true),
-      onOpenConsole: () => { setConsoleOpen(true); setModerationOpen(false); },
+      onOpenConsole: () => { if (!window.CrosspostDraft.canLeave()) return; setConsoleOpen(true); setModerationOpen(false); },
       consoleActive: consoleOpen,
-      onModeration: () => { setModerationOpen(true); setConsoleOpen(false); },
+      onModeration: () => { if (!window.CrosspostDraft.canLeave()) return; setModerationOpen(true); setConsoleOpen(false); },
       moderationActive: moderationOpen,
       pendingCount,
     }),

@@ -126,3 +126,6 @@ Private server-side draft API, scoped identity and revision CAS. No local text s
 
 ### T-218 third slice (draft)
 Both editors load/autosave scoped drafts with acknowledged revisions, conflict handling, media reselection and navigation warning. Actual browser lifecycle and exact send/clear integration remain pending. CI/QA pending.
+
+### T-218 fourth slice (draft)
+Exact revision clearing on confirmed publication or scheduling receipt, preserve partial/unknown and changed snapshots. Regression tests added; formatter fix; CI, full browser lifecycle and T-216 integration pending.

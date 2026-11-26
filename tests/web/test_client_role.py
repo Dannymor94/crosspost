@@ -157,6 +157,7 @@ def test_private_draft_cas_and_account_isolation(seeded_app):
     assert saved.status_code == 200, saved.text
     assert saved.json()["revision"] is not None
     assert c.put(url, json=payload).status_code == 409
+    assert c.put(url, json={**first, "data": None}).status_code == 409
     assert c.get(url).json()["data"]["text"] == "private admin draft"
     c.post("/api/auth/logout")
     assert c.get(url).status_code == 401
