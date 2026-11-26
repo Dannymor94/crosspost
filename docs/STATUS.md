@@ -123,3 +123,6 @@ Client/admin target intersection, stale request fence and error/empty distinctio
 
 ### T-218 second slice (draft)
 Private server-side draft API, scoped identity and revision CAS. No local text storage, no media bytes/URLs. UI autosave not yet wired. Migration integration and auth lifecycle review required. CI pending.
+
+### T-218 third slice (draft)
+Both editors load/autosave scoped drafts with acknowledged revisions, conflict handling, media reselection and navigation warning. Actual browser lifecycle and exact send/clear integration remain pending. CI/QA pending.

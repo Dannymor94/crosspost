@@ -8,7 +8,7 @@ import json
 import secrets
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy import update as sql_update
@@ -69,9 +69,15 @@ async def _identity(session: SessionDep, user: User, profile_id: int) -> str:
 
 @router.get("/api/profiles/{profile_id}/editor-draft", response_model=DraftOut)
 async def get_draft(
-    profile_id: int, session: SessionDep, user: CurrentUser, response: Response
+    profile_id: int,
+    session: SessionDep,
+    user: CurrentUser,
+    response: Response,
+    expected_actor: int | None = Header(None, alias="X-Draft-Actor"),
 ) -> DraftOut:
     response.headers["Cache-Control"] = "no-store"
+    if expected_actor is not None and expected_actor != user.id:
+        raise HTTPException(status_code=409, detail="Аккаунт изменился")
     scope = await _identity(session, user, profile_id)
     row = await session.scalar(
         select(EditorDraft).where(

@@ -334,6 +334,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="https://unpkg.com/preact@10.24.3/hooks/dist/hooks.umd.js"></script>
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
 <script src="/static/editor-targets.js"></script>
+<script src="/static/editor-draft.js"></script>
 <script>
 const { useState, useEffect, useRef, useCallback } = preactHooks;
 const html = htm.bind(preact.h);
@@ -427,6 +428,16 @@ function ComposeView({ user }) {
   const [success, setSuccess] = useState(null); // {msg, sub}
   const submitting = useRef(false);
   const fileInputRef = useRef();
+  const [mediaMissing, setMediaMissing] = useState(false);
+  const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
+    base: `/api/profiles/${pid}`, actor: user.id, paused: busy || !!success,
+    data: {text, targets: Object.keys(checked).filter(k => checked[k]), when, scheduled_at: scheduledAt, media_required: !!mediaFile || mediaMissing},
+    hydrate: value => {
+      setText(value.text); setWhen(value.when); setScheduledAt(value.scheduled_at);
+      replaceChecked(Object.fromEntries(value.targets.map(k => [k,true])));
+      mediaFence.current.invalidate(); setMediaFile(null); setMediaPreview(null); setMediaMissing(value.media_required);
+    }
+  });
 
   const isVideo = mediaFile && mediaFile.type.startsWith('video/');
 
@@ -457,9 +468,9 @@ function ComposeView({ user }) {
   }
 
   useEffect(() => {
-    loadTargets(isVideo);
+    if (draft.loaded) loadTargets(isVideo);
     return () => targetFence.current.invalidate();
-  }, [pid, isVideo]);
+  }, [pid, isVideo, draft.loaded]);
   useEffect(() => () => mediaFence.current.invalidate(), []);
 
   function pickFile(f) {
@@ -468,6 +479,7 @@ function ComposeView({ user }) {
     targetFence.current.invalidate();
     setTargetState('loading');
     setMediaFile(f);
+    setMediaMissing(false);
     setMediaPreview(null);
     if (f.type.startsWith('image/')) {
       const r = new FileReader();
@@ -480,7 +492,7 @@ function ComposeView({ user }) {
 
   function clearMedia() {
     mediaFence.current.invalidate();
-    setMediaFile(null); setMediaPreview(null);
+    setMediaFile(null); setMediaPreview(null); setMediaMissing(false);
     loadTargets(false);
   }
 
@@ -503,7 +515,7 @@ function ComposeView({ user }) {
   }
 
   async function submit() {
-    if (submitting.current || busy || targetState !== 'ready') return;
+    if (submitting.current || busy || targetState !== 'ready' || !draft.canSend || mediaMissing) return;
     setErr('');
     const channelsList = buildChannelsList();
     if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
@@ -543,9 +555,11 @@ function ComposeView({ user }) {
   function reset() {
     mediaFence.current.invalidate();
     setMediaFile(null); setMediaPreview(null);
-    setText(''); setWhen('now'); setScheduledAt('');
+    setText(''); setWhen('now'); setScheduledAt(''); setMediaMissing(false); replaceChecked({});
     setErr(''); setSuccess(null);
   }
+
+  if (!draft.loaded) return html`<div role="status">${draft.label} ${draft.status !== 'loading' && html`<button class="btn btn-ghost" onClick=${draft.retry}>Повторить</button>`}</div>`;
 
   if (success) return html`
     <div class=${`success-card${success.unconfirmed ? ' unconfirmed' : ''}`}>
@@ -558,6 +572,8 @@ function ComposeView({ user }) {
 
   return html`
     <div>
+      <p role="status">${draft.label} ${["conflict","save-error","auth"].includes(draft.status) && html`<button class="btn btn-ghost" onClick=${draft.retry}>Проверить сохранение</button>`}</p>
+      ${mediaMissing && html`<div class="video-warn">Медиа не восстановлено. Выберите файл заново или явно удалите вложение. <button class="btn btn-ghost" onClick=${clearMedia}>Без вложения</button></div>`}
       <div class="field">
         <label class="label">Фото или видео</label>
         ${!mediaFile ? html`
@@ -625,7 +641,7 @@ function ComposeView({ user }) {
 
       ${err && html`<div class="error-msg">${err}</div>`}
 
-      <button class="btn btn-primary" onClick=${submit} disabled=${busy || targetState !== 'ready' || !buildChannelsList().length}>
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || !draft.canSend || mediaMissing || targetState !== 'ready' || !buildChannelsList().length}>
         ${busy ? html`<span class="spinner"></span>` : null}
         ${busy ? 'Отправляем…' : 'Отправить'}
       </button>
@@ -765,6 +781,7 @@ function App() {
   }, []);
 
   async function logout() {
+    if (!window.CrosspostDraft.canLeave()) return;
     await api.post('/api/auth/logout', {});
     setUser(null);
   }
@@ -787,12 +804,12 @@ function App() {
         <button class=${'tab-btn' + (tab === 'compose' ? ' active' : '')} onClick=${() => setTab('compose')}>
           Новый пост
         </button>
-        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} onClick=${() => setTab('posts')}>
+        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} onClick=${() => { if (window.CrosspostDraft.canLeave()) setTab('posts'); }}>
           Мои публикации
         </button>
       </div>
       ${tab === 'compose'
-        ? html`<${ComposeView} user=${user} />`
+        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} />`
         : html`<${PostsView} user=${user} />`
       }
     </div>

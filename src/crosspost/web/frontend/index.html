@@ -1239,6 +1239,7 @@ body {
 <div id="root"></div>
 
 <script src="/static/editor-targets.js"></script>
+<script src="/static/editor-draft.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3169,7 +3170,7 @@ function BlockPreview({ profileId, text }) {
   );
 }
 
-function PublishView({ profile }) {
+function PublishView({ profile, user }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
   const [articleTitle, setArticleTitle] = useState("");
@@ -3197,6 +3198,17 @@ function PublishView({ profile }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
+  const [mediaMissing, setMediaMissing] = useState(false);
+  const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
+    base, actor: user.id, paused: busy,
+    data: {content_type:contentType,text,article_title:articleTitle,article_text:articleText,link_phrase:linkPhrase,targets:[...selected],media_required:!!mediaFile||!!mediaUrl.trim()||mediaMissing},
+    hydrate: value => {
+      setContentType(value.content_type); setText(value.text); setArticleTitle(value.article_title);
+      setArticleText(value.article_text); setLinkPhrase(value.link_phrase); setSelected(new Set(value.targets));
+      mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+      setMediaFile(null); setMediaUrl(''); setMediaThumb(null); setMediaMissing(value.media_required);
+    }
+  });
 
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
 
@@ -3256,7 +3268,7 @@ function PublishView({ profile }) {
     } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); return () => targetFence.current.invalidate(); }, [loadTargets]);
+  useEffect(() => { if (draft.loaded) loadTargets(); return () => targetFence.current.invalidate(); }, [loadTargets, draft.loaded]);
   useEffect(() => { loadScheduled(); loadReportInitial(); }, [loadScheduled, loadReportInitial]);
   useEffect(() => () => { mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current); }, []);
 
@@ -3288,7 +3300,7 @@ function PublishView({ profile }) {
   function onMediaFileChange(f) {
     mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
     targetFence.current.invalidate(); setTargetState('loading');
-    setMediaFile(f);
+    setMediaFile(f); setMediaMissing(false);
     if (f) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
     // reload targets with updated video flag
     loadTargets(f ? isVideoFile(f) : false);
@@ -3297,7 +3309,7 @@ function PublishView({ profile }) {
   function onMediaUrlChange(url) {
     const current = mediaFence.current.begin();
     targetFence.current.invalidate(); setTargetState('loading');
-    setMediaUrl(url);
+    setMediaUrl(url); if (url.trim()) setMediaMissing(false);
     setMediaThumb(null);
     setMediaErr("");
     clearTimeout(mediaDebounceRef.current);
@@ -3343,7 +3355,7 @@ function PublishView({ profile }) {
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
     : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
-  const canSend = selected.size > 0 && hasContent && !busy && targetState === 'ready';
+  const canSend = selected.size > 0 && hasContent && !busy && targetState === 'ready' && draft.canSend && !mediaMissing;
 
   function validateArticle() {
     if (contentType !== "article") return true;
@@ -3407,7 +3419,7 @@ function PublishView({ profile }) {
       await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
       setAlert({ type: "success", text: "Пост запланирован." });
       setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
-      setMediaUrl(""); setMediaThumb(null); setMediaErr("");
+      setMediaUrl(""); setMediaThumb(null); setMediaErr(""); setMediaMissing(false); setSelected(new Set());
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { setBusy(false); setUploadProgress(null); }
@@ -3415,8 +3427,11 @@ function PublishView({ profile }) {
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
 
+  if (!draft.loaded) return h("div", {role:"status"}, draft.label, draft.status !== "loading" && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Повторить"));
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
+    h("p", {role:"status"}, draft.label, ["conflict","save-error","auth"].includes(draft.status) && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Проверить сохранение")),
+    mediaMissing && h("div", {role:"alert", className:"form-hint"}, "Медиа не восстановлено. Выберите файл или ссылку заново. ", h("button", {className:"btn btn-ghost", onClick:() => setMediaMissing(false)}, "Без вложения")),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
     targetState === "loading" && h("p", {role: "status"}, "Проверяем каналы…"),
     targetState === "error" && h("div", {role: "alert"}, "Не удалось загрузить каналы. ", h("button", {className:"btn btn-ghost", onClick: () => loadTargets()}, "Повторить")),
@@ -4762,6 +4777,7 @@ function App() {
   }, [me, profiles.length]);
 
   async function logout() {
+    if (!window.CrosspostDraft.canLeave()) return;
     try { await api.post("/api/auth/logout"); } catch (_) {}
     setMe(null); setProfiles([]); setActive(null);
   }
@@ -4778,6 +4794,7 @@ function App() {
   }
 
   function selectProfile(p) {
+    if (!window.CrosspostDraft.canLeave()) return;
     setConsoleOpen(false);
     setModerationOpen(false);
     setFocusChannel(null);
@@ -4808,9 +4825,9 @@ function App() {
         }))
       : active
       ? h("div", null,
-          h(ViewTabs, { view, onChange: setView }),
+          h(ViewTabs, { view, onChange: v => { if (window.CrosspostDraft.canLeave()) setView(v); } }),
           view === "publish"
-            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active }))
+            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
             : view === "import"
               ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
               : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),
