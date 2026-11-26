@@ -119,7 +119,7 @@ async def test_cli_upgrades_ede92c0(tmp_path, monkeypatch):
     assert process.returncode == 0, (stdout, stderr)
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "t217_schedule_utc",
+            "t218_editor_draft",
         )
 
 
@@ -312,6 +312,6 @@ async def test_failure_after_rebuild_rolls_back_and_can_retry(tmp_path):
     await engine.dispose()
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "t217_schedule_utc",
+            "t218_editor_draft",
         )
         assert conn.execute("PRAGMA foreign_key_list(publications)").fetchone()[6] == "CASCADE"

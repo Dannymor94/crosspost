@@ -118,6 +118,21 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
 
+## T-218 first slice (draft)
+Client/admin target intersection, stale request fence and error/empty distinction; no auto-expansion of targets. Shared browser regression added. Draft persistence design only, no durable media or text storage yet. Integration with T-215/216/217 and independent QA pending.
+
+### T-218 second slice (draft)
+Private server-side draft API, scoped identity and revision CAS. No local text storage, no media bytes/URLs. UI autosave not yet wired. Migration integration and auth lifecycle review required. CI pending.
+
+### T-218 third slice (draft)
+Both editors load/autosave scoped drafts with acknowledged revisions, conflict handling, media reselection and navigation warning. Actual browser lifecycle and exact send/clear integration remain pending. CI/QA pending.
+
+### T-218 fourth slice (draft)
+Exact revision clearing on confirmed publication or scheduling receipt, preserve partial/unknown and changed snapshots. Regression tests added; formatter fix; CI, full browser lifecycle and T-216 integration pending.
+
+### T-218 CI regression fix
+1293 passed / 3 failed at d7482b67; pure feedback helper no longer depends on browser globals. Added empty/unknown/deferred regression cases. New CI pending.
+
 ## T-217 — первая безопасная часть (draft)
 Create/PATCH use one offset-to-legacy-local helper, avoiding silent offset stripping on new writes. Existing naive rows unchanged. Added explicit UTC instant/DST primitives and read-only active-queue inventory on a backup. UTC storage cutover, profile zone, import, report and frontend still open; no production audit or migration executed. See [T-217.md](T-217.md). CI/QA pending.
 

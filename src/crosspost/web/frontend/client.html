@@ -335,6 +335,8 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
 <script src="/static/operation-guard.js"></script>
 <script src="/static/schedule-time.js"></script>
+<script src="/static/editor-targets.js"></script>
+<script src="/static/editor-draft.js"></script>
 <script>
 const { useState, useEffect, useRef, useCallback } = preactHooks;
 const html = htm.bind(preact.h);
@@ -472,59 +474,99 @@ function ComposeView({ user }) {
   const [text, setText] = useState('');
   const [targets, setTargets] = useState([]);
   const [checked, setChecked] = useState({});
+  const [targetState, setTargetState] = useState('loading');
+  const [removedTargets, setRemovedTargets] = useState([]);
+  const targetFence = useRef(window.CrosspostEditorTargets.latest());
+  const mediaFence = useRef(window.CrosspostEditorTargets.latest());
+  const checkedRef = useRef({});
   const [when, setWhen] = useState('now'); // 'now' | 'later'
-  useEffect(() => { if (policy.enabled === true) setWhen('later'); }, [policy.enabled]);
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [success, setSuccess] = useState(null); // {msg, sub}
   const submitting = useRef(false);
   const fileInputRef = useRef();
+  const [mediaMissing, setMediaMissing] = useState(false);
+  const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
+    base: `/api/profiles/${pid}`, actor: user.id, paused: busy || !!success, mediaIdentity: mediaFile,
+    data: {text, targets: Object.keys(checked).filter(k => checked[k]), when, scheduled_at: scheduledAt, media_required: !!mediaFile || mediaMissing},
+    hydrate: value => {
+      setText(value.text); setWhen(policy.enabled ? 'later' : value.when); setScheduledAt(value.scheduled_at);
+      replaceChecked(Object.fromEntries(value.targets.map(k => [k,true])));
+      mediaFence.current.invalidate(); setMediaFile(null); setMediaPreview(null); setMediaMissing(value.media_required);
+    }
+  });
 
+  useEffect(() => { if (policy.enabled === true && draft.loaded) setWhen('later'); }, [policy.enabled, draft.loaded]);
   const isVideo = mediaFile && mediaFile.type.startsWith('video/');
 
+  const targetKey = t => t.target_id ? `${t.channel}::${t.target_id}` : t.channel;
+  function replaceChecked(value) { checkedRef.current = value; setChecked(value); }
   async function loadTargets(hasVid) {
     if (!pid) return;
+    const current = targetFence.current.begin();
+    setTargetState('loading');
     try {
       const ts = await api.get(
         `/api/profiles/${pid}/publish/targets?content_type=post&has_video=${hasVid ? 'true' : 'false'}`
       );
+      if (!current()) return;
+      if (!Array.isArray(ts)) throw new Error('invalid targets');
+      const keys = Object.keys(checkedRef.current).filter(k => checkedRef.current[k]);
+      const result = window.CrosspostEditorTargets.intersection(keys, ts, targetKey);
+      replaceChecked(Object.fromEntries(result.retained.map(k => [k, true])));
+      setRemovedTargets(result.removed.map(k => {
+        const t = ts.find(t => targetKey(t) === k);
+        return k + ': ' + (t?.reason || t?.ineligible_reason || 'цель недоступна');
+      }));
       setTargets(ts);
-      const init = {};
-      ts.forEach(t => {
-        const key = t.target_id ? `${t.channel}::${t.target_id}` : t.channel;
-        if (t.eligible) init[key] = true;
-      });
-      setChecked(init);
-    } catch { /* silent — show no channels */ }
-  }
-
-  useEffect(() => { loadTargets(isVideo); }, [pid, isVideo]);
-
-  function pickFile(f) {
-    if (!f) return;
-    setMediaFile(f);
-    if (f.type.startsWith('image/')) {
-      const r = new FileReader();
-      r.onload = e => setMediaPreview(e.target.result);
-      r.readAsDataURL(f);
-    } else {
-      setMediaPreview(null);
+      setTargetState('ready');
+    } catch {
+      if (current()) setTargetState('error');
     }
   }
 
-  function clearMedia() { setMediaFile(null); setMediaPreview(null); }
+  useEffect(() => {
+    if (draft.loaded) loadTargets(isVideo);
+    return () => targetFence.current.invalidate();
+  }, [pid, isVideo, draft.loaded]);
+  useEffect(() => () => mediaFence.current.invalidate(), []);
+
+  function pickFile(f) {
+    if (!f) return;
+    const current = mediaFence.current.begin();
+    targetFence.current.invalidate();
+    setTargetState('loading');
+    setMediaFile(f);
+    setMediaMissing(false);
+    setMediaPreview(null);
+    if (f.type.startsWith('image/')) {
+      const r = new FileReader();
+      r.onload = e => { if (current()) setMediaPreview(e.target.result); };
+      r.readAsDataURL(f);
+    }
+    // Every new file rechecks targets, even if its media type is unchanged.
+    loadTargets(f.type.startsWith('video/'));
+  }
+
+  function clearMedia() {
+    mediaFence.current.invalidate();
+    setMediaFile(null); setMediaPreview(null); setMediaMissing(false);
+    loadTargets(false);
+  }
 
   function toggleChannel(key) {
-    setChecked(prev => ({ ...prev, [key]: !prev[key] }));
+    if (targetState !== 'ready') return;
+    replaceChecked({ ...checkedRef.current, [key]: !checkedRef.current[key] });
   }
 
   const eligibleTargets = targets.filter(t => t.eligible);
   const hiddenVideoCount = targets.filter(t => !t.eligible && t.ineligible_kind === 'content' && isVideo).length;
 
   function buildChannelsList() {
+    const allowed = new Set(eligibleTargets.map(targetKey));
     return Object.entries(checked)
-      .filter(([, v]) => v)
+      .filter(([key, v]) => v && allowed.has(key))
       .map(([key]) => {
         const [channel, target_id] = key.split('::');
         return target_id ? { channel, target_id } : channel;
@@ -534,12 +576,14 @@ function ComposeView({ user }) {
   async function submit() {
     if (policy.enabled === null) return;
     if (policy.enabled && when !== 'later') { setWhen('later'); return; }
-    if (submitting.current || busy || ops.pending(opScope)) { setPending(ops.pending(opScope)); return; }
+    if (submitting.current || busy || ops.pending(opScope) || targetState !== 'ready' || !draft.canSend || mediaMissing) { setPending(ops.pending(opScope)); return; }
     setErr('');
     const channelsList = buildChannelsList();
     if (channelsList.length === 0) { setErr('Выберите хотя бы один канал'); return; }
     if (when === 'later' && !scheduledAt) { setErr('Укажите дату и время публикации'); return; }
 
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
     submitting.current = true;
     setBusy(true);
     try {
@@ -563,7 +607,12 @@ function ComposeView({ user }) {
         });
         const feedback = publicationFeedback(result.outcomes || []);
         if (feedback.error) { setErr(feedback.error); return; }
-        setSuccess(feedback);
+        if (window.CrosspostDraft.confirmed(result.outcomes)) {
+          if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+          else setErr('Публикация подтверждена. Черновик не очищен: проверьте изменения перед новой отправкой.');
+        } else {
+          setErr('Результат не подтверждён полностью. Черновик сохранён. Проверьте публикации, не отправляйте повторно.');
+        }
       } else {
         const instant = await window.CrosspostTime.resolve(`/api/profiles/${pid}`, scheduledAt, zone);
         fd.append('scheduled_at', instant);
@@ -574,21 +623,25 @@ function ComposeView({ user }) {
           if (!value.id) throw new Error('Результат неизвестен.');
           return value;
         });
-        if (post.status === 'pending_approval') {
-          setSuccess({ msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' });
-        } else {
-          setSuccess({ msg: `Пост выйдет ${window.CrosspostTime.label(post.scheduled_at, zone)}.`, sub: '' });
-        }
+        if (!post.id || !['scheduled','pending_approval'].includes(post.status)) { setErr('Создание поста не подтверждено. Черновик сохранён.'); return; }
+        const feedback = post.status === 'pending_approval'
+          ? { msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' }
+          : { msg: `Пост выйдет ${window.CrosspostTime.label(post.scheduled_at, zone)}.`, sub: '' };
+        if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+        else setErr('Пост создан. Черновик не очищен: проверьте изменения перед новой отправкой.');
       }
     } catch (e) { setErr(e.message || 'Результат неизвестен. Проверьте операцию.'); }
     finally { setPending(ops.pending(opScope)); setBusy(false); submitting.current = false; }
   }
 
   function reset() {
+    mediaFence.current.invalidate();
     setMediaFile(null); setMediaPreview(null);
-    setText(''); setWhen(policy.enabled ? 'later' : 'now'); setScheduledAt('');
+    setText(''); setWhen(policy.enabled ? 'later' : 'now'); setScheduledAt(''); setMediaMissing(false); replaceChecked({});
     setErr(''); setSuccess(null);
   }
+
+  if (!draft.loaded) return html`<div role="status">${draft.label} ${draft.status !== 'loading' && html`<button class="btn btn-ghost" onClick=${draft.retry}>Повторить</button>`}</div>`;
 
   if (success) return html`
     <div class=${`success-card${success.unconfirmed ? ' unconfirmed' : ''}`}>
@@ -601,6 +654,8 @@ function ComposeView({ user }) {
 
   return html`
     <div>
+      <p role="status">${draft.label} ${["conflict","save-error","auth"].includes(draft.status) && html`<button class="btn btn-ghost" onClick=${draft.retry}>Проверить сохранение</button>`}</p>
+      ${mediaMissing && html`<div class="video-warn">Медиа не восстановлено. Выберите файл заново или явно удалите вложение. <button class="btn btn-ghost" onClick=${clearMedia}>Без вложения</button></div>`}
       <div class="field">
         <label class="label">Фото или видео</label>
         ${!mediaFile ? html`
@@ -628,6 +683,10 @@ function ComposeView({ user }) {
           value=${text} onInput=${e => setText(e.target.value)} />
       </div>
 
+      ${targetState === 'loading' && html`<p role="status">Проверяем доступные каналы…</p>`}
+      ${targetState === 'error' && html`<div class="error-msg">Не удалось загрузить каналы. <button class="btn btn-ghost" onClick=${() => loadTargets(isVideo)}>Повторить</button></div>`}
+      ${targetState === 'ready' && eligibleTargets.length === 0 && html`<p>Нет доступных каналов.</p>`}
+      ${removedTargets.length > 0 && html`<p class="video-warn">Исключены: ${removedTargets.join('; ')}</p>`}
       ${eligibleTargets.length > 0 && html`
         <div class="field">
           <label class="label">Куда опубликовать</label>
@@ -673,7 +732,7 @@ function ComposeView({ user }) {
       </div>`}
       ${policy.enabled === true && html`<p class="video-warn">Пост будет отправлен на проверку администратору. Укажите желаемое время.</p>`}
       ${policy.enabled === null && html`<p class="video-warn">${policy.failed ? "Не удалось получить правила публикации." : "Проверяем правила публикации…"} ${policy.failed && html`<button class="btn btn-ghost" onClick=${policy.reload}>Повторить проверку</button>`}</p>`}
-      <button class="btn btn-primary" onClick=${submit} disabled=${busy || pending || policy.enabled === null || (when === 'later' && !zone) || eligibleTargets.length === 0}>
+      <button class="btn btn-primary" onClick=${submit} disabled=${busy || pending || policy.enabled === null || (when === 'later' && !zone) || !draft.canSend || mediaMissing || targetState !== 'ready' || !buildChannelsList().length}>
         ${busy ? html`<span class="spinner"></span>` : null}
         ${busy ? 'Отправляем…' : policy.enabled ? 'На проверку' : when === 'later' ? 'Запланировать' : 'Отправить'}
       </button>
@@ -685,7 +744,7 @@ function publicationFeedback(outcomes) {
   if (outcomes.some(o => o.status === 'failed' || o.status === 'needs_relogin')) {
     return { error: 'Некоторые каналы не приняли публикацию. Проверьте результаты у администратора.' };
   }
-  const unconfirmed = !outcomes.length || outcomes.some(o => o.status !== 'done');
+  const unconfirmed = outcomes.length === 0 || outcomes.some(o => o.status !== 'done');
   return { unconfirmed,
     msg: unconfirmed ? 'Отправлено, подтверждение недоступно' : 'Пост опубликован.',
     sub: unconfirmed ? 'Проверьте публикацию в выбранных каналах.' : '' };
@@ -817,6 +876,7 @@ function App() {
   }, []);
 
   async function logout() {
+    if (!window.CrosspostDraft.canLeave()) return;
     await api.post('/api/auth/logout', {});
     setUser(null);
   }
@@ -839,12 +899,12 @@ function App() {
         <button class=${'tab-btn' + (tab === 'compose' ? ' active' : '')} onClick=${() => setTab('compose')}>
           Новый пост
         </button>
-        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} onClick=${() => setTab('posts')}>
+        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} onClick=${() => { if (window.CrosspostDraft.canLeave()) setTab('posts'); }}>
           Мои публикации
         </button>
       </div>
       ${tab === 'compose'
-        ? html`<${ComposeView} user=${user} />`
+        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} />`
         : html`<${PostsView} user=${user} />`
       }
     </div>

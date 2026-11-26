@@ -1240,6 +1240,8 @@ body {
 
 <script src="/static/operation-guard.js"></script>
 <script src="/static/schedule-time.js"></script>
+<script src="/static/editor-targets.js"></script>
+<script src="/static/editor-draft.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3209,6 +3211,9 @@ function PublishView({ profile, user }) {
   const [uploadProgress, setUploadProgress] = useState(null); // 0-100 | null
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
+  const [targetState, setTargetState] = useState('loading');
+  const targetFence = useRef(window.CrosspostEditorTargets.latest());
+  const mediaFence = useRef(window.CrosspostEditorTargets.latest());
   const [outcomes, setOutcomes] = useState(null);
   const [pubId, setPubId] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -3235,9 +3240,23 @@ function PublishView({ profile, user }) {
     loadScheduled();
   }
 
+  const [mediaMissing, setMediaMissing] = useState(false);
+  const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
+    base, actor: user.id, paused: busy, mediaIdentity: mediaFile || mediaUrl,
+    data: {content_type:contentType,text,article_title:articleTitle,article_text:articleText,link_phrase:linkPhrase,targets:[...selected],media_required:!!mediaFile||!!mediaUrl.trim()||mediaMissing},
+    hydrate: value => {
+      setContentType(value.content_type); setText(value.text); setArticleTitle(value.article_title);
+      setArticleText(value.article_text); setLinkPhrase(value.link_phrase); setSelected(new Set(value.targets));
+      mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+      setMediaFile(null); setMediaUrl(''); setMediaThumb(null); setMediaMissing(value.media_required);
+    }
+  });
+
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
 
   const loadTargets = useCallback(async (hv) => {
+    const current = targetFence.current.begin();
+    setTargetState('loading');
     const videoFlag = hv != null ? hv : ((mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl));
     try {
       const t = await api.get(`${base}/publish/targets?content_type=${contentType}&has_video=${videoFlag ? "true" : "false"}`);
@@ -3290,7 +3309,9 @@ function PublishView({ profile, user }) {
     } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); loadScheduled(); loadReportInitial(); }, [loadTargets, loadScheduled, loadReportInitial]);
+  useEffect(() => { if (draft.loaded) loadTargets(); return () => targetFence.current.invalidate(); }, [loadTargets, draft.loaded]);
+  useEffect(() => { loadScheduled(); loadReportInitial(); }, [loadScheduled, loadReportInitial]);
+  useEffect(() => () => { mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current); }, []);
 
   // Поллинг без перезагрузки: планировщик — фоновый процесс, отправляет посты сам.
   // Очередь меняется часто → поллим каждые 10 сек; журнал — только инкремент (since).
@@ -3318,14 +3339,18 @@ function PublishView({ profile, user }) {
   }
 
   function onMediaFileChange(f) {
-    setMediaFile(f);
+    mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+    targetFence.current.invalidate(); setTargetState('loading');
+    setMediaFile(f); setMediaMissing(false);
     if (f) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
     // reload targets with updated video flag
     loadTargets(f ? isVideoFile(f) : false);
   }
 
   function onMediaUrlChange(url) {
-    setMediaUrl(url);
+    const current = mediaFence.current.begin();
+    targetFence.current.invalidate(); setTargetState('loading');
+    setMediaUrl(url); if (url.trim()) setMediaMissing(false);
     setMediaThumb(null);
     setMediaErr("");
     clearTimeout(mediaDebounceRef.current);
@@ -3343,12 +3368,11 @@ function PublishView({ profile, user }) {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
         const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
-        if (r.ok) { setMediaThumb(await r.json()); }
-        else {
-          const b = await r.json().catch(() => ({ detail: r.statusText }));
-          setMediaErr(b.detail || "Не удалось загрузить изображение");
-        }
-      } catch (ex) { setMediaErr(ex.message); }
+        const b = await r.json().catch(() => null);
+        if (!current()) return;
+        if (r.ok && b) setMediaThumb(b);
+        else setMediaErr("Не удалось загрузить изображение");
+      } catch { if (current()) setMediaErr("Не удалось загрузить изображение"); }
     }, 600);
   }
 
@@ -3372,7 +3396,7 @@ function PublishView({ profile, user }) {
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
     : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
-  const canSend = selected.size > 0 && hasContent && !busy && !pendingOperation;
+  const canSend = selected.size > 0 && hasContent && !busy && !pendingOperation && targetState === 'ready' && draft.canSend && !mediaMissing;
 
   function validateArticle() {
     if (contentType !== "article") return true;
@@ -3406,7 +3430,9 @@ function PublishView({ profile, user }) {
   }
 
   async function publishNow() {
-    if (operationBusy.current || !validateArticle()) return;
+    if (operationBusy.current || !canSend || !validateArticle()) return;
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
     operationBusy.current = true;
     setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
@@ -3418,6 +3444,9 @@ function PublishView({ profile, user }) {
       });
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
+      if (window.CrosspostDraft.confirmed(res.outcomes)) {
+        if (!await draft.clearSubmitted(submittedDraft)) setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
+      } else setAlert({type:"error", text:"Не все публикации подтверждены. Черновик сохранён."});
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
@@ -3436,20 +3465,22 @@ function PublishView({ profile, user }) {
   }
 
   async function doSchedule(whenLocal) {
-    if (operationBusy.current || !validateArticle()) { setShowSchedule(false); return; }
-    if (mediaUrl.trim()) { setShowSchedule(false); setAlert({type: "error", text: "Для защищённого планирования загрузите файл напрямую."}); return; }
+    if (operationBusy.current || !canSend || !validateArticle()) { setShowSchedule(false); return; }
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
+    if (contentType === 'post' && mediaUrl.trim()) { setShowSchedule(false); setAlert({type: "error", text: "Для защищённого планирования загрузите файл напрямую."}); return; }
     operationBusy.current = true;
     setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await ops.run(opScope, async headers => {
+      const post = await ops.run(opScope, async headers => {
         const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), {...headers, "X-Schedule-Time-Contract": "utc-v1"});
         if (!value?.id) throw new Error("Результат неизвестен.");
         return value;
       });
-      setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
-      setMediaUrl(""); setMediaThumb(null); setMediaErr("");
+      if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
+      const cleared = await draft.clearSubmitted(submittedDraft);
+      setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
     finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
@@ -3457,15 +3488,15 @@ function PublishView({ profile, user }) {
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
 
+  if (!draft.loaded) return h("div", {role:"status"}, draft.label, draft.status !== "loading" && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Повторить"));
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
+    h("p", {role:"status"}, draft.label, ["conflict","save-error","auth"].includes(draft.status) && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Проверить сохранение")),
+    mediaMissing && h("div", {role:"alert", className:"form-hint"}, "Медиа не восстановлено. Выберите файл или ссылку заново. ", h("button", {className:"btn btn-ghost", onClick:() => setMediaMissing(false)}, "Без вложения")),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
-    pendingOperation && h("div", { className: "form-panel", role: "status" },
-      h("p", null, "Есть незавершённая операция. Повторная отправка заблокирована."),
-      h("button", {className: "btn btn-ghost", onClick: checkOperation, disabled: busy}, "Проверить результат"),
-      receipt && h("p", null, receipt.message),
-      receipt?.known && h("button", {className: "btn btn-ghost", onClick: acknowledgeOperation}, "Результат проверен")),
-
+    targetState === "loading" && h("p", {role: "status"}, "Проверяем каналы…"),
+    targetState === "error" && h("div", {role: "alert"}, "Не удалось загрузить каналы. ", h("button", {className:"btn btn-ghost", onClick: () => loadTargets()}, "Повторить")),
+    targetState === "ready" && eligibleCount === 0 && h("p", null, "Нет доступных каналов."),
 
     // Content type switch
     h("div", { className: "ctype-switch" },
@@ -4829,6 +4860,7 @@ function App() {
   }, [me, profiles.length]);
 
   async function logout() {
+    if (!window.CrosspostDraft.canLeave()) return;
     try { await api.post("/api/auth/logout"); } catch (_) {}
     setMe(null); setProfiles([]); setActive(null);
   }
@@ -4845,6 +4877,7 @@ function App() {
   }
 
   function selectProfile(p) {
+    if (!window.CrosspostDraft.canLeave()) return;
     setConsoleOpen(false);
     setModerationOpen(false);
     setFocusChannel(null);
@@ -4875,9 +4908,9 @@ function App() {
         }))
       : active
       ? h("div", null,
-          h(ViewTabs, { view, onChange: setView }),
+          h(ViewTabs, { view, onChange: v => { if (window.CrosspostDraft.canLeave()) setView(v); } }),
           view === "publish"
-            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active, user: me }))
+            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
             : view === "import"
               ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
               : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),
@@ -4892,9 +4925,9 @@ function App() {
       onSelect: selectProfile,
       onNew: () => setShowNewProfile(true),
       onNewClient: () => setShowNewClient(true),
-      onOpenConsole: () => { setConsoleOpen(true); setModerationOpen(false); },
+      onOpenConsole: () => { if (!window.CrosspostDraft.canLeave()) return; setConsoleOpen(true); setModerationOpen(false); },
       consoleActive: consoleOpen,
-      onModeration: () => { setModerationOpen(true); setConsoleOpen(false); },
+      onModeration: () => { if (!window.CrosspostDraft.canLeave()) return; setModerationOpen(true); setConsoleOpen(false); },
       moderationActive: moderationOpen,
       pendingCount,
     }),
