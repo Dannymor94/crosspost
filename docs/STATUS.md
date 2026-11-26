@@ -120,3 +120,6 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 ## T-218 first slice (draft)
 Client/admin target intersection, stale request fence and error/empty distinction; no auto-expansion of targets. Shared browser regression added. Draft persistence design only, no durable media or text storage yet. Integration with T-215/216/217 and independent QA pending.
+
+### T-218 second slice (draft)
+Private server-side draft API, scoped identity and revision CAS. No local text storage, no media bytes/URLs. UI autosave not yet wired. Migration integration and auth lifecycle review required. CI pending.

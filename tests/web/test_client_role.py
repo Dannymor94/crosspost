@@ -141,3 +141,37 @@ def test_reject_body_optional(seeded_app):
     # Post doesn't exist → 404/409, but no 422 (body parsing should succeed)
     r = c.post("/api/profiles/1/scheduled/9999/reject", json={})
     assert r.status_code in (404, 409)
+
+
+def test_private_draft_cas_and_account_isolation(seeded_app):
+    c = seeded_app
+    c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    url = "/api/profiles/1/editor-draft"
+    initial = c.get(url)
+    assert initial.status_code == 200, initial.text
+    assert initial.headers["cache-control"] == "no-store"
+    first = initial.json()
+    assert first["revision"] is None
+    payload = {**first, "data": {"text": "private admin draft", "media_required": True}}
+    saved = c.put(url, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision"] is not None
+    assert c.put(url, json=payload).status_code == 409
+    assert c.get(url).json()["data"]["text"] == "private admin draft"
+    c.post("/api/auth/logout")
+    assert c.get(url).status_code == 401
+    c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    other = c.get(url).json()
+    assert other["data"] is None
+    assert other["scope"] != first["scope"]
+    assert c.put(url, json=saved.json()).status_code == 409
+    assert c.get("/api/profiles/9999/editor-draft").status_code == 403
+    client_saved = c.put(url, json={**other, "data": {"text": "client draft"}})
+    assert client_saved.status_code == 200, client_saved.text
+    c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    current = c.get(url).json()
+    assert current["data"]["text"] == "private admin draft"
+    cleared = c.put(url, json={**current, "data": None})
+    assert cleared.status_code == 200
+    assert c.get(url).json()["data"] is None
+    assert c.put(url, json=current).status_code == 409

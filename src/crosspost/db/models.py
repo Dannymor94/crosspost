@@ -422,3 +422,19 @@ class ProfileSetting(Base):
     )
 
     profile: Mapped[Profile] = relationship("Profile")
+
+
+class EditorDraft(Base):
+    """Private editor snapshot, scoped to the actor and profile incarnation."""
+
+    __tablename__ = "editor_drafts"
+
+    scope: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision: Mapped[str] = mapped_column(String(32), nullable=False)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
