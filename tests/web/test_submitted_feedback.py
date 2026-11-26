@@ -13,7 +13,17 @@ FRONTEND = Path(__file__).parents[2] / "src/crosspost/web/frontend"
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
 @pytest.mark.parametrize(
-    "statuses", [["submitted"], ["done", "submitted"], ["done"], ["failed"], ["needs_relogin"]]
+    "statuses",
+    [
+        [],
+        ["unknown"],
+        ["deferred"],
+        ["submitted"],
+        ["done", "submitted"],
+        ["done"],
+        ["failed"],
+        ["needs_relogin"],
+    ],
 )
 def test_client_feedback(statuses):
     source = (FRONTEND / "client.html").read_text()
@@ -29,7 +39,7 @@ def test_client_feedback(statuses):
     result = json.loads(subprocess.check_output(["node", "-e", program], text=True))
     if any(s in {"failed", "needs_relogin"} for s in statuses):
         assert result["error"]
-    elif "submitted" in statuses:
+    elif not statuses or any(s != "done" for s in statuses):
         assert result["unconfirmed"]
         assert result["msg"] == "Отправлено, подтверждение недоступно"
     else:
