@@ -177,3 +177,6 @@ Validation only; migration chain t216_operation_result → t217_schedule_utc, ca
 
 ## UX-01 browser acceptance rehearsal
 Integration 40581ba2 passed CI (run 45781351710); T-218 3dba39f0 passed CI (45781133269). Added dedicated Chromium client-page scenario with pinned Preact/HTM assets and mocked HTTP, no real credentials or external publishes. Exercises actual client.html with draft CAS, reload, missing attachment, unknown send and pending guard. Separate workflow must pass; admin full browser and live owner smoke still pending. Validation branch only; do not deploy or merge.
+
+### Client browser evidence
+Dedicated mocked client browser acceptance passed at 4d2c629b (run 45790819952). General CI failed on formatting of the new test (45790819940); formatter fix and screenshot artifact added. Artifact `ux-client-preview` is generated only by the new run, with synthetic client data. Open Actions run → Artifacts → download ZIP → open PNGs. No hosted interactive preview or production deploy. Admin browser E2E and independent QA remain pending.

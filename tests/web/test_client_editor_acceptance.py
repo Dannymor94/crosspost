@@ -25,6 +25,14 @@ def test_client_draft_reload_media_loss_and_unknown_send():
     writes = 0
     sends = 0
     errors = []
+    draft_text = "Тестовый черновик — публикация не отправляется на реальные площадки."
+    screenshots = Path(os.environ.get("UX_SCREENSHOTS", ""))
+    if os.environ.get("UX_SCREENSHOTS"):
+        screenshots.mkdir(parents=True, exist_ok=True)
+
+    def capture(page, name):
+        if os.environ.get("UX_SCREENSHOTS"):
+            page.screenshot(path=screenshots / name, full_page=True)
 
     def handle(route):
         nonlocal draft, writes, sends
@@ -48,7 +56,12 @@ def test_client_draft_reload_media_loss_and_unknown_send():
         elif path.endswith("/publish/targets"):
             route.fulfill(
                 json=[
-                    {"channel": "telegram", "target_id": "", "eligible": True, "title": "Telegram"},
+                    {
+                        "channel": "telegram",
+                        "target_id": "",
+                        "eligible": True,
+                        "title": "Telegram",
+                    },
                     {"channel": "vk", "target_id": "", "eligible": True, "title": "VK"},
                 ]
             )
@@ -80,11 +93,13 @@ def test_client_draft_reload_media_loss_and_unknown_send():
             page.route("**/*", handle)
             page.goto("http://localhost/client")
             text = page.get_by_placeholder("Напишите текст поста…")
-            text.fill("Synthetic draft")
+            text.fill(draft_text)
             telegram = page.get_by_role("checkbox", name="Telegram")
             vk = page.get_by_role("checkbox", name="VK")
             expect(telegram).not_to_be_checked()
             telegram.check()
+            expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
+            capture(page, "01-client-editor.png")
             page.locator('input[type="file"]').set_input_files(
                 {"name": "test.png", "mimeType": "image/png", "buffer": b"synthetic"}
             )
@@ -93,23 +108,25 @@ def test_client_draft_reload_media_loss_and_unknown_send():
             assert draft["data"]["media_required"] is True
             assert draft["data"]["targets"] == ["telegram"]
             page.reload()
-            expect(text).to_have_value("Synthetic draft")
+            expect(text).to_have_value(draft_text)
             expect(telegram).to_be_checked()
             expect(vk).not_to_be_checked()
             expect(page.get_by_text("Медиа не восстановлено.", exact=False)).to_be_visible()
             send = page.get_by_role("button", name="Отправить", exact=True)
             expect(send).to_be_disabled()
+            capture(page, "02-draft-restored.png")
             page.get_by_role("button", name="Без вложения").click()
             expect(send).to_be_enabled(timeout=10000)
             send.click()
             expect(page.get_by_text("Повторная отправка заблокирована.", exact=False)).to_be_visible()
             assert sends == 1
-            assert draft["data"]["text"] == "Synthetic draft"
+            assert draft["data"]["text"] == draft_text
             page.reload()
-            expect(text).to_have_value("Synthetic draft")
+            expect(text).to_have_value(draft_text)
             expect(send).to_be_disabled()
             expect(page.get_by_text("Повторная отправка заблокирована.", exact=False)).to_be_visible()
             assert sends == 1
+            capture(page, "03-repeat-blocked.png")
             assert not errors, errors
         finally:
             browser.close()
