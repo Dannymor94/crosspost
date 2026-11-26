@@ -46,25 +46,19 @@ def test_client_draft_reload_media_loss_and_unknown_send():
         elif path == "/client":
             route.fulfill(path=FRONTEND / "client.html", content_type="text/html")
         elif path.startswith("/static/") and path.endswith(".js"):
-            route.fulfill(path=FRONTEND / Path(path).name, content_type="application/javascript")
+            script_path = FRONTEND / Path(path).name
+            route.fulfill(path=script_path, content_type="application/javascript")
         elif path == "/api/auth/me":
-            route.fulfill(json={"id": 1, "login": "test-client", "role": "client", "profile_id": 1})
+            actor = {"id": 1, "login": "test-client", "role": "client", "profile_id": 1}
+            route.fulfill(json=actor)
         elif path.endswith("/settings/moderation"):
             route.fulfill(json={"enabled": False})
         elif path.endswith("/settings/timezone"):
             route.fulfill(json={"zone": "Europe/Moscow"})
         elif path.endswith("/publish/targets"):
-            route.fulfill(
-                json=[
-                    {
-                        "channel": "telegram",
-                        "target_id": "",
-                        "eligible": True,
-                        "title": "Telegram",
-                    },
-                    {"channel": "vk", "target_id": "", "eligible": True, "title": "VK"},
-                ]
-            )
+            telegram = {"channel": "telegram", "target_id": "", "eligible": True, "title": "Telegram"}
+            vk = {"channel": "vk", "target_id": "", "eligible": True, "title": "VK"}
+            route.fulfill(json=[telegram, vk])
         elif path.endswith("/editor-draft"):
             assert request.headers.get("x-draft-actor") == "1"
             if request.method == "GET":
@@ -75,7 +69,8 @@ def test_client_draft_reload_media_loss_and_unknown_send():
                     route.fulfill(status=409, json={"detail": "conflict"})
                     return
                 writes += 1
-                draft = {"scope": draft["scope"], "revision": f"{writes:032x}", "data": body["data"]}
+                revision = f"{writes:032x}"
+                draft = {"scope": draft["scope"], "revision": revision, "data": body["data"]}
                 route.fulfill(json=draft)
         elif path.endswith("/publish"):
             sends += 1
@@ -100,9 +95,8 @@ def test_client_draft_reload_media_loss_and_unknown_send():
             telegram.check()
             expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
             capture(page, "01-client-editor.png")
-            page.locator('input[type="file"]').set_input_files(
-                {"name": "test.png", "mimeType": "image/png", "buffer": b"synthetic"}
-            )
+            upload = {"name": "test.png", "mimeType": "image/png", "buffer": b"synthetic"}
+            page.locator('input[type="file"]').set_input_files(upload)
             expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
             expect(vk).not_to_be_checked()
             assert draft["data"]["media_required"] is True

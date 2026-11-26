@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   client-browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --extra browser --extra infra --extra crypto
       - name: Install Chromium
-        run: uv run playwright install chromium --with-deps
+        run: |
+          sudo apt-get update
+          uv run playwright install chromium --with-deps
       - name: Install exact client library versions without lifecycle scripts
         run: npm install --prefix "$RUNNER_TEMP/ux-browser" --no-save --ignore-scripts --no-audit --no-fund preact@10.24.3 htm@3.1.1
       - name: Run actual client editor in Chromium

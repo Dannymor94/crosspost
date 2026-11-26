@@ -180,3 +180,6 @@ Integration 40581ba2 passed CI (run 45781351710); T-218 3dba39f0 passed CI (4578
 
 ### Client browser evidence
 Dedicated mocked client browser acceptance passed at 4d2c629b (run 45790819952). General CI failed on formatting of the new test (45790819940); formatter fix and screenshot artifact added. Artifact `ux-client-preview` is generated only by the new run, with synthetic client data. Open Actions run → Artifacts → download ZIP → open PNGs. No hosted interactive preview or production deploy. Admin browser E2E and independent QA remain pending.
+
+### Screenshot run recovery
+Run 45812196139 failed before browser execution: stale Ubuntu package URLs returned HTTP 404. General CI 45812195771 also stopped on test formatting. Pin rehearsal runners to Ubuntu 24.04 and refresh apt indexes before Playwright dependency installation; simplify formatting-sensitive test statements and print formatter diff before checks. Screenshot archive still unverified until new run passes. No changes to main or production.
