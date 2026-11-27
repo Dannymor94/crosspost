@@ -248,3 +248,7 @@ Dedicated canonical-only move endpoint with expected instant and profile-zone va
 ### T-512 calendar actions UI (draft)
 
 Both role calendars now offer explicit canonical scheduled move (client only when moderation false), no automatic retry; conflict/unknown refresh and notice. Day+time intent transfers to the existing editor as a scoped ephemeral suggestion; client explicitly applies it to draft, admin opens existing scheduling modal with verified zone. Never submit automatically, never overwrite saved draft on navigation. CI pending.
+
+## T-511 common target selection controls (draft)
+
+Shared selection toolbar uses confirmed eligible targets only; explicit select-all/clear, count, unavailable count, admin excluded target notice. Client hides stale options during revalidation; existing draft/operation guards and media revalidation unchanged. New helper regression, actual-form test pending. Stacked isolated candidate on #66; not full editor or release.

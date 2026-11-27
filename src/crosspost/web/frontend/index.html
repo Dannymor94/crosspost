@@ -3185,6 +3185,7 @@ function BlockPreview({ profileId, text }) {
   );
 }
 
+const TargetToolbar=window.CrosspostEditorTargets.createToolbar(h);
 function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
@@ -3200,7 +3201,9 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
   const [uploadProgress, setUploadProgress] = useState(null); // 0-100 | null
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
+  const selectionRef=useRef(selected); selectionRef.current=selected;
   const [targetState, setTargetState] = useState('loading');
+  const [removedTargets,setRemovedTargets]=useState([]);
   const targetFence = useRef(window.CrosspostEditorTargets.latest());
   const mediaFence = useRef(window.CrosspostEditorTargets.latest());
   const [outcomes, setOutcomes] = useState(null);
@@ -3261,6 +3264,11 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
       if (!current()) return;
       if (!Array.isArray(t)) throw new Error("invalid targets");
       setTargets(t);
+      const lost=window.CrosspostEditorTargets.intersection(selectionRef.current,t,x=>selKey(x.channel,x.target_id)).removed;
+      setRemovedTargets(lost.map(k=>{
+        const target=t.find(x=>selKey(x.channel,x.target_id)===k);
+        return (target?.target_name||target?.title||k)+": цель больше не доступна";
+      }));
       setSelected(prev => new Set(window.CrosspostEditorTargets.intersection(
         prev, t, x => selKey(x.channel, x.target_id)
       ).retained));
@@ -3495,6 +3503,8 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
+  const selectionSummary=window.CrosspostEditorTargets.selection(selected,targets||[],t=>selKey(t.channel,t.target_id),targetState);
+  const selectionLocked=busy||!!pendingOperation||!["ready","saved"].includes(draft.status);
 
   if (!draft.loaded) return h("div", {role:"status"}, draft.label, draft.status !== "loading" && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Повторить"));
   return h("div", null,
@@ -3607,6 +3617,8 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
 
     // Каналы
     h("p", { className: "section-title" }, "Куда публикуем"),
+    targetState==="ready"&&h(TargetToolbar,{summary:selectionSummary,locked:selectionLocked,onSelect:keys=>{if(!selectionLocked)setSelected(new Set(keys));}}),
+    targetState==="ready"&&removedTargets.length>0&&h("p",{className:"cp-status--warning"},"Исключены: "+removedTargets.join("; ")),
     targetState === "error" ? null : targets === null || targetState === "loading"
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
       : eligibleCount === 0

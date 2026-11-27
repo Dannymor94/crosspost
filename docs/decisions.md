@@ -153,3 +153,7 @@ Separate POST move from existing legacy PATCH/failed rewind. Explicit old canoni
 ### Calendar date intent (draft)
 
 User explicitly picks civil day and time. Only ephemeral profile-scoped editor suggestion, not history/storage or publication. Client applies through existing draft save; admin prefill only in schedule modal after matching configured zone and existing send guards. Existing R3 admission remains authoritative; admin modal persistence limitation remains open.
+
+### T-511 selection toolbar (draft)
+
+Bulk select is explicit, never invoked on media/target refresh. Only current ready/eligible list, preserve existing intersection and draft fences. No new send/retry or API. Unavailable count and excluded selections visible. No fabricated capability limits.

@@ -463,6 +463,7 @@ function useScheduleZone(pid) {
 }
 
 // ── Compose ────────────────────────────────────────────────────────────────────
+const TargetToolbar=window.CrosspostEditorTargets.createToolbar(preact.h);
 function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
   const pid = user.profile_id;
   const zone = useScheduleZone(pid);
@@ -575,6 +576,8 @@ function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
   }
 
   const eligibleTargets = targets.filter(t => t.eligible);
+  const selectionSummary=window.CrosspostEditorTargets.selection(Object.keys(checked).filter(k=>checked[k]),targets,targetKey,targetState);
+  const selectionLocked=busy||!!pending||!["ready","saved"].includes(draft.status);
   const previewRef=window.CrosspostEditorPreview.usePreview({useRef,useEffect},{
     text,media:mediaMissing?"missing":isVideo?"video":mediaFile?"image":"none",
     targets:eligibleTargets.filter(t=>checked[targetKey(t)]).map(t=>({title:t.title,channel:t.channel})),targetState
@@ -714,8 +717,9 @@ function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
       ${targetState === 'loading' && html`<p role="status">Проверяем доступные каналы…</p>`}
       ${targetState === 'error' && html`<div class="error-msg">Не удалось загрузить каналы. <button class="btn btn-ghost" onClick=${() => loadTargets(isVideo)}>Повторить</button></div>`}
       ${targetState === 'ready' && eligibleTargets.length === 0 && html`<p>Нет доступных каналов.</p>`}
-      ${removedTargets.length > 0 && html`<p class="video-warn">Исключены: ${removedTargets.join('; ')}</p>`}
-      ${eligibleTargets.length > 0 && html`
+      ${targetState==='ready'&&html`<${TargetToolbar} summary=${selectionSummary} locked=${selectionLocked} onSelect=${keys=>{if(!selectionLocked)replaceChecked(Object.fromEntries(keys.map(k=>[k,true])));}} />`}
+      ${targetState==='ready'&&removedTargets.length > 0 && html`<p class="video-warn">Исключены: ${removedTargets.join('; ')}</p>`}
+      ${targetState==='ready'&&eligibleTargets.length > 0 && html`
         <div class="field">
           <label class="label">Куда опубликовать</label>
           <div>
