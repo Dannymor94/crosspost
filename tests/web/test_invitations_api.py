@@ -93,9 +93,8 @@ async def test_invite_is_owner_only_and_registers_one_isolated_client(registrati
         assert invalid.status_code == 422
         assert token not in invalid.text
         assert "client-password-123" not in invalid.text
-        assert (
-            await anon.post("/api/auth/register", json={**_body(token), "profile_id": old["profile_id"]})
-        ).status_code == 422
+        forged = {**_body(token), "profile_id": old["profile_id"]}
+        assert (await anon.post("/api/auth/register", json=forged)).status_code == 422
         assert (await anon.post("/api/auth/register", json=_body(token))).status_code == 201
         assert (await anon.post("/api/auth/register", json=_body(token, "replay"))).status_code == 400
         assert (await anon.get("/api/auth/me")).status_code == 401
@@ -119,7 +118,8 @@ async def test_duplicate_login_rolls_back_and_concurrent_redeem_has_one_winner(r
         await _login(owner, "owner", "owner-password")
         invite = await _invite(owner, "race-profile")
         token = invite["token"]
-        assert (await first.post("/api/auth/register", json=_body(token, "existing"))).status_code == 409
+        duplicate = await first.post("/api/auth/register", json=_body(token, "existing"))
+        assert duplicate.status_code == 409
         async with factory() as session:
             slot = await session.get(ClientInvitation, invite["id"])
             assert slot is not None and slot.consumed_at is None
@@ -144,7 +144,8 @@ async def test_revoke_rotate_expiry_and_existing_account_fence(registration):
         path = f"/api/users/invitations/{invite['id']}"
         password = {"admin_password": "owner-password"}
         assert (await owner.post(path + "/revoke", json=password)).status_code == 200
-        assert (await anon.post("/api/auth/register", json=_body(invite["token"]))).status_code == 400
+        revoked = await anon.post("/api/auth/register", json=_body(invite["token"]))
+        assert revoked.status_code == 400
         renewed = (await owner.post(path + "/renew", json=password)).json()
         assert renewed["token"] != invite["token"]
         async with factory() as session:
@@ -154,13 +155,15 @@ async def test_revoke_rotate_expiry_and_existing_account_fence(registration):
                 .values(expires_at=int(time.time()) - 1)
             )
             await session.commit()
-        assert (await anon.post("/api/auth/register", json=_body(renewed["token"]))).status_code == 400
+        expired = await anon.post("/api/auth/register", json=_body(renewed["token"]))
+        assert expired.status_code == 400
         current = (await owner.post(path + "/renew", json=password)).json()
         async with factory() as session:
             await UserRepository(session).create_user(
                 "legacy-bound", "legacy-password", role=Role.CLIENT, profile_id=invite["profile_id"]
             )
-        assert (await anon.post("/api/auth/register", json=_body(current["token"]))).status_code == 400
+        occupied = await anon.post("/api/auth/register", json=_body(current["token"]))
+        assert occupied.status_code == 400
         assert (await owner.post(path + "/renew", json=password)).status_code == 400
 
 
