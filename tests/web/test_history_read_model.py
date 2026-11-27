@@ -23,33 +23,65 @@ async def test_history_scope_equal_timestamp_and_observed_outcomes(tmp_path):
             session.add_all(
                 [
                     ScheduledPost(
-                        id=1, profile_id=1, content_type="post", text="cancelled",
-                        scheduled_at=stamp, created_at=stamp, status="cancelled",
+                        id=1,
+                        profile_id=1,
+                        content_type="post",
+                        text="cancelled",
+                        scheduled_at=stamp,
+                        created_at=stamp,
+                        status="cancelled",
                     ),
                     ScheduledPost(
-                        id=2, profile_id=1, content_type="post", text="planned",
-                        scheduled_at=stamp, created_at=stamp, status="scheduled",
+                        id=2,
+                        profile_id=1,
+                        content_type="post",
+                        text="planned",
+                        scheduled_at=stamp,
+                        created_at=stamp,
+                        status="scheduled",
                     ),
                     ScheduledPost(
-                        id=3, profile_id=2, content_type="post", text="PRIVATE",
-                        scheduled_at=stamp, created_at=stamp, status="scheduled",
+                        id=3,
+                        profile_id=2,
+                        content_type="post",
+                        text="PRIVATE",
+                        scheduled_at=stamp,
+                        created_at=stamp,
+                        status="scheduled",
                     ),
                     Publication(
-                        profile_id=1, publication_id="immediate-a", channel="telegram",
-                        target="", status="submitted", created_at=stamp,
-                        error="PRIVATE_ERROR", external_id="PRIVATE_ID",
+                        profile_id=1,
+                        publication_id="immediate-a",
+                        channel="telegram",
+                        target="",
+                        status="submitted",
+                        created_at=stamp,
+                        error="PRIVATE_ERROR",
+                        external_id="PRIVATE_ID",
                     ),
                     Publication(
-                        profile_id=1, publication_id="immediate-b", channel="vk_wall",
-                        target="1", status="done", created_at=stamp,
+                        profile_id=1,
+                        publication_id="immediate-b",
+                        channel="vk_wall",
+                        target="1",
+                        status="done",
+                        created_at=stamp,
                     ),
                     Publication(
-                        profile_id=1, publication_id="immediate-b", channel="telegram",
-                        target="", status="failed", created_at=stamp,
+                        profile_id=1,
+                        publication_id="immediate-b",
+                        channel="telegram",
+                        target="",
+                        status="failed",
+                        created_at=stamp,
                     ),
                     Publication(
-                        profile_id=2, publication_id="other", channel="telegram",
-                        target="", status="done", created_at=stamp,
+                        profile_id=2,
+                        publication_id="other",
+                        channel="telegram",
+                        target="",
+                        status="done",
+                        created_at=stamp,
                     ),
                 ]
             )
@@ -82,11 +114,16 @@ async def test_history_scope_equal_timestamp_and_observed_outcomes(tmp_path):
                 cursor = page["next_cursor"]
             assert cursor is None
             assert [(e["source"], e["key"]) for e in entries] == [
-                ("scheduled", "2"), ("scheduled", "1"),
-                ("immediate", "immediate-b"), ("immediate", "immediate-a"),
+                ("scheduled", "2"),
+                ("scheduled", "1"),
+                ("immediate", "immediate-b"),
+                ("immediate", "immediate-a"),
             ]
             assert [e["status"] for e in entries] == [
-                "scheduled", "cancelled", "mixed_observed", "submitted_observed",
+                "scheduled",
+                "cancelled",
+                "mixed_observed",
+                "submitted_observed",
             ]
             assert entries[-1]["text"] is None
             assert all(e["coverage"] == "observed_only" for e in entries)
