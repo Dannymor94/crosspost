@@ -25,7 +25,7 @@ def test_unknown_operation_survives_reload_and_blocks_send():
                             calls++;
                             if (!headers["Idempotency-Recovery"]) throw Error("no proof");
                             throw Error("lost response");
-                        });
+                        }, ops.publicationExpectation(["telegram"]));
                     } catch {}
                     try { await ops.run(key, async () => { calls++; }); } catch {}
                     return {calls, pending: ops.pending(key)};
@@ -77,5 +77,66 @@ def test_unknown_operation_survives_reload_and_blocks_send():
             assert result["known"] is True
             assert "без подтверждения" in result["message"]
             assert result["pending"] is False
+        finally:
+            browser.close()
+
+
+def test_incomplete_receipts_keep_operation_proof():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.route("http://localhost/**", lambda route: route.fulfill(body="<html></html>"))
+            page.goto("http://localhost/")
+            page.add_script_tag(path=SCRIPT)
+            result = page.evaluate(
+                """async () => {
+                    const ops = window.CrosspostOperations;
+                    const first = {channel:"telegram", target:"1", status:"done"};
+                    const second = {channel:"telegram", target:"2", status:"done"};
+                    const art = {channel:"telegraph", target:"", status:"done"};
+                    const expected = ops.publicationExpectation([
+                        {channel:"telegram", target_id:"1"},
+                        {channel:"telegram", target_id:"2"}], true);
+                    const cases = [
+                        [first, second], [first, first, art],
+                        [first, {...second, target:"3"}, art],
+                        [first, {...second, status:"unknown"}, art],
+                        [first, second, art],
+                    ];
+                    const states = [];
+                    for (const [i, outcomes] of cases.entries()) {
+                        const key = "test:" + i;
+                        try {
+                            await ops.run(key, async () => ({publication_id:"p", outcomes}), expected);
+                        } catch {}
+                        states.push(ops.pending(key));
+                    }
+                    try {
+                        await ops.run("schedule", async () => ({id:1,status:"unknown"}),
+                            {kind:"scheduled"});
+                    } catch {}
+                    return {states, schedule:ops.pending("schedule")};
+                }"""
+            )
+            assert result == {"states": [True, True, True, True, False], "schedule": True}
+            page.route(
+                "**/operation-status",
+                lambda route: route.fulfill(
+                    json={
+                        "state": "recorded",
+                        "outcomes": [{"channel": "telegram", "target": "1", "status": "done"}],
+                    }
+                ),
+            )
+            result = page.evaluate(
+                """async () => {
+                    const ops = window.CrosspostOperations;
+                    const receipt = await ops.recover("test:0", "/api/profiles/1");
+                    await ops.acknowledge("test:0", receipt);
+                    return {known:receipt.known, pending:ops.pending("test:0")};
+                }"""
+            )
+            assert result == {"known": False, "pending": True}
         finally:
             browser.close()

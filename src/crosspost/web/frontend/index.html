@@ -3447,7 +3447,7 @@ function PublishView({ profile, user }) {
         if (!value?.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
           throw new Error("Результат неизвестен.");
         return value;
-      });
+      }, ops.publicationExpectation([...selected].map(parseSelKey), contentType === "article" && !!articleText.trim()));
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
       if (window.CrosspostDraft.confirmed(res.outcomes)) {
@@ -3483,7 +3483,7 @@ function PublishView({ profile, user }) {
         const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), {...headers, "X-Schedule-Time-Contract": "utc-v1"});
         if (!value?.id) throw new Error("Результат неизвестен.");
         return value;
-      });
+      }, {kind:"scheduled"});
       if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
       const cleared = await draft.clearSubmitted(submittedDraft);
       setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });

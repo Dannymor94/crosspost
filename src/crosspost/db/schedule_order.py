@@ -17,6 +17,4 @@ def order_schedules(rows: list[ScheduledPost]) -> list[ScheduledPost]:
             key=lambda row: (row.scheduled_at_utc or row.scheduled_at, row.id),
         )
     )
-    return [
-        row if row.scheduled_at_utc is None else next(canonical) for row in wall_order
-    ]
+    return [row if row.scheduled_at_utc is None else next(canonical) for row in wall_order]
