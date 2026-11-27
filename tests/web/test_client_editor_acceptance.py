@@ -353,6 +353,13 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 expect(page.get_by_text("Выбрано в календаре:", exact=False)).to_be_visible()
                 page.get_by_role("button", name="Использовать выбранное время").click()
                 expect(page.locator("input[type=datetime-local]")).to_have_value("2099-01-17T13:45")
+                expect(page.get_by_text("Выбрано целей: 0 из 2", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Выбрать все доступные", exact=True).click()
+                expect(page.get_by_text("Выбрано целей: 2 из 2", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Снять выбор", exact=True).click()
+                expect(page.get_by_text("Выбрано целей: 0 из 2", exact=True)).to_be_visible()
+                expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
+                assert draft["data"]["targets"] == []
                 assert sends == 0
                 assert not errors, errors
                 return
