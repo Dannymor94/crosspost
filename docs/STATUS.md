@@ -120,3 +120,6 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 
 ## UX-02 / T-501 — изолированные общие ресурсы
 После CI PASS и mocked browser PASS UX-01 на 226547c1 (45886766017, 45886766078) независимый QA запрошен в issue #57, вердикта пока нет. В отдельной ветке T-501 начата подготовка design tokens из согласованного UX-00 (#52), scoped CSS-компонентов, светлой/тёмной/системной темы и тестов упаковки/Chromium. Ресурсы ещё не подключены к / или /client: редакторы, авторизация, публикации, данные и рабочая система не меняются. Перенос в живой интерфейс после QA и согласования графа доставки. CI/QA T-501 pending.
+
+### T-501 second preparation slice
+Initial CI stopped at ruff format for test_ux_design_system.py (45890770470/45890761640); simplified statement and made theme change assertions wait for browser events. Added shared responsive shell and presentation-only navigation controller (desktop 208px sidebar, mobile bottom menu). Navigation destinations and accepted transition are supplied by the host, not an authorization/routing decision; no live routes or placeholder feature implementations. Chromium regression covers 360/390/768/1440, selection/focus targets, host rejection and mobile subset. UX-01 independent issue #57 still has no verdict. Changes remain additive; actual / and /client unchanged, no deployment. New CI pending.

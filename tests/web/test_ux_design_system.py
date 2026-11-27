@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 FRONTEND = Path(__file__).resolve().parents[2] / "src/crosspost/web/frontend"
 
@@ -59,15 +59,14 @@ def test_design_tokens_and_theme_controller():
             page.evaluate("window.testTheme.set('light')")
             assert page.locator("#ux").get_attribute("data-theme") == "light"
             page.evaluate("window.testTheme.dispose()")
-            page.evaluate(
-                "window.testTheme = window.CrosspostTheme.mount(document.querySelector('#ux'))"
-            )
+            mount_theme = "window.testTheme = window.CrosspostTheme.mount"
+            page.evaluate(f"{mount_theme}(document.querySelector('#ux'))")
             assert page.locator("#ux").get_attribute("data-theme") == "light"
             page.evaluate("window.testTheme.set('system')")
             page.emulate_media(color_scheme="light")
-            assert page.locator("#ux").get_attribute("data-theme") == "light"
+            expect(page.locator("#ux")).to_have_attribute("data-theme", "light")
             page.emulate_media(color_scheme="dark")
-            assert page.locator("#ux").get_attribute("data-theme") == "dark"
+            expect(page.locator("#ux")).to_have_attribute("data-theme", "dark")
             page.evaluate(
                 """() => {
                   window.testTheme.dispose();

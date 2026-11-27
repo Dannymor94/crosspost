@@ -100,3 +100,6 @@ UI показывает нейтральное состояние, без зел
 
 ## UX-02 — общие ресурсы без обязательной сборки (T-501, первый пакет)
 В соответствии с UX_DESIGN_SYSTEM.md и прототипом #52 CSS namespace `.cp-ux`/`--cp-*`, pure JS theme controller в shared/. Хранится только предпочтение темы (не данные аккаунта), system следует matchMedia, недоступное localStorage не препятствует работе. Ресурсы включаются в package-data. Не мигрируем React/Preact и не меняем API/действующие страницы в этом пакете; подключение после QA UX-01. CSS namespace позволяет поэтапно переключать компоненты. Не заявлять новый UI или полное закрытие T-501 до подключения и проверок.
+
+### T-501 navigation primitives
+Framework-neutral DOM renderer receives destination list and onNavigate from the host. A click is a request only; aria-current changes after explicit setActive by host, allowing draft-loss guards. Desktop/mobile destinations are explicit lists from the role-aware host, never used as server access control. No global router or new navigation targets activated in this preparatory slice.
