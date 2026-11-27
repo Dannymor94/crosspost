@@ -16,7 +16,12 @@ from crosspost.db.models import Base
 
 def test_rehearsal_has_single_head_and_preserves_original_parents():
     script = ScriptDirectory.from_config(migration_config())
-    assert script.get_heads() == ["t406_ux_merge"]
+    assert script.get_heads() == ["t304_ux_auth_merge"]
+    assert script.get_revision("t304_ux_auth_merge").down_revision == (
+        "t406_ux_merge",
+        "t304_log_health_index",
+    )
+    assert script.get_revision("t304_log_health_index").down_revision == "t203_fencing"
     assert script.get_revision("t406_ux_merge").down_revision == (
         "t406_session_generation",
         "t218_editor_draft",
@@ -27,7 +32,13 @@ def test_rehearsal_has_single_head_and_preserves_original_parents():
 
 @pytest.mark.parametrize(
     "start",
-    ["t203_fencing", "t406_session_generation", "t218_editor_draft"],
+    [
+        "t203_fencing",
+        "t406_session_generation",
+        "t218_editor_draft",
+        "t406_ux_merge",
+        "t304_log_health_index",
+    ],
 )
 async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
     path = tmp_path / "existing.sqlite"
@@ -51,9 +62,9 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
                 "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
             )
         )
-        if start == "t406_session_generation":
+        if start in {"t406_session_generation", "t406_ux_merge"}:
             conn.execute(text("UPDATE users SET session_generation=7 WHERE id=1"))
-        if start == "t218_editor_draft":
+        if start in {"t218_editor_draft", "t406_ux_merge"}:
             conn.execute(
                 text(
                     "INSERT INTO editor_drafts(scope, user_id, profile_id, revision, data) "
@@ -67,7 +78,7 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
         try:
             async with engine.connect() as conn:
                 assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == (
-                    "t406_ux_merge"
+                    "t304_ux_auth_merge"
                 )
                 assert (
                     await conn.run_sync(
@@ -82,16 +93,23 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
             await engine.dispose()
 
     with sqlite3.connect(path) as conn:
-        generation = 7 if start == "t406_session_generation" else 0
+        generation = 7 if start in {"t406_session_generation", "t406_ux_merge"} else 0
         assert conn.execute(
             "SELECT login, password_hash, profile_id, session_generation FROM users"
         ).fetchall() == [("existing", "fixture-hash", 1, generation)]
         assert conn.execute(
             "SELECT publication_id, external_id, attempt_count FROM publications"
         ).fetchall() == [("prior", "receipt", 2)]
-        expected_drafts = [("fixture", "rev", "{}")] if start == "t218_editor_draft" else []
+        expected_drafts = (
+            [("fixture", "rev", "{}")]
+            if start in {"t218_editor_draft", "t406_ux_merge"}
+            else []
+        )
         assert (
             conn.execute("SELECT scope, revision, data FROM editor_drafts").fetchall()
             == expected_drafts
         )
+        assert [
+            row[2] for row in conn.execute("PRAGMA index_info(ix_logs_level_created_at)")
+        ] == ["level", "created_at"]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

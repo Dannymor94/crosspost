@@ -934,6 +934,9 @@ function ClientNavigation({tab,onNavigate,mobile=false}) {
 }
 function ClientHome({user,onNavigate}) {
   const overview=window.CrosspostOverview.useOverview({useState,useEffect},user.profile_id);
+  const connections=window.CrosspostConnections.useConnections({useState,useEffect},user.profile_id);
+  const attention=(connections.rows||[]).filter(window.CrosspostConnections.needsAttention);
+  const recent=window.CrosspostHistoryView.useAttention({useState,useEffect},user.profile_id);
   const data=overview.data;
   return html`<section class="cp-stack"><h1 class="cp-title">Главная</h1>
     <div class="cp-panel cp-stack"><h2>${user.login}</h2>
@@ -941,6 +944,33 @@ function ClientHome({user,onNavigate}) {
       <button class="cp-button cp-button--primary" onClick=${()=>onNavigate("compose")}>Создать пост</button>
       <button class="cp-button" onClick=${()=>onNavigate("posts")}>Открыть расписание</button>
       <button class="cp-button" onClick=${()=>onNavigate("help")}>Как пользоваться сервисом</button>
+    </div>
+    <div class="cp-panel cp-stack" aria-live="polite">
+      <h2>Состояние площадок</h2>
+      ${connections.kind==="loading"?html`<p>Загружаем состояния…</p>`:
+        connections.kind==="error"?html`<p>Не удалось загрузить состояния площадок.</p><button class="cp-button" onClick=${connections.retry}>Обновить состояния</button>`:
+        connections.kind==="no-profile"?html`<p>Профиль пока не назначен.</p>`:
+        html`<p>Подключено: ${connections.rows.filter(r=>r.state==="live").length} из ${connections.rows.length}</p>
+          ${attention.length?html`<h3>Требуют внимания</h3>${attention.map(r=>html`<p key=${r.channel}><strong>${r.title}</strong> — ${r.state==="live"?"Срок подключения скоро истечёт":window.CrosspostConnections.describe(r.state).label}</p>`)}`:html`<p class="cp-muted">В сохранённых состояниях нет предупреждений.</p>`}` }
+      <button class="cp-button" onClick=${()=>onNavigate("connections")}>К подключениям</button>
+    </div>
+    <div class="cp-panel cp-stack" aria-live="polite">
+      <h2>Публикации: требуют внимания</h2>
+      <p class="cp-muted">Последние 20 сохранённых записей истории. Это не полный список отправок и не уведомления вне сервиса.</p>
+      ${recent.kind==="loading"?html`<p>Загружаем результаты…</p>`:
+        recent.kind==="error"?html`<p>Не удалось загрузить результаты.</p><button class="cp-button" onClick=${recent.retry}>Обновить результаты</button>`:
+        recent.kind==="no-profile"?html`<p>Профиль пока не назначен.</p>`:
+        recent.items.length?html`<p>Записей с предупреждениями: ${recent.items.length}</p>
+          ${recent.items.slice(0,3).map(item=>html`<div class="cp-overview-row" key=${item.key}>
+            <small>${item.when.slice(0,16).replace("T"," ")} UTC</small>
+            <strong>${item.text===null?"Текст не сохранён":item.text.slice(0,120)||"Пост без текста"}</strong>
+            ${item.rejected?html`<span>Отклонено модерацией</span>`:null}
+            ${item.unknown?html`<span>Результат неизвестен</span>`:null}
+            ${item.outcomes.map((o,i)=>html`<span key=${i}>${o.channel}${o.target?" · "+o.target:""} — ${o.label}</span>`)}
+          </div>`)}
+          <p class="cp-muted">При неизвестном результате или отсутствии подтверждения не отправляйте пост повторно.</p>`:
+          html`<p>В последних сохранённых записях нет выявленных предупреждений.</p>`}
+      <button class="cp-button" onClick=${()=>onNavigate("history")}>К истории публикаций</button>
     </div>
     <div class="cp-panel cp-stack" aria-live="polite">
       <h2>Активное расписание</h2>
