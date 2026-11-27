@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - integration/ux01-t215-t218
+      - integration/ux02-live-preview
   workflow_dispatch:
 
 permissions:

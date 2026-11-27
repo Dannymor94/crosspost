@@ -61,9 +61,10 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             route.fulfill(path=react, content_type="application/javascript")
         elif path == "/test-assets/react-dom.js":
             route.fulfill(path=react_dom, content_type="application/javascript")
-        elif path.startswith("/static/") and path.endswith(".js"):
-            script = FRONTEND / Path(path).name
-            route.fulfill(path=script, content_type="application/javascript")
+        elif path.startswith("/static/") and path.endswith((".js", ".css")):
+            asset = FRONTEND / path.removeprefix("/static/")
+            mime = "text/css" if asset.suffix == ".css" else "application/javascript"
+            route.fulfill(path=asset, content_type=mime)
         elif path == "/api/auth/me":
             actor = {"id": 2, "login": "test-admin", "role": "admin", "profile_id": None}
             route.fulfill(json=actor)
@@ -128,6 +129,12 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/*", handle)
             page.goto("http://localhost/")
+            theme = page.get_by_role("combobox", name="Тема оформления")
+            theme.select_option("light")
+            expect(page.locator("html")).to_have_attribute("data-theme", "light")
+            capture(page, "admin-00-light-theme.png")
+            theme.select_option("dark")
+            expect(page.locator("html")).to_have_attribute("data-theme", "dark")
             text = page.get_by_placeholder("Текст поста…")
             text.fill(draft_text)
             target = page.locator("button.target").filter(has_text="Telegram")

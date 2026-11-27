@@ -189,3 +189,6 @@ Client browser run 45881474479 passed and artifact 15147880520 was reviewed by o
 
 ### Desktop browser finding (UX-01)
 General CI 45884359516 passed at 05600b97. Client browser passed, but desktop scenario 45884359462 failed because target loading never transitioned to ready: merged loadTargets retained the legacy success/error handler. Restore current-request fencing, eligibility intersection and ready/error transitions. Correct test expectation to actual admin selection key telegram plus separator (U+241F). Failure screenshots enabled. New CI and browser run pending; independent QA remains required; no main or deployment changes.
+
+## UX-02 live-page visual rehearsal
+Validation-only branch based on UX-01 exact browser/CI PASS 226547c1, plus scoped UX-02 assets from T-501 e814b627. Actual / and /client consume the shared palette and theme preference; existing handlers and routes preserved, no role switch, no invented navigation destinations. Client existing tabs move to bottom on mobile; admin keeps profile management and existing actions. Transitional skin, not finished UX-03/04 or full approved prototype. Mock browser tests extended to exercise theme switch and produce screenshots. Independent issue #57 still has no verdict; do not merge or deploy. CI and browser evidence pending.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" class="cp-ux">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1234,8 +1234,12 @@ body {
 .plat-disconnected-cards { padding: 0 10px 10px; }
 @media (max-width: 600px) { .plat-sections { gap: 10px; } }
 </style>
+<link rel="stylesheet" href="/static/styles/ux-system.css">
+<link rel="stylesheet" href="/static/styles/ux-live.css">
+<script src="/static/shared/ux-theme.js"></script>
+<script src="/static/shared/ux-theme-page.js"></script>
 </head>
-<body>
+<body class="cp-admin">
 <div id="root"></div>
 
 <script src="/static/operation-guard.js"></script>
@@ -2496,7 +2500,7 @@ function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConso
       title: "Перетащите для изменения ширины; двойной клик — сброс",
     }),
     h("div", { className: "sidebar-header" },
-      h("div", { className: "logo" }, h("span", null, "⊹"), " CROSSPOST"),
+      h("div", { className: "cp-brand" }, h("span", { className: "cp-brand-mark", "aria-hidden": true }, "C"), "Crosspost"),
     ),
     h("button", {
       className: `profile-item ${consoleActive ? "active" : ""}`,
@@ -4739,6 +4743,9 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
       h("span", { className: "user-name" }, me.login),
     ),
     pendingCount > 0 && h("span", { className: "pending-count", title: "Постов на модерации" }, pendingCount),
+    h("select", { className: "cp-theme-select", "aria-label": "Тема оформления", "data-cp-theme-select": "",
+      defaultValue: window.CrosspostPageTheme.preference, onChange: e => window.CrosspostPageTheme.set(e.target.value) },
+      h("option", { value: "system" }, "Системная"), h("option", { value: "light" }, "Светлая"), h("option", { value: "dark" }, "Тёмная")),
     h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout }, "Выйти"),
   );
 }
