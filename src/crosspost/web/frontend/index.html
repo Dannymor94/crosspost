@@ -2455,7 +2455,7 @@ function NoProfileView() {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
-const CalendarPanel=window.CrosspostCalendarView.create(h,{useState,useEffect});
+const CalendarPanel=window.CrosspostCalendarView.create(h,{useState,useEffect,useRef});
 const HistoryPanel=window.CrosspostHistoryView.create(h,{useState,useEffect,useRef});
 const ADMIN_ITEMS = Object.freeze([
   {id:"home",label:"Обзор",icon:"home"},
@@ -3058,7 +3058,7 @@ function OutcomeCard({ o, onRetry, retrying }) {
   );
 }
 
-function ScheduleModal({ base, onClose, onConfirm }) {
+function ScheduleModal({ base, onClose, onConfirm, initialTime }) {
   const time = window.CrosspostTime;
   const [zone, setZone] = useState(null);
   const [draftZone, setDraftZone] = useState(time.deviceZone());
@@ -3067,7 +3067,7 @@ function ScheduleModal({ base, onClose, onConfirm }) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
-    time.get(base).then(z => { if (active) { setZone(z); if (z) setDraftZone(z); } })
+    time.get(base).then(z => { if (active) { setZone(z); if (z) setDraftZone(z); if(initialTime?.zone===z) setWhen(initialTime.wall); } })
       .catch(e => { if (active) setError(e.message); });
     return () => { active = false; };
   }, [base]);
@@ -3185,7 +3185,7 @@ function BlockPreview({ profileId, text }) {
   );
 }
 
-function PublishView({ profile, user }) {
+function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
   const [articleTitle, setArticleTitle] = useState("");
@@ -3211,6 +3211,7 @@ function PublishView({ profile, user }) {
   const [report, setReport] = useState([]);
   const [reportMore, setReportMore] = useState(false);  // есть ли ещё старые страницы
   const [showSchedule, setShowSchedule] = useState(false);
+  const [modalIntent,setModalIntent]=useState(null);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
   const ops = window.CrosspostOperations;
@@ -3622,11 +3623,15 @@ function PublishView({ profile, user }) {
       receipt?.known && h("button", {className:"btn btn-ghost", disabled:busy, onClick:acknowledgeOperation}, "Результат проверен"),
     ),
     h("details",{ref:previewRef,className:"cp-panel cp-editor-preview"}),
+    scheduleIntent && h("div",{className:"cp-panel cp-stack"},
+      h("p",null,"Выбрано в календаре: "+scheduleIntent.wall.replace("T"," ")+" · "+scheduleIntent.zone),
+      h("button",{className:"cp-button cp-button--primary",disabled:!canSend,onClick:()=>{setModalIntent(scheduleIntent);setShowSchedule(true);onIntentDismiss();}},"Запланировать на выбранное время"),
+      h("button",{className:"cp-button",onClick:onIntentDismiss},"Убрать выбранное время")),
     // Действия
     h("div", { className: "publish-actions" },
       h("button", { className: "btn btn-primary", onClick: publishNow, disabled: !canSend },
         busy && h(Spinner), busy ? "Публикую…" : "Опубликовать сейчас"),
-      h("button", { className: "btn btn-ghost", onClick: () => setShowSchedule(true), disabled: !canSend },
+      h("button", { className: "btn btn-ghost", onClick: () => {setModalIntent(null);setShowSchedule(true);}, disabled: !canSend },
         "Запланировать"),
       selected.size === 0 && targets && eligibleCount > 0
         ? h("span", { className: "hint-inline" }, "выберите канал")
@@ -3653,7 +3658,7 @@ function PublishView({ profile, user }) {
     // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
     h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore, onRefresh: loadReportInitial }),
 
-    showSchedule && h(ScheduleModal, { base, onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
+    showSchedule && h(ScheduleModal, { base, initialTime:modalIntent, onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
 }
 
@@ -4838,7 +4843,8 @@ function App() {
   const [showNewClient, setShowNewClient] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
-  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setView(next);});
+  const [scheduleIntent,setScheduleIntent]=useState(null);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setScheduleIntent(null);setView(next);});
 
   // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
@@ -4932,9 +4938,9 @@ function App() {
       ? view === "history"
         ? h(HistoryPanel,{key:active.id,pid:active.id})
         : view === "calendar"
-        ? h(CalendarPanel,{key:active.id,pid:active.id,onCreate:()=>navigate("publish"),onManage:()=>navigate("publish")})
+        ? h(CalendarPanel,{key:active.id,pid:active.id,canMove:true,onCreate:()=>navigate("publish"),onManage:()=>navigate("publish"),onCreateTime:intent=>{if(navigate("publish"))setScheduleIntent({...intent,pid:active.id});}})
         : view === "publish"
-        ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
+        ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me,scheduleIntent:scheduleIntent?.pid===active.id?scheduleIntent:null,onIntentDismiss:()=>setScheduleIntent(null) }))
         : view === "import"
           ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
           : h(TabBoundary, { key: `channels-${active.id}` }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin }))

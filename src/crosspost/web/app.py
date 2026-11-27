@@ -22,6 +22,7 @@ from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
 from crosspost.web.routes import (
     auth,
+    calendar_actions,
     channels,
     drafts,
     errors,
@@ -145,6 +146,7 @@ def create_app() -> FastAPI:
     app.include_router(publish.router)
     app.include_router(drafts.router)
     app.include_router(history.router)
+    app.include_router(calendar_actions.router)
     app.include_router(import_plan.router)
     app.include_router(settings.router)
     app.include_router(errors.router)
