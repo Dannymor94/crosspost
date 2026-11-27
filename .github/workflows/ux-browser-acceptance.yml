@@ -9,6 +9,7 @@ on:
       - task/T-510-workspace-navigation
       - task/T-511-editor-preview
       - task/T-512-calendar-model
+      - task/T-513-history-read-model
   workflow_dispatch:
 
 permissions:

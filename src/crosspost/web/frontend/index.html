@@ -1244,6 +1244,7 @@ body {
 <script src="/static/shared/ux-editor-preview.js"></script>
 <script src="/static/shared/ux-calendar.js"></script>
 <script src="/static/shared/ux-calendar-view.js"></script>
+<script src="/static/shared/ux-history-view.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -2449,10 +2450,12 @@ function NoProfileView() {
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
 const CalendarPanel=window.CrosspostCalendarView.create(h,{useState,useEffect});
+const HistoryPanel=window.CrosspostHistoryView.create(h,{useState,useEffect,useRef});
 const ADMIN_ITEMS = Object.freeze([
   {id:"home",label:"Обзор",icon:"home"},
   {id:"publish",label:"Публикации",icon:"posts"},
   {id:"calendar",label:"Календарь",icon:"calendar"},
+  {id:"history",label:"История",icon:"posts"},
   {id:"import",label:"Импорт плана",icon:"calendar"},
   {id:"moderation",label:"Модерация",icon:"moderation"},
   {id:"clients",label:"Клиенты",icon:"clients"},
@@ -4920,7 +4923,9 @@ function App() {
           onRejected: () => setPendingCount(c => Math.max(0, c - 1)),
         }))
     : active
-      ? view === "calendar"
+      ? view === "history"
+        ? h(HistoryPanel,{key:active.id,pid:active.id})
+        : view === "calendar"
         ? h(CalendarPanel,{key:active.id,pid:active.id,onCreate:()=>navigate("publish"),onManage:()=>navigate("publish")})
         : view === "publish"
         ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))

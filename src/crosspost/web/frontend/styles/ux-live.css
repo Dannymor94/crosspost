@@ -145,3 +145,6 @@ html.cp-ux {
 .cp-ux .cp-calendar-cell small { font-size:11px; color:var(--cp-muted); }
  .cp-ux .cp-calendar-weekday { text-align:center; color:var(--cp-muted); font-size:12px; }
 @media (max-width:640px) { .cp-ux .cp-calendar-grid { gap:3px; } .cp-ux .cp-calendar-cell { min-height:44px; } .cp-ux .cp-calendar-cell small { font-size:10px; } }
+
+.cp-ux .cp-history-outcome { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--cp-line); overflow-wrap:anywhere; }
+.cp-ux .cp-history-outcome span { margin-inline-start:auto; }

@@ -1,0 +1,88 @@
+/* History is a read-only projection of persisted observations, not a send receipt. */
+(() => {
+  "use strict";
+  const LABELS=Object.freeze({
+    scheduled:"Запланировано",pending_approval:"На проверке",publishing:"Публикуется",
+    cancelled:"Отменено",rejected:"Отклонено",done_observed:"Есть подтверждённые результаты",
+    submitted_observed:"Отправлено без подтверждения",failed_observed:"Зафиксирован отказ",
+    needs_relogin_observed:"Нужен повторный вход",mixed_observed:"Разные результаты по площадкам",
+    in_progress_observed:"Есть незавершённые попытки",unknown:"Результат неизвестен",
+    done:"Опубликовано",submitted:"Отправлено без подтверждения",failed:"Не опубликовано",
+    needs_relogin:"Нужен повторный вход",new:"Ожидает",queued:"В очереди",attempting:"Выполняется"
+  });
+  const label=status=>Object.hasOwn(LABELS,status)?LABELS[status]:LABELS.unknown;
+  const rowKey=e=>e.source+":"+e.key;
+  function validate(data) {
+    if(data?.scope!=="scheduled_and_observed_immediate"||!Array.isArray(data.entries)||
+       !(data.next_cursor===null||typeof data.next_cursor==="string"&&data.next_cursor.length>0&&data.next_cursor.length<=512)||
+       data.entries.some(e=>!e||!["scheduled","immediate"].includes(e.source)||
+         typeof e.key!=="string"||!e.key||typeof e.created_at_utc!=="string"||
+         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(e.created_at_utc)||
+         !Number.isFinite(Date.parse(e.created_at_utc))||
+         !(e.text===null||typeof e.text==="string")||typeof e.status!=="string"||
+         e.coverage!=="observed_only"||!Array.isArray(e.outcomes)||
+         e.outcomes.some(o=>!o||typeof o.channel!=="string"||typeof o.target!=="string"||typeof o.status!=="string"))||
+       new Set(data.entries.map(rowKey)).size!==data.entries.length) throw Error("Invalid history");
+    return data;
+  }
+  function create(h,{useState,useEffect,useRef}) {
+    return function HistoryPanel({pid}) {
+      const [state,setState]=useState(null), [attempt,setAttempt]=useState(0);
+      const [filter,setFilter]=useState("all"),[query,setQuery]=useState("");
+      const flight=useRef(null);
+      async function load(cursor,previous) {
+        if(flight.current) flight.current.abort();
+        const controller=new AbortController();flight.current=controller;
+        setState({pid,attempt,kind:cursor?"more":"loading",entries:previous||[],cursor});
+        try {
+          const url="/api/profiles/"+pid+"/history?limit=20"+(cursor?"&before="+encodeURIComponent(cursor):"");
+          const response=await fetch(url,{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+          if(!response.ok) throw Error("Read failed");
+          const data=validate(await response.json());
+          if(controller.signal.aborted) return;
+          const entries=[...(previous||[]),...data.entries];
+          if(new Set(entries.map(rowKey)).size!==entries.length||
+             (cursor&&data.next_cursor===cursor)) throw Error("Invalid page");
+          setState({pid,attempt,kind:"ready",entries,cursor:data.next_cursor});
+        } catch(_) {
+          if(!controller.signal.aborted) setState({pid,attempt,kind:cursor?"more-error":"error",entries:previous||[],cursor});
+        }
+      }
+      useEffect(()=>{
+        if(Number.isSafeInteger(pid)&&pid>0) load(null,[]);
+        return ()=>flight.current?.abort();
+      },[pid,attempt]);
+      const current=state?.pid===pid&&state.attempt===attempt?state:null;
+      const entries=current?.entries||[];
+      const q=query.trim().toLocaleLowerCase("ru");
+      const shown=entries.filter(e=>(filter==="all"||e.source===filter)&&
+        (!q||[e.text||"",label(e.status),...e.outcomes.map(o=>o.channel+" "+label(o.status))].join(" ").toLocaleLowerCase("ru").includes(q)));
+      function row(e) {
+        return h("article",{className:"cp-panel cp-stack",key:rowKey(e)},
+          h("div",{className:"cp-row"},h("strong",null,label(e.status)),
+            h("span",{className:"cp-muted"},e.source==="scheduled"?"Из расписания":"Немедленная")),
+          h("small",{className:"cp-muted"},"Создано: "+e.created_at_utc.slice(0,16).replace("T"," ")+" UTC"),
+          h("p",{className:"cp-preview-text"},e.text===null?"Текст не был сохранён в истории":e.text||"Без текста"),
+          e.outcomes.length?h("details",null,h("summary",null,"Результаты по площадкам ("+e.outcomes.length+")"),
+            ...e.outcomes.map((o,i)=>h("div",{key:i,className:"cp-history-outcome"},
+              h("strong",null,o.channel),o.target?h("small",null,o.target):null,h("span",null,label(o.status))))):
+            h("p",{className:"cp-muted"},"Поканальных результатов пока нет."));
+      }
+      return h("section",{className:"cp-stack"},
+        h("h1",{className:"cp-title"},"История"),
+        h("p",{className:"cp-muted"},"Записи расписания и сохранённые результаты немедленных публикаций. Неполные результаты не означают, что весь пост опубликован."),
+        h("div",{className:"cp-panel cp-stack"},
+          h("button",{className:"cp-button",onClick:()=>setAttempt(x=>x+1)},"Обновить историю"),
+          h("select",{className:"cp-input","aria-label":"Тип публикации",value:filter,onChange:e=>setFilter(e.target.value)},
+            h("option",{value:"all"},"Все"),h("option",{value:"scheduled"},"Из расписания"),h("option",{value:"immediate"},"Немедленные")),
+          h("input",{className:"cp-input","aria-label":"Поиск по загруженным записям",placeholder:"Поиск по загруженным записям",value:query,onInput:e=>setQuery(e.target.value)}),
+          !pid?h("p",null,"Выберите профиль."):!current||current.kind==="loading"?h("p",{role:"status"},"Загружаем историю…"):
+          current.kind==="error"?h("p",{role:"alert"},"Не удалось загрузить историю."):
+          h("div",{className:"cp-stack"},
+            shown.length?shown.map(row):h("p",{className:"cp-muted"},entries.length?"Среди загруженных записей совпадений нет.":"Сохранённых записей нет."),
+            current.kind==="more-error"?h("p",{role:"alert"},"Не удалось загрузить следующую страницу."):null,
+            current.cursor?h("button",{className:"cp-button",disabled:current.kind==="more",onClick:()=>load(current.cursor,entries)},current.kind==="more"?"Загрузка…":"Показать ещё"):null)));
+    };
+  }
+  window.CrosspostHistoryView=Object.freeze({create,validate,label});
+})();

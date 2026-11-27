@@ -225,3 +225,7 @@ Read-only shared calendar mounted in both actual hosts, with day/week/month/list
 ## UX-06 T-513 — history read model (draft)
 
 New profile-scoped GET history combines persisted scheduled rows and observed immediate publication groups, stable creation-time/source/key cursor, no raw error/external ID/media path or proof. Existing scheduled lifecycle + observed channel outcomes, never infer complete receipt from observed rows. Immediate text absent in current data; ledger-only admissions deliberately excluded pending profile-incarnation fencing and retention policy. No schema or mutation changes. API tests pending; UI, search, complete durable immediate metadata and final acceptance remain open.
+
+### T-513 history UI (draft)
+
+Shared read-only History screen for both roles; source filter, explicitly loaded-only search, cursor pages, error/retry and per-target observed status. No retry controls. Client via More, admin via sidebar/More. Existing incomplete-history limits shown. CI pending.

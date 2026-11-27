@@ -137,3 +137,7 @@ The shared calendar reads only the existing profile schedule projection. Existin
 ## T-513 history first slice (draft)
 
 Use persisted FK-backed scheduled/publication rows only; no operation ledger-only history until profile-incarnation fence/retention. Cursor orders creation timestamp (normalized SQLite milliseconds), source and unique source key; stable across equal times, not a snapshot of concurrent inserts. No fabricated immediate text, raw error, external link or media path. Aggregate observed outcomes must not imply a complete receipt. No new retry or write. Full C5 coverage remains open.
+
+### T-513 history UI contract (draft)
+
+Never label observed aggregate DONE as confirmed whole post. Per-target results are persisted observations; unknown status fails closed. Search explicitly limited to loaded pages; no raw diagnostics/links/retry. History fetch aborts on unmount/scope changes; errors never replace a failed read with empty success.
