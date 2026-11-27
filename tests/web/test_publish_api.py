@@ -622,6 +622,164 @@ async def test_scheduled_report_shows_executed_with_outcomes(client, factory):
     assert shots == {"vk_wall": "/shots/x.png"}
 
 
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([], "unknown"),
+        (["queued", "attempting"], "in_progress"),
+        (["done", "queued"], "partial"),
+        (["done"], "done"),
+        (["done", "done"], "done"),
+        (["submitted"], "submitted"),
+        (["done", "submitted"], "submitted"),
+        (["done", "failed"], "partial"),
+        (["submitted", "failed"], "partial"),
+        (["failed", "queued"], "partial"),
+        (["failed"], "failed"),
+        (["needs_relogin"], "failed"),
+        (["done", "failed", "queued"], "partial"),
+        (["bogus_future_status"], "failed"),
+        (["new"], "failed"),
+    ],
+)
+def test_scheduled_report_overall_status_matrix(statuses, expected):
+    outcomes = [
+        publish.OutcomeOut(channel=f"channel_{i}", status=status)
+        for i, status in enumerate(statuses)
+    ]
+    assert publish._overall_status(outcomes) == expected
+
+
+@pytest.mark.parametrize("verify_reason", ["no_match", None])
+async def test_scheduled_report_submitted_reason_survives_reload(client, factory, verify_reason):
+    """The actual journal API reloads persisted SUBMITTED and its safe reason."""
+    from datetime import datetime
+
+    from crosspost.db.models import PublicationStatus
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    await _make_executed(
+        factory,
+        pid,
+        text="пост без подтверждения",
+        channels={
+            "telegram": (PublicationStatus.DONE, "tg-1"),
+            "vk_wall": (PublicationStatus.SUBMITTED, verify_reason),
+        },
+        published_at=datetime(2026, 8, 10, 9, 6, tzinfo=UTC),
+    )
+    for _ in range(2):  # independent request/session, not in-memory client state
+        response = await client.get(f"/api/profiles/{pid}/scheduled/report")
+        assert response.status_code == 200
+        row = response.json()[0]
+        assert row["overall"] == "submitted"
+        by_channel = {o["channel"]: o for o in row["outcomes"]}
+        assert by_channel["telegram"]["status"] == "done"
+        assert by_channel["vk_wall"]["status"] == "submitted"
+        assert by_channel["vk_wall"]["error"] == verify_reason
+
+
+@pytest.mark.parametrize(
+    ("raw_reason", "expected"),
+    [
+        ("no_match", "no_match"),
+        (None, None),
+        ("https://example.test/private?token=secret123", None),
+        ("arbitrary_future_error", None),
+        ("Traceback: VAULT_KEY=secret123", None),
+    ],
+)
+async def test_scheduled_report_sanitizes_dispatch_reason_after_fresh_reload(
+    client, factory, raw_reason, expected
+):
+    """Untrusted adapter errors cannot escape via a persisted journal GET.
+
+    Unlike directly seeding safe rows, this crosses the actual PublishService
+    adapter -> allowlist -> DB -> new HTTP session -> journal serialization path.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import update as sql_update
+
+    from crosspost.content.canonical import CanonicalContent, ContentType
+    from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
+    from crosspost.orchestrator.publish_service import PublishService
+    from crosspost.scheduler.executor import scheduled_publication_id
+
+    pid = await _make_profile_with_live(factory, ["vk_wall"])
+    content = CanonicalContent(
+        type=ContentType.POST,
+        text="проверка журнала",
+    )
+
+    class _SubmittedAdapter:
+        channel = "vk_wall"
+        calls = 0
+
+        async def publish(self, content, *, publication_id):
+            self.calls += 1
+            return ChannelResult(self.channel, ResultStatus.SUBMITTED, error=raw_reason)
+
+    adapter = _SubmittedAdapter()
+
+    async def adapter_factory(channel, target_id=""):
+        assert channel == "vk_wall"
+        return adapter
+
+    async with factory() as session:
+        repo = PublicationRepository(session, profile_id=pid)
+        post = await repo.create_scheduled(
+            content_type="post",
+            text=content.text,
+            title=None,
+            media_paths=[],
+            channels=["vk_wall"],
+            scheduled_at=datetime(2026, 8, 10, 9, 0),
+        )
+        pubid = scheduled_publication_id(post.id)
+        service = PublishService(repo, adapter_factory)
+        published = (await service.publish(content, ["vk_wall"], publication_id=pubid))[0]
+        assert published.status == "submitted"
+        assert published.error == expected
+
+        persisted = await repo.get_status(pubid, "vk_wall")
+        assert persisted is not None
+        assert persisted.error == expected
+        initial_attempts = persisted.attempt_count
+
+        retry = await service.retry_channel(content, "vk_wall", publication_id=pubid)
+        reentry = (await service.publish(content, ["vk_wall"], publication_id=pubid))[0]
+        assert retry.status == reentry.status == "submitted"
+        assert retry.error == reentry.error == expected
+        assert adapter.calls == 1
+        again_persisted = await repo.get_status(pubid, "vk_wall")
+        assert again_persisted is not None
+        assert again_persisted.attempt_count == initial_attempts
+
+        scheduler = SchedulerRepository(session)
+        await scheduler.claim(post.id)
+        await scheduler.finalize(post.id, success=True)
+        await session.execute(
+            sql_update(ScheduledPost)
+            .where(ScheduledPost.id == post.id)
+            .values(published_at=datetime(2026, 8, 10, 9, 6, tzinfo=UTC))
+        )
+        await session.commit()
+
+    for _ in range(2):  # fresh request/session for each read
+        response = await client.get(f"/api/profiles/{pid}/scheduled/report")
+        assert response.status_code == 200, response.text
+        row = response.json()[0]
+        assert row["overall"] == "submitted"
+        by_channel = {o["channel"]: o for o in row["outcomes"]}
+        assert by_channel["vk_wall"]["status"] == "submitted"
+        assert by_channel["vk_wall"]["error"] == expected
+        if raw_reason not in (None, "no_match"):
+            assert raw_reason not in response.text
+
+
 async def test_scheduled_screenshots_only_for_failed_channel(client, factory):
     """Канал упал на попытке 1 (скриншот в логах), но дожался на ретрае (done).
 
