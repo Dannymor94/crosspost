@@ -349,7 +349,9 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 page.get_by_role("button", name="Показать ещё").click()
                 page.get_by_role("button", name="Использовать текст", exact=True).click()
                 expect(text).to_have_value("Отменённый пост")
-                expect(page.get_by_role("button", name="Вставить в пустой черновик")).to_be_disabled()
+                expect(
+                    page.get_by_role("button", name="Вставить в пустой черновик")
+                ).to_be_disabled()
                 assert sends == 0
                 assert not errors, errors
                 return
