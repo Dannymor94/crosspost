@@ -466,9 +466,10 @@ function ComposeView({ user }) {
     catch (e) { setErr(e.message); }
   }
   async function acknowledgeOperation() {
+    const matched = draft.markRecovered(receipt);
     await ops.acknowledge(opScope, receipt);
     setPending(ops.pending(opScope)); setReceipt(null);
-    draft.reload();
+    if (!matched) draft.reload();
   }
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
@@ -664,6 +665,7 @@ function ComposeView({ user }) {
   return html`
     <div>
       <p role="status">${draft.label} ${["conflict","save-error","auth"].includes(draft.status) && html`<button class="btn btn-ghost" onClick=${draft.retry}>Проверить сохранение</button>`}</p>
+      ${draft.status === 'rejected' && !pending && html`<button class="btn btn-ghost" onClick=${draft.renewRejected}>Продолжить редактирование</button>`}
       ${draft.status === 'recorded' && !pending && html`<button class="btn btn-ghost" onClick=${draft.startNew}>Новый пост</button>`}
       ${mediaMissing && html`<div class="video-warn">Медиа не восстановлено. Выберите файл заново или явно удалите вложение. <button class="btn btn-ghost" onClick=${clearMedia}>Без вложения</button></div>`}
       <div class="field">

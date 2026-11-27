@@ -14,6 +14,18 @@ from crosspost.db.models import PublicationOperation
 from crosspost.orchestrator.task import new_publication_id
 
 
+REJECTED_BEFORE_EFFECT = "rejected_before_effect"
+
+
+def rejected_before_effect(summary: list | None) -> bool:
+    return (
+        isinstance(summary, list)
+        and len(summary) == 1
+        and isinstance(summary[0], dict)
+        and summary[0].get("status") == REJECTED_BEFORE_EFFECT
+    )
+
+
 class OperationConflict(Exception):
     """Key is bound to another request or scope; never expose the existing row."""
 

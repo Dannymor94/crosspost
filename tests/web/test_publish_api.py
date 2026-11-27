@@ -3371,3 +3371,118 @@ async def test_editor_revision_consumed_before_second_dispatch(client, factory):
         stale = await client.post(base + "/publish", data=data, headers=headers)
         assert stale.status_code == 409
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+async def test_editor_pre_effect_rejection_recover_and_renew(client, factory, scheduled):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    draft_data = {"text": "", "targets": ["telegram"]}
+    saved = await client.put(
+        base + "/editor-draft",
+        json={"scope": row["scope"], "revision": row["revision"], "data": draft_data},
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "", "channels": '["telegram"]'}
+    if scheduled:
+        data["scheduled_at"] = "2099-01-01T12:00:00"
+    url = base + ("/scheduled" if scheduled else "/publish")
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        denied = await client.post(url, data=data, headers=headers)
+        assert denied.status_code == 422, denied.text
+        recovery = await client.get(base + "/operation-status", headers=headers)
+        assert recovery.json() == {
+            "state": "rejected",
+            "outcomes": [{"status": "rejected_before_effect", "http_status": "422"}],
+        }
+        assert (await client.get(base + "/editor-draft")).json()["operation_state"] == "rejected"
+        fixed = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {**draft_data, "text": "fixed"},
+            },
+        )
+        assert fixed.status_code == 200, fixed.text
+        new_revision = fixed.json()["revision"]
+        old = await client.post(url, data={**data, "text": "fixed"}, headers=headers)
+        assert old.status_code == 409
+        retry = await client.post(
+            url,
+            data={**data, "text": "fixed"},
+            headers={
+                **headers,
+                "Idempotency-Key": new_revision,
+                "X-Draft-Revision": new_revision,
+            },
+        )
+        assert retry.status_code == 200, retry.text
+    assert len(calls) == (0 if scheduled else 1)
+
+
+async def test_editor_moderation_rejection_can_be_replanned(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as session:
+        await ProfileSettingsRepository(session, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(session).create_user(
+            "draft-moderated", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    draft_data = {"text": "moderated", "targets": ["telegram"]}
+    saved = await client.put(
+        base + "/editor-draft",
+        json={"scope": row["scope"], "revision": row["revision"], "data": draft_data},
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "a" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "moderated", "channels": '["telegram"]'}
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        denied = await client.post(base + "/publish", data=data, headers=headers)
+        assert denied.status_code == 403
+        recovery = await client.get(base + "/operation-status", headers=headers)
+        assert recovery.json()["state"] == "rejected"
+        fixed = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {**draft_data, "when": "later"},
+            },
+        )
+        assert fixed.status_code == 200, fixed.text
+        new_revision = fixed.json()["revision"]
+        planned = await client.post(
+            base + "/scheduled",
+            data={**data, "scheduled_at": "2099-01-01T12:00:00"},
+            headers={
+                **headers,
+                "Idempotency-Key": new_revision,
+                "X-Draft-Revision": new_revision,
+            },
+        )
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["status"] == "pending_approval"
+    assert not calls

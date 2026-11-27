@@ -38,7 +38,11 @@ from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, PublicationStatus
-from crosspost.db.operation_repo import OperationConflict, OperationRepository
+from crosspost.db.operation_repo import (
+    OperationConflict,
+    OperationRepository,
+    rejected_before_effect,
+)
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -62,12 +66,14 @@ from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profi
 from crosspost.web.moderation import require_unmoderated_action
 from crosspost.web.operation_admission import (
     draft_binding,
-    fence_draft,
     immediate_fingerprint,
     operation_conflict,
+    pre_effect_rejections,
     recovery_digest,
+    reserve_bound_editor,
     reserve_immediate,
     validate_operation_key,
+    validate_snapshot,
 )
 from crosspost.web.signed_media import redact_media_tokens
 
@@ -592,68 +598,108 @@ async def publish_now(
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
-    await require_unmoderated_action(user, session, profile_id)
     binding = await draft_binding(
         session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
     )
-
-    selections = _parse_selections(channels)
-    # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
-    _vbytes = _upload_video_bytes(media)
-    await _reject_ineligible(
-        profile_repo,
-        profile_id,
-        selections,
-        content_type,
-        session=session,
-        has_video=_has_video(media, image),
-        video_bytes=_vbytes,
-    )
-
+    actor_id = user.id
     proof = None
-    if recovery_secret is not None:
-        if operation_key is None:
-            raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+    reservation = None
+    snapshot = None
+    if binding is not None:
+        assert recovery_secret is not None
         profile = await profile_repo.get_profile(profile_id)
         assert profile is not None
         proof = recovery_digest(recovery_secret, user, profile)
-
-    if operation_key is None:
-        publication_id = new_publication_id()
-    else:
-        publication_id = await reserve_immediate(
+        reservation, snapshot = await reserve_bound_editor(
             session,
-            actor_id=user.id,
+            binding=binding,
+            actor_id=actor_id,
             profile_id=profile_id,
-            operation_key=operation_key,
+            kind="immediate",
             fields={
                 "content_type": content_type,
                 "text": text,
                 "title": title,
-                "channels": [[s.channel, s.target_id] for s in selections],
+                "channels": channels,
                 "article_text": article_text,
                 "link_phrase": link_phrase,
                 "image": image,
             },
             media=media,
             recovery_hash=proof,
-            binding=binding,
         )
-    media_paths = await _save_media(media, publication_id)
-    if not media_paths and image.strip():
-        from crosspost.db.settings_repo import ProfileSettingsRepository
 
-        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
-        try:
-            async with _make_http_client() as http:
-                fetched = await fetch_media(image.strip(), folder=folder, client=http)
-            media_paths = media_store.save_binaries(
-                [(fetched.filename, fetched.data)], publication_id
+    async with pre_effect_rejections(
+        session, reservation=reservation, actor_id=actor_id, profile_id=profile_id
+    ):
+        await require_unmoderated_action(user, session, profile_id)
+        selections = _parse_selections(channels)
+        validate_snapshot(
+            snapshot,
+            content_type=content_type,
+            text=text,
+            title=title,
+            article_text=article_text,
+            link_phrase=link_phrase,
+            selections=[(s.channel, s.target_id) for s in selections],
+            has_media=bool(image.strip() or any(upload.filename for upload in media)),
+        )
+        # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
+        _vbytes = _upload_video_bytes(media)
+        await _reject_ineligible(
+            profile_repo,
+            profile_id,
+            selections,
+            content_type,
+            session=session,
+            has_video=_has_video(media, image),
+            video_bytes=_vbytes,
+        )
+
+        if binding is None and recovery_secret is not None:
+            if operation_key is None:
+                raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+            profile = await profile_repo.get_profile(profile_id)
+            assert profile is not None
+            proof = recovery_digest(recovery_secret, user, profile)
+
+        if reservation is not None:
+            publication_id = reservation.publication_id
+        elif operation_key is None:
+            publication_id = new_publication_id()
+        else:
+            publication_id = await reserve_immediate(
+                session,
+                actor_id=user.id,
+                profile_id=profile_id,
+                operation_key=operation_key,
+                fields={
+                    "content_type": content_type,
+                    "text": text,
+                    "title": title,
+                    "channels": [[s.channel, s.target_id] for s in selections],
+                    "article_text": article_text,
+                    "link_phrase": link_phrase,
+                    "image": image,
+                },
+                media=media,
+                recovery_hash=proof,
             )
-        except MediaSourceError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    content = _build_content(content_type, text, title, media_paths)
-    _validate_or_422(content)
+        media_paths = await _save_media(media, publication_id)
+        if not media_paths and image.strip():
+            from crosspost.db.settings_repo import ProfileSettingsRepository
+
+            folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+            try:
+                async with _make_http_client() as http:
+                    fetched = await fetch_media(image.strip(), folder=folder, client=http)
+                media_paths = media_store.save_binaries(
+                    [(fetched.filename, fetched.data)], publication_id
+                )
+            except MediaSourceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        content = _build_content(content_type, text, title, media_paths)
+        _validate_or_422(content)
 
     svc = _make_service(profile_repo, pub_repo, profile_id)
     outcomes = await svc.publish(
@@ -667,7 +713,7 @@ async def publish_now(
 
     if proof is not None:
         # Durable evidence before cleanup, logging or returning the response.
-        allowed = {status.value for status in PublicationStatus}
+        allowed = {status.value for status in PublicationStatus} | {"deferred", "banned"}
         summary = [
             {
                 "channel": o.channel,
@@ -721,6 +767,9 @@ async def operation_status(
     if operation is None:
         raise HTTPException(status_code=404, detail="Операция недоступна")
     summary = operation.result_summary
+    if rejected_before_effect(summary):
+        assert summary is not None
+        return OperationResultOut(state="rejected", outcomes=summary)
     if not summary:
         return OperationResultOut(state="unknown", outcomes=[])
     # A recorded dispatch result is not a claim of platform delivery.
@@ -833,107 +882,147 @@ async def schedule_post(
         session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
     )
 
-    utc_time = None
-    if time_contract not in (None, "utc-v1"):
-        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
-    try:
-        if time_contract == "utc-v1":
-            instant = parse_instant(scheduled_at)
-            if instant < datetime.now(UTC) - timedelta(seconds=60):
-                raise HTTPException(
-                    status_code=422, detail="scheduled_at: нельзя назначить в прошлое"
-                )
-            utc_time = instant.replace(tzinfo=None)
-            when = instant.astimezone().replace(tzinfo=None)
-        else:
-            when = legacy_schedule_time(scheduled_at)
-    except (ValueError, OverflowError) as exc:
-        raise HTTPException(
-            status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
-        ) from exc
-    try:
-        channel_list = json.loads(channels)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
-    if not isinstance(channel_list, list) or not channel_list:
-        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
-
-    # Валидируем по единицам, но храним channel_list ВЕРБАТИМ (старый list[str]
-    # или новый list[{channel,target_id}]) — executor нормализует при исполнении,
-    # round-trip формы сохраняется (см. selections_from_stored).
-    try:
-        selections = selections_from_stored(channel_list)
-    except (TypeError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
-    _vbytes = _upload_video_bytes(media)
-    await _reject_ineligible(
-        profile_repo,
-        profile_id,
-        selections,
-        content_type,
-        session=session,
-        has_video=_has_video(media, image),
-        video_bytes=_vbytes,
-    )
-
     operation_repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    actor_id = user.id
     proof = None
-    fingerprint = None
-    if recovery_secret is not None and operation_key is None:
-        raise HTTPException(status_code=422, detail="Idempotency-Key is required")
-    if operation_key is not None:
-        validate_operation_key(operation_key)
-        if image.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="Для защищённого планирования загрузите файл напрямую.",
-            )
-        if await operation_repo.exists(operation_key):
-            raise operation_conflict()
-        if recovery_secret is not None:
-            profile = await profile_repo.get_profile(profile_id)
-            assert profile is not None
-            proof = recovery_digest(recovery_secret, user, profile)
-        fingerprint = await immediate_fingerprint(
-            {
+    reservation = None
+    snapshot = None
+    if binding is not None:
+        assert recovery_secret is not None
+        profile = await profile_repo.get_profile(profile_id)
+        assert profile is not None
+        proof = recovery_digest(recovery_secret, user, profile)
+        reservation, snapshot = await reserve_bound_editor(
+            session,
+            binding=binding,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            kind="scheduled",
+            fields={
                 "content_type": content_type,
                 "text": text,
                 "title": title,
-                "channels": channel_list,
-                "scheduled_at": schedule_iso(when, utc_time),
+                "channels": channels,
+                "scheduled_at": scheduled_at,
                 "time_contract": time_contract,
                 "article_text": article_text,
                 "link_phrase": link_phrase,
                 "image": image,
             },
-            media,
-            kind="scheduled",
+            media=media,
+            recovery_hash=proof,
         )
 
-    key = f"sched-{new_publication_id()}"
-    media_paths = await _save_media(media, key)
-    if not media_paths and image.strip():
-        from crosspost.db.settings_repo import ProfileSettingsRepository
-
-        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+    async with pre_effect_rejections(
+        session, reservation=reservation, actor_id=actor_id, profile_id=profile_id
+    ):
+        utc_time = None
+        if time_contract not in (None, "utc-v1"):
+            raise HTTPException(status_code=422, detail="Unknown schedule time contract")
         try:
-            async with _make_http_client() as http:
-                fetched = await fetch_media(image.strip(), folder=folder, client=http)
-            media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
-        except MediaSourceError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    content = _build_content(content_type, text, title, media_paths)
-    _validate_or_422(content)
+            if time_contract == "utc-v1":
+                instant = parse_instant(scheduled_at)
+                if instant < datetime.now(UTC) - timedelta(seconds=60):
+                    raise HTTPException(
+                        status_code=422, detail="scheduled_at: нельзя назначить в прошлое"
+                    )
+                utc_time = instant.replace(tzinfo=None)
+                when = instant.astimezone().replace(tzinfo=None)
+            else:
+                when = legacy_schedule_time(scheduled_at)
+        except (ValueError, OverflowError) as exc:
+            raise HTTPException(
+                status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
+            ) from exc
+        try:
+            channel_list = json.loads(channels)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
+        if not isinstance(channel_list, list) or not channel_list:
+            raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
+
+        # Валидируем по единицам, но храним channel_list ВЕРБАТИМ (старый list[str]
+        # или новый list[{channel,target_id}]) — executor нормализует при исполнении,
+        # round-trip формы сохраняется (см. selections_from_stored).
+        try:
+            selections = selections_from_stored(channel_list)
+        except (TypeError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
+        validate_snapshot(
+            snapshot,
+            content_type=content_type,
+            text=text,
+            title=title,
+            article_text=article_text,
+            link_phrase=link_phrase,
+            selections=[(s.channel, s.target_id) for s in selections],
+            has_media=bool(image.strip() or any(upload.filename for upload in media)),
+        )
+        _vbytes = _upload_video_bytes(media)
+        await _reject_ineligible(
+            profile_repo,
+            profile_id,
+            selections,
+            content_type,
+            session=session,
+            has_video=_has_video(media, image),
+            video_bytes=_vbytes,
+        )
+
+        fingerprint = None
+        if recovery_secret is not None and operation_key is None:
+            raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+        if operation_key is not None:
+            validate_operation_key(operation_key)
+            if image.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Для защищённого планирования загрузите файл напрямую.",
+                )
+            if binding is None and await operation_repo.exists(operation_key):
+                raise operation_conflict()
+            if binding is None and recovery_secret is not None:
+                profile = await profile_repo.get_profile(profile_id)
+                assert profile is not None
+                proof = recovery_digest(recovery_secret, user, profile)
+            if binding is None:
+                fingerprint = await immediate_fingerprint(
+                    {
+                        "content_type": content_type,
+                        "text": text,
+                        "title": title,
+                        "channels": channel_list,
+                        "scheduled_at": schedule_iso(when, utc_time),
+                        "time_contract": time_contract,
+                        "article_text": article_text,
+                        "link_phrase": link_phrase,
+                        "image": image,
+                    },
+                    media,
+                    kind="scheduled",
+                )
+
+        key = f"sched-{new_publication_id()}"
+        media_paths = await _save_media(media, key)
+        if not media_paths and image.strip():
+            from crosspost.db.settings_repo import ProfileSettingsRepository
+
+            folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+            try:
+                async with _make_http_client() as http:
+                    fetched = await fetch_media(image.strip(), folder=folder, client=http)
+                media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
+            except MediaSourceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        content = _build_content(content_type, text, title, media_paths)
+        _validate_or_422(content)
 
     from crosspost.db.models import Role, ScheduledPostStatus
     from crosspost.db.settings_repo import ProfileSettingsRepository
 
-    reservation = None
-    if operation_key is not None:
+    if operation_key is not None and reservation is None:
         assert fingerprint is not None
         await session.rollback()
-        if binding is not None:
-            await fence_draft(session, binding, actor_id=user.id, profile_id=profile_id)
         try:
             reservation = await operation_repo.reserve(
                 operation_key,

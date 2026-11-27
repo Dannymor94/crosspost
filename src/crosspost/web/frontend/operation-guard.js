@@ -72,6 +72,11 @@
     if (!r.ok) throw new Error("Результат пока недоступен. Не отправляйте повторно.");
     const data = await r.json();
     const rows = Array.isArray(data.outcomes) ? data.outcomes : [];
+    if (data.state === "rejected" && rows.length === 1 &&
+        rows[0]?.status === "rejected_before_effect" && /^[4][0-9]{2}$/.test(rows[0].http_status)) {
+      return {known:true, rejected:true, id:p.id,
+        message:"Отправка не началась. Исправьте черновик или отправьте его на проверку."};
+    }
     if (p.expected?.kind === "scheduled" && data.state === "scheduled_created" && rows.length === 1 &&
         typeof rows[0]?.scheduled_id === "string" && /^[1-9][0-9]*$/.test(rows[0].scheduled_id) &&
         validScheduled(rows[0], Number(rows[0].scheduled_id))) {

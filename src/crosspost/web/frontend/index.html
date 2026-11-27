@@ -3235,9 +3235,10 @@ function PublishView({ profile, user }) {
     catch (e) { setAlert({type: "error", text: e.message}); }
   }
   async function acknowledgeOperation() {
+    const matched = draft.markRecovered(receipt);
     await ops.acknowledge(opScope, receipt);
     setPendingOperation(ops.pending(opScope)); setReceipt(null);
-    draft.reload();
+    if (!matched) draft.reload();
     loadScheduled();
   }
 
@@ -3503,6 +3504,7 @@ function PublishView({ profile, user }) {
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
     h("p", {role:"status"}, draft.label, ["conflict","save-error","auth"].includes(draft.status) && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Проверить сохранение")),
+    draft.status === "rejected" && !pendingOperation && h("button", {className:"btn btn-ghost", onClick:draft.renewRejected}, "Продолжить редактирование"),
     draft.status === "recorded" && !pendingOperation && h("button", {className:"btn btn-ghost", onClick:draft.startNew}, "Новый пост"),
     mediaMissing && h("div", {role:"alert", className:"form-hint"}, "Медиа не восстановлено. Выберите файл или ссылку заново. ", h("button", {className:"btn btn-ghost", onClick:() => setMediaMissing(false)}, "Без вложения")),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),

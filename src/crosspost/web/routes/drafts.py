@@ -10,11 +10,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert
 
 from crosspost.db.models import EditorDraft, Profile, PublicationOperation, User
+from crosspost.db.operation_repo import REJECTED_BEFORE_EFFECT, rejected_before_effect
 from crosspost.web.deps import CurrentUser, SessionDep, require_profile_access
 
 router = APIRouter(tags=["drafts"], dependencies=[Depends(require_profile_access)])
@@ -37,7 +38,7 @@ class DraftOut(BaseModel):
     scope: str
     revision: str | None
     data: DraftData | None
-    operation_state: Literal["ready", "used", "recorded"] = "ready"
+    operation_state: Literal["ready", "used", "recorded", "rejected"] = "ready"
 
 
 class DraftWrite(BaseModel):
@@ -97,9 +98,12 @@ async def get_draft(
             PublicationOperation.actor_id == user.id,
         )
     )
-    state: Literal["ready", "used", "recorded"] = "ready"
+    state: Literal["ready", "used", "recorded", "rejected"] = "ready"
     if operation is not None:
-        state = "used" if operation.result_summary is None else "recorded"
+        if rejected_before_effect(operation.result_summary):
+            state = "rejected"
+        else:
+            state = "used" if operation.result_summary is None else "recorded"
     return DraftOut(scope=scope, revision=row.revision, data=data, operation_state=state)
 
 
@@ -138,6 +142,9 @@ async def put_draft(
         )
         if body.data is None:
             operation = operation.where(PublicationOperation.result_summary.is_(None))
+        else:
+            status = PublicationOperation.result_summary[0]["status"].as_string()
+            operation = operation.where(func.coalesce(status, "") != REJECTED_BEFORE_EFFECT)
         update_stmt = (
             sql_update(EditorDraft)
             .where(

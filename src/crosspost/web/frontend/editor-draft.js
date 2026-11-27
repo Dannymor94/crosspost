@@ -61,7 +61,8 @@
         hydrate(value);
         setSaved(serialize(value));
         setLoaded(true);
-        setStatus(row.operation_state === "recorded" ? "recorded" :
+        setStatus(row.operation_state === "rejected" ? "rejected" :
+          row.operation_state === "recorded" ? "recorded" :
           row.operation_state === "used" ? "consumed" : row.data ? "saved" : "ready");
       }).catch(e => {
         if (!controller.signal.aborted) setStatus(e.status === 401 || e.status === 403 ? "auth" : "load-error");
@@ -70,7 +71,7 @@
     }, [base,actor,attempt]);
     useEffect(() => {
       if (!loaded || !dirty || paused || !receipt.current ||
-          ["saving","conflict","save-error","auth","loading","recorded","consumed"].includes(status)) return;
+          ["saving","conflict","save-error","auth","loading","recorded","consumed","rejected"].includes(status)) return;
       const controller = generation.current;
       const timer = setTimeout(async () => {
         if (!controller || controller.signal.aborted || latest.current !== snapshot) return;
@@ -125,6 +126,15 @@
       if (receipt.current?.scope === token.scope && receipt.current?.revision === token.revision &&
           token.controller === generation.current) setStatus("recorded");
     }
+    function markRecovered(result) {
+      if (!result?.known || receipt.current?.revision !== result.id) return false;
+      setStatus(result.rejected ? "rejected" : "recorded");
+      return true;
+    }
+    function renewRejected() {
+      if (status !== "rejected") return;
+      setSaved(null); setStatus("ready");
+    }
     async function startNew() {
       if (status !== "recorded" || !receipt.current ||
           !window.confirm("Создать новый пустой пост? Сохранённый снимок предыдущего поста будет закрыт.")) return false;
@@ -154,11 +164,12 @@
       : status === "save-error" ? "Не удалось сохранить черновик."
       : status === "loading" ? "Загрузка черновика…"
       : status === "saving" ? "Сохраняем черновик…"
+      : status === "rejected" ? "Отправка не началась. Продолжите редактирование."
       : status === "recorded" ? "Этот снимок уже использован. Создайте новый пост отдельно."
       : status === "consumed" ? "Результат этого снимка неизвестен. Повторная отправка заблокирована."
       : dirty ? "Есть несохранённые изменения"
       : status === "saved" ? "Черновик сохранён" : "Нет сохранённого черновика";
-    return {loaded,dirty,status,label,retry,reload,capture,unchanged,clearSubmitted,markRecorded,startNew,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
+    return {loaded,dirty,status,label,retry,reload,capture,unchanged,clearSubmitted,markRecorded,markRecovered,renewRejected,startNew,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
   }
   window.CrosspostDraft = Object.freeze({useDraft,canLeave,normalize,confirmed});
 })();

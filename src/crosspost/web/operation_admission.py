@@ -5,15 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from collections.abc import Sequence
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import EditorDraft, Profile, User
-from crosspost.db.operation_repo import OperationConflict, OperationRepository
+from crosspost.db.operation_repo import (
+    REJECTED_BEFORE_EFFECT,
+    OperationConflict,
+    OperationRepository,
+    Reservation,
+)
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -100,7 +106,7 @@ async def draft_binding(
 
 async def fence_draft(
     session: AsyncSession, binding: DraftBinding, *, actor_id: int, profile_id: int
-) -> None:
+) -> dict:
     """Acquire SQLite write ownership and check the revision before admission.
 
     Caller must reserve the operation in this same transaction. The revision is
@@ -115,10 +121,102 @@ async def fence_draft(
             EditorDraft.profile_id == profile_id,
         )
         .values(revision=EditorDraft.revision)
+        .returning(EditorDraft.data)
     )
-    if getattr(result, "rowcount", 0) != 1:
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
         await session.rollback()
         raise operation_conflict()
+    return snapshot
+
+
+async def reserve_bound_editor(
+    session: AsyncSession,
+    *,
+    binding: DraftBinding,
+    actor_id: int,
+    profile_id: int,
+    kind: str,
+    fields: dict,
+    media: Sequence[UploadFile],
+    recovery_hash: str,
+) -> tuple[Reservation, dict]:
+    """Commit a single revision-bound operation before any fallible preflight."""
+    fingerprint = await immediate_fingerprint(fields, media, kind=kind)
+    await session.rollback()
+    snapshot = await fence_draft(session, binding, actor_id=actor_id, profile_id=profile_id)
+    repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+    try:
+        reservation = await repo.reserve(
+            binding.revision, kind=kind, fingerprint=fingerprint, recovery_hash=recovery_hash
+        )
+    except OperationConflict as exc:
+        raise operation_conflict() from exc
+    if not reservation.acquired:
+        raise operation_conflict()
+    return reservation, snapshot
+
+
+def validate_snapshot(
+    snapshot: dict | None,
+    *,
+    content_type: str,
+    text: str,
+    title: str | None,
+    article_text: str,
+    link_phrase: str,
+    selections: Sequence[tuple[str, str]],
+    has_media: bool,
+) -> None:
+    if snapshot is None:
+        return
+    targets = set()
+    for key in snapshot.get("targets", []):
+        separator = "␟" if "␟" in key else "::"
+        channel, _, target = key.partition(separator)
+        targets.add((channel, target))
+    if (
+        not snapshot
+        or snapshot.get("content_type", "post") != content_type
+        or snapshot.get("text", "") != text
+        or targets != set(selections)
+        or bool(snapshot.get("media_required")) != has_media
+        or (
+            content_type == "article"
+            and (
+                snapshot.get("article_title", "").strip() != (title or "").strip()
+                or snapshot.get("article_text", "") != article_text
+                or snapshot.get("link_phrase", "") != link_phrase
+            )
+        )
+        or (content_type != "article" and bool(article_text))
+    ):
+        raise HTTPException(status_code=422, detail="Отправка не соответствует черновику")
+
+
+@asynccontextmanager
+async def pre_effect_rejections(
+    session: AsyncSession,
+    *,
+    reservation: Reservation | None,
+    actor_id: int,
+    profile_id: int,
+) -> AsyncIterator[None]:
+    """Record only explicit rejection inside a strictly pre-effect region.
+
+    Unexpected crashes and all errors after entering dispatch remain unknown.
+    """
+    try:
+        yield
+    except HTTPException as exc:
+        if reservation is not None and 400 <= exc.status_code < 500:
+            await session.rollback()
+            repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+            await repo.finish(
+                reservation.publication_id,
+                [{"status": REJECTED_BEFORE_EFFECT, "http_status": str(exc.status_code)}],
+            )
+        raise
 
 
 async def reserve_immediate(
@@ -130,7 +228,6 @@ async def reserve_immediate(
     fields: dict,
     media: Sequence[UploadFile],
     recovery_hash: str | None = None,
-    binding: DraftBinding | None = None,
 ) -> str:
     """Only the first committed reservation may proceed to media save and send.
 
@@ -145,8 +242,6 @@ async def reserve_immediate(
     # before acquiring SQLite's write reservation.
     await session.rollback()
     repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
-    if binding is not None:
-        await fence_draft(session, binding, actor_id=actor_id, profile_id=profile_id)
     try:
         reservation = await repo.reserve(
             operation_key, kind="immediate", fingerprint=fingerprint, recovery_hash=recovery_hash

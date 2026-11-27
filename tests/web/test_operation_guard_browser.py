@@ -171,3 +171,39 @@ def test_editor_bound_proof_survives_known_result_until_acknowledged():
             assert second.evaluate("window.CrosspostOperations.pending('draft')") is True
         finally:
             browser.close()
+
+
+def test_definitive_rejection_recovery_is_distinct_from_unknown():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.route("http://localhost/**", lambda route: route.fulfill(body="<html></html>"))
+            page.goto("http://localhost/")
+            page.add_script_tag(path=SCRIPT)
+            page.route(
+                "**/operation-status",
+                lambda route: route.fulfill(
+                    json={
+                        "state": "rejected",
+                        "outcomes": [{"status": "rejected_before_effect", "http_status": "403"}],
+                    }
+                ),
+            )
+            result = page.evaluate(
+                """async () => {
+                    const ops = window.CrosspostOperations;
+                    try {
+                        await ops.run("rejected", async () => { throw Error("403"); },
+                            ops.publicationExpectation(["telegram"]),
+                            {scope:"a".repeat(64),revision:"b".repeat(32)});
+                    } catch {}
+                    const receipt = await ops.recover("rejected", "/api/profiles/1");
+                    await ops.acknowledge("rejected", receipt);
+                    return {known:receipt.known,rejected:receipt.rejected,
+                        pending:ops.pending("rejected")};
+                }"""
+            )
+            assert result == {"known": True, "rejected": True, "pending": False}
+        finally:
+            browser.close()
