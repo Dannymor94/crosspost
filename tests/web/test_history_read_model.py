@@ -129,5 +129,31 @@ async def test_history_scope_equal_timestamp_and_observed_outcomes(tmp_path):
             assert all(e["coverage"] == "observed_only" for e in entries)
             assert (await client.get("/api/profiles/2/history")).status_code == 403
             assert (await client.get(url, params={"before": "not-a-cursor"})).status_code == 422
+
+            search = url + "/search"
+            first = await client.post(search, json={"query": "telegram", "limit": 1})
+            assert first.status_code == 200
+            assert first.json()["entries"][0]["status"] == "mixed_observed"
+            assert len(first.json()["entries"][0]["outcomes"]) == 2
+            cursor = first.json()["next_cursor"]
+            assert cursor
+            second = await client.post(search, json={"query": "telegram", "before": cursor})
+            assert [e["key"] for e in second.json()["entries"]] == ["immediate-a"]
+            assert (
+                await client.post(search, json={"query": "vk_wall", "before": cursor})
+            ).status_code == 422
+            for query, source, expected in [
+                ("planned", "scheduled", ["2"]),
+                ("planned", "immediate", []),
+                ("PRIVATE", "all", []),
+                ("%", "all", []),
+                ("telegram", "scheduled", []),
+            ]:
+                result = await client.post(search, json={"query": query, "source": source})
+                assert result.status_code == 200
+                assert [e["key"] for e in result.json()["entries"]] == expected
+            assert (
+                await client.post("/api/profiles/2/history/search", json={"query": "PRIVATE"})
+            ).status_code == 403
     finally:
         await engine.dispose()

@@ -28,35 +28,43 @@
   function create(h,{useState,useEffect,useRef}) {
     return function HistoryPanel({pid}) {
       const [state,setState]=useState(null), [attempt,setAttempt]=useState(0);
-      const [filter,setFilter]=useState("all"),[query,setQuery]=useState("");
+      const [filter,setFilter]=useState("all"),[query,setQuery]=useState(""),[activeQuery,setActiveQuery]=useState("");
       const flight=useRef(null);
       async function load(cursor,previous) {
         if(flight.current) flight.current.abort();
         const controller=new AbortController();flight.current=controller;
-        setState({pid,attempt,kind:cursor?"more":"loading",entries:previous||[],cursor});
+        const scope={pid,attempt,filter,activeQuery};
+        setState({...scope,kind:cursor?"more":"loading",entries:previous||[],cursor});
         try {
-          const url="/api/profiles/"+pid+"/history?limit=20"+(cursor?"&before="+encodeURIComponent(cursor):"");
-          const response=await fetch(url,{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+          const base="/api/profiles/"+pid+"/history";
+          const filtered=filter!=="all"||activeQuery!=="";
+          const url=filtered?base+"/search":base+"?limit=20"+(cursor?"&before="+encodeURIComponent(cursor):"");
+          const options={credentials:"same-origin",cache:"no-store",signal:controller.signal};
+          if(filtered) Object.assign(options,{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({source:filter,query:activeQuery,limit:20,before:cursor||null})});
+          const response=await fetch(url,options);
           if(!response.ok) throw Error("Read failed");
           const data=validate(await response.json());
           if(controller.signal.aborted) return;
           const entries=[...(previous||[]),...data.entries];
           if(new Set(entries.map(rowKey)).size!==entries.length||
              (cursor&&data.next_cursor===cursor)) throw Error("Invalid page");
-          setState({pid,attempt,kind:"ready",entries,cursor:data.next_cursor});
+          setState({...scope,kind:"ready",entries,cursor:data.next_cursor});
         } catch(_) {
-          if(!controller.signal.aborted) setState({pid,attempt,kind:cursor?"more-error":"error",entries:previous||[],cursor});
+          if(!controller.signal.aborted) setState({...scope,kind:cursor?"more-error":"error",entries:previous||[],cursor});
         }
       }
       useEffect(()=>{
         if(Number.isSafeInteger(pid)&&pid>0) load(null,[]);
         return ()=>flight.current?.abort();
-      },[pid,attempt]);
-      const current=state?.pid===pid&&state.attempt===attempt?state:null;
+      },[pid,attempt,filter,activeQuery]);
+      const current=state?.pid===pid&&state.attempt===attempt&&state.filter===filter&&state.activeQuery===activeQuery?state:null;
       const entries=current?.entries||[];
-      const q=query.trim().toLocaleLowerCase("ru");
-      const shown=entries.filter(e=>(filter==="all"||e.source===filter)&&
-        (!q||[e.text||"",label(e.status),...e.outcomes.map(o=>o.channel+" "+label(o.status))].join(" ").toLocaleLowerCase("ru").includes(q)));
+      function submitSearch(e) {
+        e.preventDefault();
+        const next=query.trim();
+        if(next===activeQuery)setAttempt(x=>x+1);else setActiveQuery(next);
+      }
       function row(e) {
         return h("article",{className:"cp-panel cp-stack",key:rowKey(e)},
           h("div",{className:"cp-row"},h("strong",null,label(e.status)),
@@ -75,11 +83,16 @@
           h("button",{className:"cp-button",onClick:()=>setAttempt(x=>x+1)},"Обновить историю"),
           h("select",{className:"cp-input","aria-label":"Тип публикации",value:filter,onChange:e=>setFilter(e.target.value)},
             h("option",{value:"all"},"Все"),h("option",{value:"scheduled"},"Из расписания"),h("option",{value:"immediate"},"Немедленные")),
-          h("input",{className:"cp-input","aria-label":"Поиск по загруженным записям",placeholder:"Поиск по загруженным записям",value:query,onInput:e=>setQuery(e.target.value)}),
+          h("form",{className:"cp-stack",onSubmit:submitSearch},
+            h("input",{className:"cp-input","aria-label":"Поиск по сохранённым записям",placeholder:"Текст поста или код площадки",maxLength:120,value:query,onInput:e=>setQuery(e.target.value)}),
+            h("div",{className:"cp-row"},
+              h("button",{type:"submit",className:"cp-button"},"Найти"),
+              h("button",{type:"button",className:"cp-button",onClick:()=>{setQuery("");setActiveQuery("");setFilter("all");}},"Сбросить поиск")),
+            h("p",{className:"cp-muted"},"Поиск по всем сохранённым страницам, с учётом регистра. Текст старых немедленных публикаций может отсутствовать.")),
           !pid?h("p",null,"Выберите профиль."):!current||current.kind==="loading"?h("p",{role:"status"},"Загружаем историю…"):
           current.kind==="error"?h("p",{role:"alert"},"Не удалось загрузить историю."):
           h("div",{className:"cp-stack"},
-            shown.length?shown.map(row):h("p",{className:"cp-muted"},entries.length?"Среди загруженных записей совпадений нет.":"Сохранённых записей нет."),
+            entries.length?entries.map(row):h("p",{className:"cp-muted"},filter!=="all"||activeQuery?"Совпадений нет.":"Сохранённых записей нет."),
             current.kind==="more-error"?h("p",{role:"alert"},"Не удалось загрузить следующую страницу."):null,
             current.cursor?h("button",{className:"cp-button",disabled:current.kind==="more",onClick:()=>load(current.cursor,entries)},current.kind==="more"?"Загрузка…":"Показать ещё"):null)));
     };

@@ -252,3 +252,11 @@ Both role calendars now offer explicit canonical scheduled move (client only whe
 ## T-511 common target selection controls (draft)
 
 Shared selection toolbar uses confirmed eligible targets only; explicit select-all/clear, count, unavailable count, admin excluded target notice. Client hides stale options during revalidation; existing draft/operation guards and media revalidation unchanged. New helper regression, actual-form test pending. Stacked isolated candidate on #66; not full editor or release.
+
+## T-513 server history search (draft)
+
+Read-only POST search across persisted scheduled text and observed channel names, literal case-sensitive substring, source filter before pagination. Cursor bound to scope/query/source, no plaintext query in URL/cursor, no filtered-away observed outcomes. API regression covers pagination, filter mismatch, literal wildcard and tenant scope. UI wiring pending; immediate text remains unavailable.
+
+### T-513 server search UI (draft)
+
+Both role history screens now search persisted pages using explicit submit and source filter. Search query stays in POST body, previous result hidden on filter change, stale requests aborted. Exact case-sensitive text/channel search and immediate missing text explained. Existing unfiltered GET and paging preserved. Actual-page tests updated; CI pending.
