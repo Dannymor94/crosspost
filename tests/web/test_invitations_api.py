@@ -262,7 +262,9 @@ async def test_production_cookie_requires_https(registration, monkeypatch):
     monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
     monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
     async with client() as c:
-        r = await c.post("/api/auth/login", json={"login": "existing", "password": "existing-password"})
+        r = await c.post(
+            "/api/auth/login", json={"login": "existing", "password": "existing-password"}
+        )
         assert r.status_code == 503
         assert "set-cookie" not in r.headers
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
