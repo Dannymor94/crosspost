@@ -40,6 +40,10 @@
       else {
         const cells=[];
         if(zone&&["week","month"].includes(effective)) {
+          if(effective==="month") {
+            const offset=(new Date(projection.bounds.start+"T00:00:00Z").getUTCDay()+6)%7;
+            for(let i=0;i<offset;i++) cells.push(h("span",{key:"pad-"+i,"aria-hidden":true}));
+          }
           for(let date=projection.bounds.start;date<projection.bounds.end;date=cal.addDays(date,1)) {
             const count=projection.days.find(g=>g.day===date)?.rows.length||0;
             cells.push(h("button",{type:"button",className:"cp-calendar-cell",key:date,
@@ -54,7 +58,7 @@
             ...MODES.map(([id,label])=>h("button",{type:"button",key:id,className:"cp-button",
               disabled:!zone&&id!=="list","aria-pressed":effective===id,onClick:()=>setMode(id)},label))),
           h("label",{className:"cp-stack"},"Статус",
-            h("select",{className:"cp-input",value:status,onChange:e=>setStatus(e.target.value)},
+            h("select",{className:"cp-input","aria-label":"Статус",value:status,onChange:e=>setStatus(e.target.value)},
               ...STATUSES.map(([id,label])=>h("option",{key:id,value:id},label)))),
           zone&&effective!=="list"?h("div",{className:"cp-calendar-controls"},
             h("button",{type:"button",className:"cp-button","aria-label":"Предыдущий период",onClick:()=>setAnchor(cal.shift(day,effective,-1))},"‹"),
@@ -62,7 +66,8 @@
               onChange:e=>{try {const next=e.target.value;cal.period(next,effective);setAnchor(next);}catch(_) {}}}),
             h("button",{type:"button",className:"cp-button","aria-label":"Следующий период",onClick:()=>setAnchor(cal.shift(day,effective,1))},"›"),
             h("button",{type:"button",className:"cp-button",onClick:()=>setAnchor(today)},"Сегодня")):null,
-          cells.length?h("div",{className:"cp-calendar-grid"},...cells):null,
+          cells.length?h("div",{className:"cp-calendar-grid"},
+            ...["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(label=>h("small",{key:label,className:"cp-calendar-weekday"},label)),...cells):null,
           projection.days.length?projection.days.map(group=>h("section",{className:"cp-panel cp-stack",key:group.day},
             h("h3",null,dateLabel(group.day)),...group.rows.map(row))):
             h("p",{className:"cp-muted"},"В выбранном периоде нет записей."),

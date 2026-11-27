@@ -143,4 +143,5 @@ html.cp-ux {
 .cp-ux .cp-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
 .cp-ux .cp-calendar-cell { display:grid; gap:4px; place-content:center; min-height:56px; padding:4px 2px; min-width:0; border:1px solid var(--cp-line); border-radius:8px; background:var(--cp-panel); color:var(--cp-ink); cursor:pointer; }
 .cp-ux .cp-calendar-cell small { font-size:11px; color:var(--cp-muted); }
-@media (max-width:640px) { .cp-ux .cp-calendar-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+ .cp-ux .cp-calendar-weekday { text-align:center; color:var(--cp-muted); font-size:12px; }
+@media (max-width:640px) { .cp-ux .cp-calendar-grid { gap:3px; } .cp-ux .cp-calendar-cell { min-height:44px; } .cp-ux .cp-calendar-cell small { font-size:10px; } }
