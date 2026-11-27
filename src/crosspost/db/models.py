@@ -343,6 +343,22 @@ class User(Base):
     profile: Mapped[Profile | None] = relationship("Profile")
 
 
+class ClientInvitation(Base):
+    """Single invitation slot for a newly created client profile (T-407)."""
+
+    __tablename__ = "client_invitations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    profile_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consumed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class Log(Base):
     """Диагностическая запись: ошибки, скриншоты, события адаптеров.
 

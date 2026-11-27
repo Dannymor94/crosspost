@@ -27,6 +27,7 @@ from crosspost.web.routes import (
     errors,
     health,
     import_plan,
+    invitations,
     profiles,
     public_media,
     publish,
@@ -152,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(users.router)
+    app.include_router(invitations.router)
     app.include_router(profiles.router)
     app.include_router(channels.router)
     app.include_router(telegram_discovery.router)
@@ -170,6 +172,21 @@ def create_app() -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def serve_spa() -> FileResponse:
             return FileResponse(_FRONTEND_DIR / "index.html")
+
+        @app.get("/account", include_in_schema=False)
+        async def serve_account() -> FileResponse:
+            return FileResponse(
+                _FRONTEND_DIR / "account.html",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; script-src 'self'; style-src 'self'; "
+                        "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+                        "base-uri 'none'"
+                    ),
+                },
+            )
 
         client_html = _FRONTEND_DIR / "client.html"
         if client_html.exists():
