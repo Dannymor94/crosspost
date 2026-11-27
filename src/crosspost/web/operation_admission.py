@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,6 +158,63 @@ async def reserve_bound_editor(
     return reservation, snapshot
 
 
+async def current_draft_revision(
+    session: AsyncSession, binding: DraftBinding, *, actor_id: int, profile_id: int
+) -> str | None:
+    revision: str | None = await session.scalar(
+        select(EditorDraft.revision).where(
+            EditorDraft.scope == binding.scope,
+            EditorDraft.user_id == actor_id,
+            EditorDraft.profile_id == profile_id,
+        )
+    )
+    return revision
+
+
+def snapshot_targets(snapshot: dict) -> set[tuple[str, str]]:
+    targets = set()
+    for key in snapshot.get("targets", []):
+        separator = "␟" if "␟" in key else "::"
+        channel, _, target = key.partition(separator)
+        targets.add((channel, target))
+    return targets
+
+
+def complete_summary(snapshot: dict, kind: str, summary: list | None) -> bool:
+    """Match the effective targets before declaring a draft safely discardable."""
+    if not isinstance(summary, list) or not summary or not snapshot:
+        return False
+    if kind == "scheduled":
+        row = summary[0]
+        if len(summary) != 1 or not isinstance(row, dict):
+            return False
+        sid = row.get("scheduled_id")
+        return (
+            isinstance(sid, str)
+            and re.fullmatch(r"[1-9][0-9]{0,15}", sid) is not None
+            and int(sid) <= 2**53 - 1
+            and row.get("status") in ("scheduled", "pending_approval")
+        )
+    if kind != "immediate":
+        return False
+    expected = snapshot_targets(snapshot)
+    if snapshot.get("content_type") == "article" and snapshot.get("article_text", "").strip():
+        expected.add(("telegraph", ""))
+    if not expected or len(summary) != len(expected):
+        return False
+    statuses = {"done", "submitted", "failed", "needs_relogin", "deferred", "banned"}
+    for row in summary:
+        if not isinstance(row, dict):
+            return False
+        channel, target = row.get("channel"), row.get("target")
+        if not isinstance(channel, str) or not isinstance(target, str):
+            return False
+        if row.get("status") not in statuses or (channel, target) not in expected:
+            return False
+        expected.remove((channel, target))
+    return not expected
+
+
 def validate_snapshot(
     snapshot: dict | None,
     *,
@@ -170,16 +228,11 @@ def validate_snapshot(
 ) -> None:
     if snapshot is None:
         return
-    targets = set()
-    for key in snapshot.get("targets", []):
-        separator = "␟" if "␟" in key else "::"
-        channel, _, target = key.partition(separator)
-        targets.add((channel, target))
     if (
         not snapshot
         or snapshot.get("content_type", "post") != content_type
         or snapshot.get("text", "") != text
-        or targets != set(selections)
+        or snapshot_targets(snapshot) != set(selections)
         or bool(snapshot.get("media_required")) != has_media
         or (
             content_type == "article"

@@ -72,6 +72,10 @@
     if (!r.ok) throw new Error("Результат пока недоступен. Не отправляйте повторно.");
     const data = await r.json();
     const rows = Array.isArray(data.outcomes) ? data.outcomes : [];
+    if (p.draftScope && data.state === "not_admitted" && rows.length === 0) {
+      return {known:true, notAdmitted:true, id:p.id,
+        message:"Эта попытка не была допущена. Загрузите актуальный черновик; предыдущая отправка могла состояться."};
+    }
     if (data.state === "rejected" && rows.length === 1 &&
         rows[0]?.status === "rejected_before_effect" && /^[4][0-9]{2}$/.test(rows[0].http_status)) {
       return {known:true, rejected:true, id:p.id,

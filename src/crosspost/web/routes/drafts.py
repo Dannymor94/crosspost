@@ -17,6 +17,7 @@ from sqlalchemy.dialects.sqlite import insert
 from crosspost.db.models import EditorDraft, Profile, PublicationOperation, User
 from crosspost.db.operation_repo import REJECTED_BEFORE_EFFECT, rejected_before_effect
 from crosspost.web.deps import CurrentUser, SessionDep, require_profile_access
+from crosspost.web.operation_admission import complete_summary
 
 router = APIRouter(tags=["drafts"], dependencies=[Depends(require_profile_access)])
 
@@ -69,6 +70,18 @@ async def _identity(session: SessionDep, user: User, profile_id: int) -> str:
     return _scope(user, profile)
 
 
+def _operation_state(
+    data: dict, operation: PublicationOperation | None
+) -> Literal["ready", "used", "recorded", "rejected"]:
+    if operation is None:
+        return "ready"
+    if rejected_before_effect(operation.result_summary):
+        return "rejected"
+    if complete_summary(data, operation.kind, operation.result_summary):
+        return "recorded"
+    return "used"
+
+
 @router.get("/api/profiles/{profile_id}/editor-draft", response_model=DraftOut)
 async def get_draft(
     profile_id: int,
@@ -98,12 +111,7 @@ async def get_draft(
             PublicationOperation.actor_id == user.id,
         )
     )
-    state: Literal["ready", "used", "recorded", "rejected"] = "ready"
-    if operation is not None:
-        if rejected_before_effect(operation.result_summary):
-            state = "rejected"
-        else:
-            state = "used" if operation.result_summary is None else "recorded"
+    state = _operation_state(row.data, operation)
     return DraftOut(scope=scope, revision=row.revision, data=data, operation_state=state)
 
 
@@ -121,6 +129,26 @@ async def put_draft(
     data = body.data.model_dump() if body.data is not None else {}
     # End the read transaction before competing SQLite writes.
     actor_id = user.id
+    clear_known = False
+    if body.data is None and body.revision is not None:
+        row = await session.scalar(
+            select(EditorDraft).where(
+                EditorDraft.scope == scope,
+                EditorDraft.revision == body.revision,
+                EditorDraft.user_id == actor_id,
+                EditorDraft.profile_id == profile_id,
+            )
+        )
+        operation_row = await session.scalar(
+            select(PublicationOperation).where(
+                PublicationOperation.operation_id == body.revision,
+                PublicationOperation.profile_id == profile_id,
+                PublicationOperation.actor_id == actor_id,
+            )
+        )
+        clear_known = row is not None and _operation_state(
+            row.data, operation_row
+        ) in ("recorded", "rejected")
     await session.rollback()
     if body.revision is None:
         create_stmt = (
@@ -141,7 +169,11 @@ async def put_draft(
             PublicationOperation.actor_id == actor_id,
         )
         if body.data is None:
-            operation = operation.where(PublicationOperation.result_summary.is_(None))
+            # Unknown or incomplete results cannot delete the snapshot. The
+            # first result summary is immutable, so a verified known result
+            # remains known through the subsequent revision CAS.
+            if clear_known:
+                operation = operation.where(PublicationOperation.result_summary.is_(None))
         else:
             status = PublicationOperation.result_summary[0]["status"].as_string()
             operation = operation.where(func.coalesce(status, "") != REJECTED_BEFORE_EFFECT)

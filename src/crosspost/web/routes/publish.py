@@ -65,6 +65,7 @@ from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.moderation import require_unmoderated_action
 from crosspost.web.operation_admission import (
+    current_draft_revision,
     draft_binding,
     immediate_fingerprint,
     operation_conflict,
@@ -755,6 +756,8 @@ async def operation_status(
     user: CurrentUser,
     operation_key: str = Header(..., alias="Idempotency-Key"),
     recovery_secret: str = Header(..., alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
 ) -> OperationResultOut:
     """Read-only recovery; missing and unauthorized operations are indistinguishable."""
     profile_repo, _ = _repos(session, profile_id)
@@ -763,8 +766,21 @@ async def operation_status(
         raise HTTPException(status_code=404, detail="Операция недоступна")
     proof = recovery_digest(recovery_secret, user, profile)
     repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
+    )
+    # Observe irreversible exclusion BEFORE proof lookup. If the revision is
+    # stale or the key exists, a later matching reservation cannot appear.
+    excluded = False
+    if binding is not None:
+        current = await current_draft_revision(
+            session, binding, actor_id=user.id, profile_id=profile_id
+        )
+        excluded = current != binding.revision or await repo.exists_in_scope(operation_key)
     operation = await repo.recover(operation_key, proof)
     if operation is None:
+        if excluded:
+            return OperationResultOut(state="not_admitted", outcomes=[])
         raise HTTPException(status_code=404, detail="Операция недоступна")
     summary = operation.result_summary
     if rejected_before_effect(summary):

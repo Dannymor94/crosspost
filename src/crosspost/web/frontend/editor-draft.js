@@ -127,6 +127,7 @@
           token.controller === generation.current) setStatus("recorded");
     }
     function markRecovered(result) {
+      if (result?.notAdmitted) { setStatus("conflict"); return false; }
       if (!result?.known || receipt.current?.revision !== result.id) return false;
       setStatus(result.rejected ? "rejected" : "recorded");
       return true;

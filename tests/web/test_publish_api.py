@@ -3353,6 +3353,9 @@ async def test_editor_revision_consumed_before_second_dispatch(client, factory):
         )
         assert other.status_code == 409
         assert different_key.status_code == 422
+        wrong_proof = {**headers, "Idempotency-Recovery": "c" * 64}
+        excluded = await client.get(base + "/operation-status", headers=wrong_proof)
+        assert excluded.json() == {"state": "not_admitted", "outcomes": []}
         assert (await client.get(base + "/editor-draft")).json()["operation_state"] == "recorded"
         edit = await client.put(
             base + "/editor-draft",
@@ -3370,6 +3373,10 @@ async def test_editor_revision_consumed_before_second_dispatch(client, factory):
         assert cleared.status_code == 200, cleared.text
         stale = await client.post(base + "/publish", data=data, headers=headers)
         assert stale.status_code == 409
+        excluded = await client.get(base + "/operation-status", headers=wrong_proof)
+        assert excluded.json() == {"state": "not_admitted", "outcomes": []}
+        recorded = await client.get(base + "/operation-status", headers=headers)
+        assert recorded.json()["state"] == "recorded"
     assert len(calls) == 1
 
 
@@ -3486,3 +3493,52 @@ async def test_editor_moderation_rejection_can_be_replanned(client, factory):
         assert planned.status_code == 200, planned.text
         assert planned.json()["status"] == "pending_approval"
     assert not calls
+
+
+async def test_editor_incomplete_durable_receipt_does_not_clear_draft(client, factory):
+    from crosspost.db.operation_repo import OperationRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    saved = await client.put(
+        base + "/editor-draft",
+        json={
+            "scope": row["scope"],
+            "revision": row["revision"],
+            "data": {"text": "once", "targets": ["telegram", "vk_wall"]},
+        },
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    original = OperationRepository.finish
+
+    async def incomplete(repo, publication_id, summary):
+        await original(repo, publication_id, summary[:1])
+
+    ctx, calls = _patch_adapters_by_target(
+        {
+            ("telegram", ""): _MockAdapter("telegram"),
+            ("vk_wall", ""): _MockAdapter("vk_wall"),
+        }
+    )
+    with ctx, patch.object(OperationRepository, "finish", incomplete):
+        sent = await client.post(
+            base + "/publish",
+            data={"text": "once", "channels": '["telegram","vk_wall"]'},
+            headers=headers,
+        )
+    assert sent.status_code == 200, sent.text
+    assert len(calls) == 2
+    latest = (await client.get(base + "/editor-draft")).json()
+    assert latest["operation_state"] == "used"
+    cleared = await client.put(
+        base + "/editor-draft",
+        json={"scope": draft["scope"], "revision": draft["revision"], "data": None},
+    )
+    assert cleared.status_code == 409
