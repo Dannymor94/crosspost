@@ -347,6 +347,9 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     login: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # scrypt, НЕ пароль
+    session_generation: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )  # повышается при recovery, отзывает все старые HMAC-cookie
     role: Mapped[Role] = mapped_column(String(16), default=Role.CLIENT, nullable=False)
     profile_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True

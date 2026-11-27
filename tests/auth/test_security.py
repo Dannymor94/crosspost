@@ -9,7 +9,13 @@ from __future__ import annotations
 import pytest
 
 from crosspost.auth.passwords import hash_password, verify_password
-from crosspost.auth.sessions import sign_session, verify_session
+from crosspost.auth.sessions import (
+    sign_recovery_token,
+    sign_session,
+    verify_recovery_token,
+    verify_session,
+    verify_session_claims,
+)
 
 # ── Пароли ────────────────────────────────────────────────────────────────────
 
@@ -84,3 +90,20 @@ def test_session_wrong_secret(monkeypatch):
 def test_session_empty_or_garbage():
     assert verify_session("") is None
     assert verify_session("!!!not-base64!!!") is None
+
+
+def test_t406_generation_is_part_of_authenticated_session():
+    token = sign_session(42, generation=3, issued_at=1_000)
+    assert verify_session_claims(token, now=1_001) == (42, 3)
+    assert verify_session(token, now=1_001) == 42
+    assert verify_session_claims(token, now=999) is None  # future-issued token
+
+
+def test_t406_recovery_token_is_scoped_expiring_and_tamper_proof():
+    token = sign_recovery_token(42, generation=7, issued_at=1_000)
+    assert verify_recovery_token(token, now=1_001) == (42, 7)
+    assert verify_recovery_token(token, now=1_901) is None  # 15 minutes TTL
+    assert verify_recovery_token(token, now=999) is None
+    assert verify_session(token, now=1_001) is None  # not a login cookie
+    assert verify_recovery_token(sign_session(42, issued_at=1_000), now=1_001) is None
+    assert verify_recovery_token(token[:-2] + "AA", now=1_001) is None
