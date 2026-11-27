@@ -101,15 +101,14 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
             "SELECT publication_id, external_id, attempt_count FROM publications"
         ).fetchall() == [("prior", "receipt", 2)]
         expected_drafts = (
-            [("fixture", "rev", "{}")]
-            if start in {"t218_editor_draft", "t406_ux_merge"}
-            else []
+            [("fixture", "rev", "{}")] if start in {"t218_editor_draft", "t406_ux_merge"} else []
         )
         assert (
             conn.execute("SELECT scope, revision, data FROM editor_drafts").fetchall()
             == expected_drafts
         )
-        assert [
-            row[2] for row in conn.execute("PRAGMA index_info(ix_logs_level_created_at)")
-        ] == ["level", "created_at"]
+        assert [row[2] for row in conn.execute("PRAGMA index_info(ix_logs_level_created_at)")] == [
+            "level",
+            "created_at",
+        ]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
