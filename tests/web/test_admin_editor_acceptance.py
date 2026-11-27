@@ -12,7 +12,9 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 
 
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
-@pytest.mark.parametrize("scenario", ["unknown", "submitted", "incomplete", "rejected", "stale"])
+@pytest.mark.parametrize(
+    "scenario", ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation"]
+)
 def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     assert ASSETS is not None
     assets = Path(ASSETS)
@@ -101,6 +103,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             if request.method == "GET":
                 route.fulfill(json=draft)
             else:
+                if scenario == "navigation":
+                    route.fulfill(status=503, json={"detail": "synthetic save failure"})
+                    return
                 body = request.post_data_json
                 if body["scope"] != draft["scope"] or body["revision"] != draft["revision"]:
                     route.fulfill(status=409, json={"detail": "conflict"})
@@ -190,6 +195,49 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "admin-00-dark-theme.png")
             text = page.get_by_placeholder("Текст поста…")
+            if scenario == "navigation":
+                desktop = page.get_by_role("navigation", name="Меню администратора", exact=True)
+                mobile = page.get_by_role("navigation", name="Мобильное меню администратора")
+                expect(desktop).to_be_visible()
+                expect(mobile).to_be_hidden()
+                for label in (
+                    "Обзор", "Импорт плана", "Модерация", "Клиенты", "Подключения", "Диагностика"
+                ):
+                    item = desktop.get_by_role("button", name=label, exact=True)
+                    item.click()
+                    expect(item).to_have_attribute("aria-current", "page")
+                desktop.get_by_role("button", name="Публикации", exact=True).click()
+                expect(text).to_be_visible()
+                expect(page.get_by_text("Нет сохранённого черновика", exact=True)).to_be_visible()
+                text.fill(draft_text)
+                expect(page.get_by_text("Не удалось сохранить черновик.", exact=True)).to_be_visible()
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(text).to_have_value(draft_text)
+                expect(desktop.get_by_role("button", name="Публикации")).to_have_attribute(
+                    "aria-current", "page"
+                )
+                page.once("dialog", lambda dialog: dialog.accept())
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                for width in (360, 390, 768, 1440):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    expect(mobile if width <= 640 else desktop).to_be_visible()
+                    expect(desktop if width <= 640 else mobile).to_be_hidden()
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.set_viewport_size({"width": 390, "height": 844})
+                mobile.get_by_role("button", name="Ещё", exact=True).click()
+                expect(page.get_by_role("heading", name="Ещё", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Клиенты", exact=True).click()
+                expect(page.get_by_role("button", name="Новый профиль")).to_be_visible()
+                expect(page.get_by_role("button", name="Аккаунт клиента")).to_be_visible()
+                expect(mobile.get_by_role("button", name="Ещё")).to_have_attribute(
+                    "aria-current", "page"
+                )
+                capture(page, "admin-04-mobile-clients.png")
+                assert sends == 0
+                assert not errors, errors
+                return
             text.fill(draft_text)
             target = page.locator("button.target").filter(has_text="Telegram")
             expect(target).to_have_attribute("aria-pressed", "false")
