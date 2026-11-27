@@ -197,3 +197,7 @@ General CI 45884359516 passed at 05600b97. Client browser passed, but desktop sc
 ## UX-02 visual rehearsal — актуальная основа R3
 
 Delivery UX-01 #59 HEAD `97358b6`: general and mocked editor CI PASS. На отдельной validation-only ветке использованы актуальные shared assets T-501 `087a0a6` и только presentation changes старой визуальной репетиции `ba3f3c2` (не её устаревшие редакторы). Обе действующие страницы используют токены и выбор темы; существующие операции, черновики, маршруты и роли сохранены. Все десять сценариев actual editor acceptance остаются. Новая CI/visual evidence pending. Это промежуточный skin, не полный UX-03 и не production release; исходные PR и main не изменены.
+
+## UX-03 T-510 — первый пакет навигации (validation only)
+
+UX-02 visual CI at `5c84a4e` passed. Shared navigation mounted for actual admin/client, desktop/mobile; profile/client creation, moderation, import, channel and diagnostic views remain reachable. Overview and client home only show real available actions; no fictitious counters or complete history/calendar. Default editor kept for compatibility; full browser history, navigation/device acceptance and rollout remain open. No publish handlers, backend, schema or production changes.

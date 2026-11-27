@@ -109,3 +109,7 @@ UI показывает нейтральное состояние, без зел
 ## UX-02 — совместимость с UX-01 R3 (visual rehearsal)
 
 Не возвращаем устаревший frontend из старого visual preview. Переносим только scoped CSS/theme и оформление хостов на текущую delivery основу. До согласования delivery и полного допуска UX-02 это изолированная репетиция; без новых маршрутов или операций. UX-03 будет использовать существующие функции и явные роли, не выдумывать показатели или экраны.
+
+## T-510 — host-controlled navigation (draft)
+
+Role-specific menus use existing views and a single draft leave guard. Mobile admin overflow goes through «Ещё»; client exposes real schedule, not unfinished unified history. No new backend permission or synthetic counters. Keep current editor entry and prior guards; browser history and complete gate remain separate.
