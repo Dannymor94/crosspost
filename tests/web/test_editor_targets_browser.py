@@ -28,7 +28,9 @@ def test_editor_target_intersection_and_stale_response():
                     const next = fence.begin();
                     const latest = next();
                     fence.invalidate();
-                    return {result, empty, old: old(), latest, after: next()};
+                    const selection=tools.selection(["a","b","a"],targets,t=>t.id,"ready");
+                    const loading=tools.selection(["a"],targets,t=>t.id,"loading");
+                    return {result, empty, old: old(), latest, after: next(), selection, loading};
                 }"""
             )
             assert result == {
@@ -37,6 +39,8 @@ def test_editor_target_intersection_and_stale_response():
                 "old": False,
                 "latest": True,
                 "after": False,
+                "selection": {"available": ["a", "new"], "selected": ["a"], "unavailable": 1},
+                "loading": {"available": [], "selected": [], "unavailable": 0},
             }
         finally:
             browser.close()
