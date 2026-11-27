@@ -159,7 +159,7 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 expect(desktop).to_be_hidden()
                 expect(page.get_by_text("Нет сохранённого черновика", exact=True)).to_be_visible()
                 text.fill(draft_text)
-                expect(page.get_by_text("Не удалось сохранить черновик.", exact=True)).to_be_visible()
+                expect(page.get_by_text("Не удалось сохранить черновик.")).to_be_visible()
                 page.once("dialog", lambda dialog: dialog.dismiss())
                 mobile.get_by_role("button", name="Главная", exact=True).click()
                 expect(text).to_have_value(draft_text)

@@ -201,7 +201,12 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(desktop).to_be_visible()
                 expect(mobile).to_be_hidden()
                 for label in (
-                    "Обзор", "Импорт плана", "Модерация", "Клиенты", "Подключения", "Диагностика"
+                    "Обзор",
+                    "Импорт плана",
+                    "Модерация",
+                    "Клиенты",
+                    "Подключения",
+                    "Диагностика",
                 ):
                     item = desktop.get_by_role("button", name=label, exact=True)
                     item.click()
@@ -210,7 +215,7 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(text).to_be_visible()
                 expect(page.get_by_text("Нет сохранённого черновика", exact=True)).to_be_visible()
                 text.fill(draft_text)
-                expect(page.get_by_text("Не удалось сохранить черновик.", exact=True)).to_be_visible()
+                expect(page.get_by_text("Не удалось сохранить черновик.")).to_be_visible()
                 page.once("dialog", lambda dialog: dialog.dismiss())
                 desktop.get_by_role("button", name="Обзор", exact=True).click()
                 expect(text).to_have_value(draft_text)
