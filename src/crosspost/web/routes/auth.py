@@ -96,9 +96,7 @@ async def recover(
 
 
 @router.post("/logout")
-async def logout(
-    response: Response, request: Request, users: UserRepoDep
-) -> dict[str, bool]:
+async def logout(response: Response, request: Request, users: UserRepoDep) -> dict[str, bool]:
     secure = require_https(request)
     claims = verify_session_claims(request.cookies.get(SESSION_COOKIE, ""))
     if claims is not None:
