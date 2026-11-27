@@ -153,4 +153,5 @@
     description.textContent="Откройте одноразовую ссылку, которую вы получили от владельца. Если её нет, обратитесь к нему.";
   }
   window.addEventListener("pagehide",()=>{token="";content.replaceChildren();});
+  window.addEventListener("pageshow",e=>{if(e.persisted)location.reload();});
 })();
