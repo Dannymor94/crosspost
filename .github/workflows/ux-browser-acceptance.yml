@@ -14,6 +14,7 @@ on:
       - task/T-512-calendar-actions
       - task/T-511-editor-controls
       - task/T-513-history-search
+      - task/T-516-text-reuse
   workflow_dispatch:
 
 permissions:

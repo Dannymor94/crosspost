@@ -464,7 +464,7 @@ function useScheduleZone(pid) {
 
 // ── Compose ────────────────────────────────────────────────────────────────────
 const TargetToolbar=window.CrosspostEditorTargets.createToolbar(preact.h);
-function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
+function ComposeView({ user, scheduleIntent, onIntentDismiss, reuseText, onReuseDismiss }) {
   const pid = user.profile_id;
   const zone = useScheduleZone(pid);
   const policy = useModeration(pid);
@@ -708,6 +708,14 @@ function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
         `}
       </div>
 
+      ${reuseText&&html`<div class="cp-panel cp-stack">
+        <h2>Текст из истории</h2>
+        <p class="cp-muted">Копируется только текст. Площадки, файлы и время не переносятся. Существующий черновик не заменяется.</p>
+        <p class="cp-preview-text">${reuseText.slice(0,200)}</p>
+        <button class="cp-button" disabled=${!draft.loaded||draft.dirty||!["ready","saved"].includes(draft.status)||busy||!!pending||!!success||!!text||!!mediaFile||mediaMissing||!!scheduledAt||Object.values(checked).some(Boolean)}
+          onClick=${()=>{setText(reuseText);onReuseDismiss();}}>Вставить в пустой черновик</button>
+        <button class="cp-button" onClick=${onReuseDismiss}>Не использовать текст</button>
+      </div>`}
       <div class="field">
         <label class="label">Текст поста</label>
         <textarea rows="4" placeholder="Напишите текст поста…"
@@ -962,7 +970,8 @@ function App() {
   const [checking, setChecking] = useState(true);
   const [tab, setTab] = useState('compose');
   const [scheduleIntent,setScheduleIntent]=useState(null);
-  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},!!user,"compose",CLIENT_ROUTES,next=>{setScheduleIntent(null);setTab(next);});
+  const [reuseIntent,setReuseIntent]=useState(null);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},!!user,"compose",CLIENT_ROUTES,next=>{setScheduleIntent(null);setReuseIntent(null);setTab(next);});
 
   useEffect(() => {
     api.get('/api/auth/me')
@@ -1004,10 +1013,10 @@ function App() {
       </div>
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} />
       ${tab === 'compose'
-        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} scheduleIntent=${scheduleIntent?.pid===user.profile_id?scheduleIntent:null} onIntentDismiss=${()=>setScheduleIntent(null)} />`
+        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} scheduleIntent=${scheduleIntent?.pid===user.profile_id?scheduleIntent:null} onIntentDismiss=${()=>setScheduleIntent(null)} reuseText=${reuseIntent?.pid===user.profile_id?reuseIntent.text:null} onReuseDismiss=${()=>setReuseIntent(null)} />`
         : tab === 'posts' ? html`<${ClientSchedule} key=${user.profile_id} user=${user} onNavigate=${navigate} onCreateTime=${intent=>{if(navigate("compose"))setScheduleIntent({...intent,pid:user.profile_id});}} />`
         : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
-        : tab === 'history' ? html`<${HistoryPanel} key=${user.profile_id} pid=${user.profile_id} />`
+        : tab === 'history' ? html`<${HistoryPanel} key=${user.profile_id} pid=${user.profile_id} onReuseText=${text=>{if(navigate("compose"))setReuseIntent({pid:user.profile_id,text});}} />`
         : tab === 'connections' ? html`<${ConnectionPanel} key=${user.profile_id} pid=${user.profile_id} />`
         : html`<${ClientMore} user=${user} onLogout=${logout} onNavigate=${navigate} />`}
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} mobile=${true} />

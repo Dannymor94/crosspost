@@ -165,3 +165,7 @@ Search by saved post text and stored channel code, case-sensitive literal substr
 ### History search UI (draft)
 
 Explicit submit; server results replace loaded-only local filtering. Filter and query changes invalidate prior cursor and render state. Search is literal and case-sensitive, no attempt to infer absent immediate text.
+
+### T-516 text-only reuse preparation (draft)
+
+Reuse existing authorized history text only, not a new saved template store or media library. Intent is profile-scoped in memory, cleared by navigation/context reset, explicit apply only to ready empty draft; no new publication side effect. T-405 still blocks durable library policy.

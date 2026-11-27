@@ -337,6 +337,21 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
                 expect(page.get_by_text("Текст не был сохранён в истории")).to_have_count(0)
                 capture(page, "06-client-history.png")
+                page.get_by_role("button", name="Использовать текст", exact=True).click()
+                expect(text).to_have_value("")
+                page.get_by_role("button", name="Вставить в пустой черновик").click()
+                expect(text).to_have_value("Отменённый пост")
+                expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
+                assert draft["data"]["targets"] == []
+                assert draft["data"]["media_required"] is False
+                menu.get_by_role("button", name="Ещё", exact=True).click()
+                page.get_by_role("button", name="История", exact=True).click()
+                page.get_by_role("button", name="Показать ещё").click()
+                page.get_by_role("button", name="Использовать текст", exact=True).click()
+                expect(text).to_have_value("Отменённый пост")
+                expect(
+                    page.get_by_role("button", name="Вставить в пустой черновик")
+                ).to_be_disabled()
                 assert sends == 0
                 assert not errors, errors
                 return

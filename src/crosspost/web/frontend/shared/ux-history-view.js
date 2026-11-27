@@ -26,7 +26,7 @@
     return data;
   }
   function create(h,{useState,useEffect,useRef}) {
-    return function HistoryPanel({pid}) {
+    return function HistoryPanel({pid,onReuseText}) {
       const [state,setState]=useState(null), [attempt,setAttempt]=useState(0);
       const [filter,setFilter]=useState("all"),[query,setQuery]=useState(""),[activeQuery,setActiveQuery]=useState("");
       const flight=useRef(null);
@@ -71,6 +71,7 @@
             h("span",{className:"cp-muted"},e.source==="scheduled"?"Из расписания":"Немедленная")),
           h("small",{className:"cp-muted"},"Создано: "+e.created_at_utc.slice(0,16).replace("T"," ")+" UTC"),
           h("p",{className:"cp-preview-text"},e.text===null?"Текст не был сохранён в истории":e.text||"Без текста"),
+          onReuseText&&typeof e.text==="string"&&e.text.trim()&&e.text.length<=200000?h("button",{type:"button",className:"cp-button",onClick:()=>onReuseText(e.text)},"Использовать текст"):null,
           e.outcomes.length?h("details",null,h("summary",null,"Результаты по площадкам ("+e.outcomes.length+")"),
             ...e.outcomes.map((o,i)=>h("div",{key:i,className:"cp-history-outcome"},
               h("strong",null,o.channel),o.target?h("small",null,o.target):null,h("span",null,label(o.status))))):
