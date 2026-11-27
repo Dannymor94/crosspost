@@ -217,3 +217,7 @@ First presentation-only slice on T-510 candidate `79bcd63`. Both editors use the
 ## UX-05 T-512 — calendar read model (draft)
 
 Shared pure calendar model for explicit profile IANA zone, day/week/month/list periods and scheduled/pending filter. Canonical times require an explicit offset and valid zone; legacy rows remain separate, not placed on a guessed calendar day. No reschedule/write, UI route or API changes yet. Stacked on first T-511 candidate, CI pending.
+
+### T-512 calendar UI (draft)
+
+Read-only shared calendar mounted in both actual hosts, with day/week/month/list, profile zone, status filter, explicit unplaced records, retry and links to existing editor/management. Admin mobile calendar is primary; moderation remains in More. No new mutation or date prefill. Existing client schedule management retained separately. CI pending.

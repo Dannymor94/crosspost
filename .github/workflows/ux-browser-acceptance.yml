@@ -8,6 +8,7 @@ on:
       - integration/ux02-r3-preview
       - task/T-510-workspace-navigation
       - task/T-511-editor-preview
+      - task/T-512-calendar-model
   workflow_dispatch:
 
 permissions:

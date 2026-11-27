@@ -1242,6 +1242,8 @@ body {
 <script src="/static/shared/ux-workspace.js"></script>
 <script src="/static/shared/ux-overview.js"></script>
 <script src="/static/shared/ux-editor-preview.js"></script>
+<script src="/static/shared/ux-calendar.js"></script>
+<script src="/static/shared/ux-calendar-view.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -2446,9 +2448,11 @@ function NoProfileView() {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
+const CalendarPanel=window.CrosspostCalendarView.create(h,{useState,useEffect});
 const ADMIN_ITEMS = Object.freeze([
   {id:"home",label:"Обзор",icon:"home"},
   {id:"publish",label:"Публикации",icon:"posts"},
+  {id:"calendar",label:"Календарь",icon:"calendar"},
   {id:"import",label:"Импорт плана",icon:"calendar"},
   {id:"moderation",label:"Модерация",icon:"moderation"},
   {id:"clients",label:"Клиенты",icon:"clients"},
@@ -2457,7 +2461,7 @@ const ADMIN_ITEMS = Object.freeze([
 ]);
 const ADMIN_ROUTES = Object.freeze([...ADMIN_ITEMS.map(i=>i.id),"more"]);
 const ADMIN_MOBILE = Object.freeze([
-  ...ADMIN_ITEMS.filter(i => ["home","publish","moderation"].includes(i.id)),
+  ...ADMIN_ITEMS.filter(i => ["home","publish","calendar"].includes(i.id)),
   {id:"more",label:"Ещё",icon:"more"},
 ]);
 function AdminNavigation({view,onNavigate,mobile=false}) {
@@ -2501,7 +2505,7 @@ function AdminOverview({active,onNavigate}) {
             h("strong",null,row.text.slice(0,120)||"Пост без текста"),
             h("span",{className:"cp-muted"},row.status==="scheduled"?"Запланировано":"На проверке"))))
           : h("p",{className:"cp-muted"},"Активных публикаций нет."),
-        h("button",{className:"cp-button",onClick:()=>onNavigate("publish")},"Открыть расписание"))));
+        h("button",{className:"cp-button",onClick:()=>onNavigate("calendar")},"Открыть расписание"))));
 }
 function AdminClients({profiles,active,onSelect,onNew,onNewClient}) {
   return h("section",{className:"cp-stack"},
@@ -4916,7 +4920,9 @@ function App() {
           onRejected: () => setPendingCount(c => Math.max(0, c - 1)),
         }))
     : active
-      ? view === "publish"
+      ? view === "calendar"
+        ? h(CalendarPanel,{key:active.id,pid:active.id,onCreate:()=>navigate("publish"),onManage:()=>navigate("publish")})
+        : view === "publish"
         ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
         : view === "import"
           ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))

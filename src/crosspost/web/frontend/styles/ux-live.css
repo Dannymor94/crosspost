@@ -135,3 +135,12 @@ html.cp-ux {
 .cp-ux .cp-editor-preview summary { cursor:pointer; font-weight:650; min-height:44px; display:list-item; padding:10px 0; }
 .cp-ux .cp-editor-preview-body { padding-top:8px; overflow-wrap:anywhere; }
 .cp-ux .cp-preview-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Calendar: shared responsive date grid and readable list. */
+.cp-ux .cp-calendar-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.cp-ux .cp-calendar-controls .cp-input { max-width:190px; min-width:0; }
+.cp-ux .cp-calendar-controls button[aria-pressed="true"] { background:var(--cp-soft); border-color:var(--cp-accent); color:var(--cp-accent); }
+.cp-ux .cp-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
+.cp-ux .cp-calendar-cell { display:grid; gap:4px; place-content:center; min-height:56px; padding:4px 2px; min-width:0; border:1px solid var(--cp-line); border-radius:8px; background:var(--cp-panel); color:var(--cp-ink); cursor:pointer; }
+.cp-ux .cp-calendar-cell small { font-size:11px; color:var(--cp-muted); }
+@media (max-width:640px) { .cp-ux .cp-calendar-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
