@@ -151,17 +151,23 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                     second = context.new_page()
                     second.on("pageerror", lambda error: errors.append(str(error)))
                     second.goto("http://localhost/client")
-                    expect(second.get_by_placeholder("Напишите текст поста…")).to_have_value(draft_text)
+                    expect(second.get_by_placeholder("Напишите текст поста…")).to_have_value(
+                        draft_text
+                    )
                     second_send = second.get_by_role("button", name="Отправить", exact=True)
                     expect(second_send).to_be_enabled(timeout=10000)
                     send.click()
-                    expect(page.get_by_text("Готово! Пост опубликован.", exact=False)).to_be_visible()
+                    expect(
+                        page.get_by_text("Готово! Пост опубликован.", exact=False)
+                    ).to_be_visible()
                     assert draft["data"] is None
                     assert draft["revision"] != original_revision
                     second_send.click()
                     expect(second_send).to_be_disabled()
                     second.get_by_role("button", name="Проверить результат").click()
-                    expect(second.get_by_text("Эта попытка не была допущена.", exact=False)).to_be_visible()
+                    expect(
+                        second.get_by_text("Эта попытка не была допущена.", exact=False)
+                    ).to_be_visible()
                     second.get_by_role("button", name="Результат проверен").click()
                     expect(second.get_by_placeholder("Напишите текст поста…")).to_have_value("")
                     assert sends == 2 and dispatched == 1
@@ -175,7 +181,9 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                     page.get_by_role("button", name="Проверить результат").click()
                     acknowledge = page.get_by_role("button", name="Результат проверен")
                     if scenario == "incomplete":
-                        expect(page.get_by_text("Результат неизвестен.", exact=False)).to_be_visible()
+                        expect(
+                            page.get_by_text("Результат неизвестен.", exact=False)
+                        ).to_be_visible()
                         expect(acknowledge).to_have_count(0)
                         assert draft["revision"] == original_revision
                         assert sends == dispatched == 1
@@ -184,7 +192,9 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                         acknowledge.click()
                         if scenario == "submitted":
                             expect(send).to_be_disabled()
-                            expect(page.get_by_role("button", name="Новый пост", exact=True)).to_be_visible()
+                            expect(
+                                page.get_by_role("button", name="Новый пост", exact=True)
+                            ).to_be_visible()
                             assert draft["revision"] == original_revision
                             assert sends == dispatched == 1
                         else:
@@ -194,7 +204,9 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                             assert draft["data"]["text"] == draft_text
                             assert sends == 1 and dispatched == 0
                             send.click()
-                            expect(page.get_by_text("Готово! Пост опубликован.", exact=False)).to_be_visible()
+                            expect(
+                                page.get_by_text("Готово! Пост опубликован.", exact=False)
+                            ).to_be_visible()
                             assert sends == 2 and dispatched == 1
 
                 assert not errors, errors

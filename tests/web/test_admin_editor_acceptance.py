@@ -194,7 +194,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                     second.on("pageerror", lambda error: errors.append(str(error)))
                     second.goto("http://localhost/")
                     expect(second.get_by_placeholder("Текст поста…")).to_have_value(draft_text)
-                    second_send = second.get_by_role("button", name="Опубликовать сейчас", exact=True)
+                    second_send = second.get_by_role(
+                        "button", name="Опубликовать сейчас", exact=True
+                    )
                     expect(second_send).to_be_enabled(timeout=10000)
                     send.click()
                     expect(text).to_have_value("")
@@ -203,7 +205,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                     second_send.click()
                     expect(second_send).to_be_disabled()
                     second.get_by_role("button", name="Проверить результат").click()
-                    expect(second.get_by_text("Эта попытка не была допущена.", exact=False)).to_be_visible()
+                    expect(
+                        second.get_by_text("Эта попытка не была допущена.", exact=False)
+                    ).to_be_visible()
                     second.get_by_role("button", name="Результат проверен").click()
                     expect(second.get_by_placeholder("Текст поста…")).to_have_value("")
                     assert sends == 2 and dispatched == 1
@@ -217,7 +221,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                     page.get_by_role("button", name="Проверить результат").click()
                     acknowledge = page.get_by_role("button", name="Результат проверен")
                     if scenario == "incomplete":
-                        expect(page.get_by_text("Результат неизвестен.", exact=False)).to_be_visible()
+                        expect(
+                            page.get_by_text("Результат неизвестен.", exact=False)
+                        ).to_be_visible()
                         expect(acknowledge).to_have_count(0)
                         assert draft["revision"] == original_revision
                         assert sends == dispatched == 1
@@ -226,7 +232,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                         acknowledge.click()
                         if scenario == "submitted":
                             expect(send).to_be_disabled()
-                            expect(page.get_by_role("button", name="Новый пост", exact=True)).to_be_visible()
+                            expect(
+                                page.get_by_role("button", name="Новый пост", exact=True)
+                            ).to_be_visible()
                             assert draft["revision"] == original_revision
                             assert sends == dispatched == 1
                         else:
