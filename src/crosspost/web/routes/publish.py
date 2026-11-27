@@ -690,7 +690,9 @@ async def publish_now(
         if not media_paths and image.strip():
             from crosspost.db.settings_repo import ProfileSettingsRepository
 
-            folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+            folder = await ProfileSettingsRepository(
+                session, profile_id=profile_id
+            ).get_media_folder()
             try:
                 async with _make_http_client() as http:
                     fetched = await fetch_media(image.strip(), folder=folder, client=http)
@@ -1023,7 +1025,9 @@ async def schedule_post(
         if not media_paths and image.strip():
             from crosspost.db.settings_repo import ProfileSettingsRepository
 
-            folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+            folder = await ProfileSettingsRepository(
+                session, profile_id=profile_id
+            ).get_media_folder()
             try:
                 async with _make_http_client() as http:
                     fetched = await fetch_media(image.strip(), folder=folder, client=http)

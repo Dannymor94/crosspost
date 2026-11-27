@@ -146,9 +146,10 @@ async def put_draft(
                 PublicationOperation.actor_id == actor_id,
             )
         )
-        clear_known = row is not None and _operation_state(
-            row.data, operation_row
-        ) in ("recorded", "rejected")
+        clear_known = row is not None and _operation_state(row.data, operation_row) in (
+            "recorded",
+            "rejected",
+        )
     await session.rollback()
     if body.revision is None:
         create_stmt = (
