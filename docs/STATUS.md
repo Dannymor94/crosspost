@@ -209,3 +209,7 @@ Browser scenario 45979009846 passed 6/6 for each role at `59edbce`. Shared histo
 ### T-510 overview data (draft)
 
 Both role home screens now read scoped active schedule + timezone, display actual scheduled/pending counts and first three server-ordered rows. Explicit loading, empty and error/retry; scope/attempt fencing and abort prevent stale profile data. Legacy wall time labelled, not reinterpreted. No history or global metric invented. Existing default editor and API unchanged. CI pending.
+
+## UX-04 T-511 — shared approximate preview (draft)
+
+First presentation-only slice on T-510 candidate `79bcd63`. Both editors use the same local preview of text/title/selected targets and attachment state. No URL fetch, no HTML injection, no permission or submission logic changes; preview is optional and approximate. Full common editor, upload and target UX are open. Stacked draft; no merge/deploy. CI pending.

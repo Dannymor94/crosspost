@@ -129,3 +129,9 @@ html.cp-ux {
 .cp-ux .cp-overview-metrics span { display:block; color:var(--cp-muted); font-size:14px; overflow-wrap:anywhere; }
 .cp-ux .cp-overview-row { display:grid; gap:4px; padding:12px 0; border-top:1px solid var(--cp-line); overflow-wrap:anywhere; }
 .cp-ux .cp-overview-row small { color:var(--cp-muted); }
+
+/* Shared approximate preview; never a prerequisite to publication. */
+.cp-ux .cp-editor-preview { margin:12px 0; min-width:0; }
+.cp-ux .cp-editor-preview summary { cursor:pointer; font-weight:650; min-height:44px; display:list-item; padding:10px 0; }
+.cp-ux .cp-editor-preview-body { padding-top:8px; overflow-wrap:anywhere; }
+.cp-ux .cp-preview-text { white-space:pre-wrap; overflow-wrap:anywhere; }
