@@ -89,6 +89,7 @@ _EXPECTED: list[tuple[str, str]] = [
     ("GET", "/api/profiles/{*}/scheduled/pending"),
     ("GET", "/api/profiles/{*}/scheduled/report"),
     ("GET", "/api/profiles/{*}/history"),
+    ("POST", "/api/profiles/{*}/scheduled/{*}/move"),
     ("GET", "/api/profiles/{*}/scheduled/{*}"),
     ("DELETE", "/api/profiles/{*}/scheduled/{*}"),
     ("POST", "/api/profiles/{*}/scheduled/{*}/publish-now"),

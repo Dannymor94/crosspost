@@ -240,3 +240,7 @@ Client can read own profile's channel statuses and declared preparation steps; n
 - #64 T-513 code HEAD `a760e02`: Chromium 8/8 + 8/8 (46012148346), Python 3.13 general CI 1360 passed, 16 skipped, 2 warnings (46012148441); 3.11 на момент записи ещё выполняется. API scope/tie-pagination regression included. История не полная: immediate metadata/ledger-only и server search open.
 - #65 T-515 code HEAD `78b2e2a`: клиентский status/preparation screen и admin blocked/unknown guard, тесты обеих ролей добавлены. Exact-head проверки выполняются (46012482227/46012482268). T-514 не дублировать до согласования #33/#36; self-service flow требует auth/role gates.
 - #63 правило последовательного автономного цикла: CI PASS, ещё не смержено. Ветки stacked draft; независимый QA и delivery gates не отменены. Работа через GitHub connector, полного локального DoD не заявляем.
+
+## T-512 calendar actions (draft)
+
+Dedicated canonical-only move endpoint with expected instant and profile-zone validation, status=SCHEDULED only, SQLite immediate transaction fences executor and settings changes. No FAILED rewind, no publication effects or media changes. New tests and browser wiring pending. Stacked isolated candidate on #65.

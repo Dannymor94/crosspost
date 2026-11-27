@@ -145,3 +145,7 @@ Never label observed aggregate DONE as confirmed whole post. Per-target results 
 ## T-515 status presentation (draft)
 
 No new connection API or authorization. Client projection uses existing scoped GET; text-only guide titles and no tokens/fields/links. Banned and unknown do not offer ordinary admin mutation controls in this UI; explicit operator remediation requires separate policy. No automatic check or retry. Existing wizard remains authoritative for supported states.
+
+### T-512 safe calendar move (draft)
+
+Separate POST move from existing legacy PATCH/failed rewind. Explicit old canonical instant, wall time and zone; under BEGIN IMMEDIATE read profile policy and configured zone, reject ambiguous/gap/past and CAS scheduled-only row. No automatic retry. Legacy times and pending/failed/executing rows not movable via this endpoint; unchanged existing flows are separate.
