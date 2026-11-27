@@ -12,7 +12,8 @@
       throw new Error("Не удалось прочитать сохранённую операцию. Обратитесь к администратору.");
     return p;
   }
-  const headers = p => ({"Idempotency-Key": p.id, "Idempotency-Recovery": p.proof});
+  const headers = p => ({"Idempotency-Key": p.id, "Idempotency-Recovery": p.proof,
+    ...(p.draftScope ? {"X-Draft-Scope":p.draftScope,"X-Draft-Revision":p.id} : {})});
   function pending(key) {
     try { return !!read(key); } catch { return true; }
   }
@@ -43,18 +44,22 @@
     return typeof result?.publication_id === "string" && !!result.publication_id.trim() &&
       validOutcomes(result.outcomes, expected);
   }
-  async function run(key, send, expected) {
+  async function run(key, send, expected, draft = null) {
     if (!navigator.locks || !crypto.getRandomValues)
       throw new Error("Для безопасной отправки нужен современный браузер и HTTPS.");
     return navigator.locks.request(key, {ifAvailable: true}, async lock => {
       if (!lock || read(key)) throw new Error("Сначала проверьте предыдущую операцию.");
       if (!["immediate","scheduled"].includes(expected?.kind)) throw new Error("Не задан ожидаемый результат операции.");
-      const p = {id: hex(16), proof: hex(32), expected};
+      if (draft && (!/^[0-9a-f]{64}$/.test(draft.scope) || !/^[0-9a-f]{32}$/.test(draft.revision)))
+        throw new Error("Сохраните черновик перед отправкой.");
+      const p = {id: draft ? draft.revision : hex(16), proof: hex(32), expected,
+        ...(draft ? {draftScope:draft.scope} : {})};
       localStorage.setItem(key, JSON.stringify(p)); // before network, fail closed
       const result = await send(headers(p));
       if (!validDirect(result, expected)) throw new Error("Неполная или неизвестная квитанция. Проверьте операцию.");
       // Retain pending on any ambiguous error; only validated success clears.
-      if (read(key)?.id === p.id) localStorage.removeItem(key);
+      // A bound editor retains proof until clearing its exact draft or acknowledging.
+      if (!draft && read(key)?.id === p.id) localStorage.removeItem(key);
       return result;
     });
   }

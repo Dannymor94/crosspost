@@ -10,11 +10,11 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert
 
-from crosspost.db.models import EditorDraft, Profile, User
+from crosspost.db.models import EditorDraft, Profile, PublicationOperation, User
 from crosspost.web.deps import CurrentUser, SessionDep, require_profile_access
 
 router = APIRouter(tags=["drafts"], dependencies=[Depends(require_profile_access)])
@@ -37,6 +37,7 @@ class DraftOut(BaseModel):
     scope: str
     revision: str | None
     data: DraftData | None
+    operation_state: Literal["ready", "used", "recorded"] = "ready"
 
 
 class DraftWrite(BaseModel):
@@ -89,7 +90,17 @@ async def get_draft(
     if row is None:
         return DraftOut(scope=scope, revision=None, data=None)
     data = DraftData.model_validate(row.data) if row.data else None
-    return DraftOut(scope=scope, revision=row.revision, data=data)
+    operation = await session.scalar(
+        select(PublicationOperation).where(
+            PublicationOperation.operation_id == row.revision,
+            PublicationOperation.profile_id == profile_id,
+            PublicationOperation.actor_id == user.id,
+        )
+    )
+    state: Literal["ready", "used", "recorded"] = "ready"
+    if operation is not None:
+        state = "used" if operation.result_summary is None else "recorded"
+    return DraftOut(scope=scope, revision=row.revision, data=data, operation_state=state)
 
 
 @router.put("/api/profiles/{profile_id}/editor-draft", response_model=DraftOut)
@@ -118,6 +129,15 @@ async def put_draft(
         )
         result = await session.execute(create_stmt)
     else:
+        # A reserved revision is immutable. A known result may be explicitly
+        # discarded to start a blank draft, never converted into another send.
+        operation = select(PublicationOperation.operation_id).where(
+            PublicationOperation.operation_id == body.revision,
+            PublicationOperation.profile_id == profile_id,
+            PublicationOperation.actor_id == actor_id,
+        )
+        if body.data is None:
+            operation = operation.where(PublicationOperation.result_summary.is_(None))
         update_stmt = (
             sql_update(EditorDraft)
             .where(
@@ -125,6 +145,7 @@ async def put_draft(
                 EditorDraft.user_id == actor_id,
                 EditorDraft.profile_id == profile_id,
                 EditorDraft.revision == body.revision,
+                ~exists(operation),
             )
             .values(revision=revision, data=data)
             .returning(EditorDraft.revision)

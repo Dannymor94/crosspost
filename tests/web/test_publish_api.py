@@ -26,7 +26,7 @@ from crosspost.db.models import ConnectionState
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.vault import get_vault
 from crosspost.web import deps
-from crosspost.web.routes import channels, profiles, publish, tg_login
+from crosspost.web.routes import channels, drafts, profiles, publish, tg_login
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +53,7 @@ async def client(factory) -> AsyncGenerator[AsyncClient, None]:
         yield
 
     app = FastAPI(lifespan=_lifespan)
-    for r in (profiles, channels, tg_login, publish):
+    for r in (profiles, channels, tg_login, publish, drafts):
         app.include_router(r.router)
 
     # Аутентифицируем как admin: обходит гейт profile-изоляции, прежние тесты
@@ -2051,7 +2051,7 @@ async def _client_with_executor(factory, executor):
         yield
 
     app = FastAPI(lifespan=_lifespan)
-    for r in (profiles, channels, tg_login, publish):
+    for r in (profiles, channels, tg_login, publish, drafts):
         app.include_router(r.router)
     app.state.executor = executor
 
@@ -3318,3 +3318,56 @@ async def test_ux01_moderated_keyed_utc_schedule(client, factory):
     assert receipt.json()["outcomes"] == [
         {"scheduled_id": str(row["id"]), "status": "pending_approval"}
     ]
+
+
+async def test_editor_revision_consumed_before_second_dispatch(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    saved = await client.put(
+        base + "/editor-draft",
+        json={
+            "scope": row["scope"],
+            "revision": row["revision"],
+            "data": {"text": "once", "targets": ["telegram"]},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "once", "channels": '["telegram"]'}
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        first = await client.post(base + "/publish", data=data, headers=headers)
+        assert first.status_code == 200, first.text
+        other = await client.post(
+            base + "/publish", data=data, headers={**headers, "Idempotency-Recovery": "c" * 64}
+        )
+        different_key = await client.post(
+            base + "/publish", data=data, headers={**headers, "Idempotency-Key": "f" * 32}
+        )
+        assert other.status_code == 409
+        assert different_key.status_code == 422
+        assert (await client.get(base + "/editor-draft")).json()["operation_state"] == "recorded"
+        edit = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {"text": "once", "targets": ["telegram"]},
+            },
+        )
+        assert edit.status_code == 409
+        cleared = await client.put(
+            base + "/editor-draft",
+            json={"scope": draft["scope"], "revision": draft["revision"], "data": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        stale = await client.post(base + "/publish", data=data, headers=headers)
+        assert stale.status_code == 409
+    assert len(calls) == 1

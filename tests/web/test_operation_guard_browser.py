@@ -140,3 +140,34 @@ def test_incomplete_receipts_keep_operation_proof():
             assert result == {"known": False, "pending": True}
         finally:
             browser.close()
+
+
+def test_editor_bound_proof_survives_known_result_until_acknowledged():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            context = browser.new_context()
+            context.route("http://localhost/**", lambda route: route.fulfill(body="<html></html>"))
+            first, second = context.new_page(), context.new_page()
+            for page in (first, second):
+                page.goto("http://localhost/")
+                page.add_script_tag(path=SCRIPT)
+            result = first.evaluate(
+                """async () => {
+                    const ops = window.CrosspostOperations;
+                    const draft = {scope:"a".repeat(64), revision:"b".repeat(32)};
+                    let headers;
+                    await ops.run("draft", async h => {
+                        headers = h;
+                        return {publication_id:"p",outcomes:[
+                            {channel:"telegram",target:"",status:"submitted"}]};
+                    },ops.publicationExpectation(["telegram"]),draft);
+                    return {headers,pending:ops.pending("draft")};
+                }"""
+            )
+            assert result["pending"] is True
+            assert result["headers"]["Idempotency-Key"] == "b" * 32
+            assert result["headers"]["X-Draft-Revision"] == "b" * 32
+            assert second.evaluate("window.CrosspostOperations.pending('draft')") is True
+        finally:
+            browser.close()

@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from collections.abc import Sequence
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from crosspost.db.models import Profile, User
+from crosspost.db.models import EditorDraft, Profile, User
 from crosspost.db.operation_repo import OperationConflict, OperationRepository
 
 _CHUNK_SIZE = 1024 * 1024
@@ -62,6 +64,63 @@ def recovery_digest(secret: str, user: User, profile: Profile) -> str:
     return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class DraftBinding:
+    scope: str
+    revision: str
+
+
+async def draft_binding(
+    session: AsyncSession,
+    user: User,
+    profile_id: int,
+    operation_key: str | None,
+    recovery_secret: str | None,
+    scope: str | None,
+    revision: str | None,
+) -> DraftBinding | None:
+    """Optional legacy-compatible binding; editor requests always supply both headers."""
+    if scope is None and revision is None:
+        return None
+    if (
+        scope is None
+        or revision is None
+        or not re.fullmatch(r"[0-9a-f]{64}", scope)
+        or not re.fullmatch(r"[0-9a-f]{32}", revision)
+        or operation_key != revision
+        or recovery_secret is None
+    ):
+        raise HTTPException(status_code=422, detail="Invalid draft operation binding")
+    from crosspost.web.routes.drafts import _identity
+
+    if scope != await _identity(session, user, profile_id):
+        raise operation_conflict()
+    return DraftBinding(scope, revision)
+
+
+async def fence_draft(
+    session: AsyncSession, binding: DraftBinding, *, actor_id: int, profile_id: int
+) -> None:
+    """Acquire SQLite write ownership and check the revision before admission.
+
+    Caller must reserve the operation in this same transaction. The revision is
+    the operation ID, so a second key cannot admit the same editor revision.
+    """
+    result = await session.execute(
+        sql_update(EditorDraft)
+        .where(
+            EditorDraft.scope == binding.scope,
+            EditorDraft.revision == binding.revision,
+            EditorDraft.user_id == actor_id,
+            EditorDraft.profile_id == profile_id,
+        )
+        .values(revision=EditorDraft.revision)
+    )
+    if getattr(result, "rowcount", 0) != 1:
+        await session.rollback()
+        raise operation_conflict()
+
+
 async def reserve_immediate(
     session: AsyncSession,
     *,
@@ -71,6 +130,7 @@ async def reserve_immediate(
     fields: dict,
     media: Sequence[UploadFile],
     recovery_hash: str | None = None,
+    binding: DraftBinding | None = None,
 ) -> str:
     """Only the first committed reservation may proceed to media save and send.
 
@@ -85,6 +145,8 @@ async def reserve_immediate(
     # before acquiring SQLite's write reservation.
     await session.rollback()
     repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+    if binding is not None:
+        await fence_draft(session, binding, actor_id=actor_id, profile_id=profile_id)
     try:
         reservation = await repo.reserve(
             operation_key, kind="immediate", fingerprint=fingerprint, recovery_hash=recovery_hash

@@ -61,6 +61,8 @@ from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
 from crosspost.web.moderation import require_unmoderated_action
 from crosspost.web.operation_admission import (
+    draft_binding,
+    fence_draft,
     immediate_fingerprint,
     operation_conflict,
     recovery_digest,
@@ -577,6 +579,8 @@ async def publish_now(
     user: CurrentUser,
     operation_key: str | None = Header(None, alias="Idempotency-Key"),
     recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -589,6 +593,9 @@ async def publish_now(
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
     await require_unmoderated_action(user, session, profile_id)
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
+    )
 
     selections = _parse_selections(channels)
     # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
@@ -630,6 +637,7 @@ async def publish_now(
             },
             media=media,
             recovery_hash=proof,
+            binding=binding,
         )
     media_paths = await _save_media(media, publication_id)
     if not media_paths and image.strip():
@@ -808,6 +816,8 @@ async def schedule_post(
     time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
     operation_key: str | None = Header(None, alias="Idempotency-Key"),
     recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -819,6 +829,9 @@ async def schedule_post(
 ) -> ScheduledOut:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
+    )
 
     utc_time = None
     if time_contract not in (None, "utc-v1"):
@@ -919,6 +932,8 @@ async def schedule_post(
     if operation_key is not None:
         assert fingerprint is not None
         await session.rollback()
+        if binding is not None:
+            await fence_draft(session, binding, actor_id=user.id, profile_id=profile_id)
         try:
             reservation = await operation_repo.reserve(
                 operation_key,

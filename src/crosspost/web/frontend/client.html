@@ -468,6 +468,7 @@ function ComposeView({ user }) {
   async function acknowledgeOperation() {
     await ops.acknowledge(opScope, receipt);
     setPending(ops.pending(opScope)); setReceipt(null);
+    draft.reload();
   }
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null); // data URL for images
@@ -604,11 +605,15 @@ function ComposeView({ user }) {
           if (!value.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
             throw new Error('Результат неизвестен.');
           return value;
-        }, ops.publicationExpectation(channelsList));
+        }, ops.publicationExpectation(channelsList), submittedDraft);
+        draft.markRecorded(submittedDraft);
         const feedback = publicationFeedback(result.outcomes || []);
         if (feedback.error) { setErr(feedback.error); return; }
         if (window.CrosspostDraft.confirmed(result.outcomes)) {
-          if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+          if (await draft.clearSubmitted(submittedDraft)) {
+            await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+            setSuccess({...feedback, cleared:true});
+          }
           else setErr('Публикация подтверждена. Черновик не очищен: проверьте изменения перед новой отправкой.');
         } else {
           setErr('Результат не подтверждён полностью. Черновик сохранён. Проверьте публикации, не отправляйте повторно.');
@@ -622,12 +627,16 @@ function ComposeView({ user }) {
           const value = await r.json();
           if (!value.id) throw new Error('Результат неизвестен.');
           return value;
-        }, {kind:"scheduled"});
+        }, {kind:"scheduled"}, submittedDraft);
+        draft.markRecorded(submittedDraft);
         if (!post.id || !['scheduled','pending_approval'].includes(post.status)) { setErr('Создание поста не подтверждено. Черновик сохранён.'); return; }
         const feedback = post.status === 'pending_approval'
           ? { msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' }
           : { msg: `Пост выйдет ${window.CrosspostTime.label(post.scheduled_at, zone)}.`, sub: '' };
-        if (await draft.clearSubmitted(submittedDraft)) setSuccess({...feedback, cleared:true});
+        if (await draft.clearSubmitted(submittedDraft)) {
+          await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+          setSuccess({...feedback, cleared:true});
+        }
         else setErr('Пост создан. Черновик не очищен: проверьте изменения перед новой отправкой.');
       }
     } catch (e) { setErr(e.message || 'Результат неизвестен. Проверьте операцию.'); }
@@ -655,6 +664,7 @@ function ComposeView({ user }) {
   return html`
     <div>
       <p role="status">${draft.label} ${["conflict","save-error","auth"].includes(draft.status) && html`<button class="btn btn-ghost" onClick=${draft.retry}>Проверить сохранение</button>`}</p>
+      ${draft.status === 'recorded' && !pending && html`<button class="btn btn-ghost" onClick=${draft.startNew}>Новый пост</button>`}
       ${mediaMissing && html`<div class="video-warn">Медиа не восстановлено. Выберите файл заново или явно удалите вложение. <button class="btn btn-ghost" onClick=${clearMedia}>Без вложения</button></div>`}
       <div class="field">
         <label class="label">Фото или видео</label>

@@ -61,7 +61,8 @@
         hydrate(value);
         setSaved(serialize(value));
         setLoaded(true);
-        setStatus(row.data ? "saved" : "ready");
+        setStatus(row.operation_state === "recorded" ? "recorded" :
+          row.operation_state === "used" ? "consumed" : row.data ? "saved" : "ready");
       }).catch(e => {
         if (!controller.signal.aborted) setStatus(e.status === 401 || e.status === 403 ? "auth" : "load-error");
       });
@@ -69,7 +70,7 @@
     }, [base,actor,attempt]);
     useEffect(() => {
       if (!loaded || !dirty || paused || !receipt.current ||
-          ["saving","conflict","save-error","auth","loading"].includes(status)) return;
+          ["saving","conflict","save-error","auth","loading","recorded","consumed"].includes(status)) return;
       const controller = generation.current;
       const timer = setTimeout(async () => {
         if (!controller || controller.signal.aborted || latest.current !== snapshot) return;
@@ -97,7 +98,7 @@
       return () => { leaveChecks.delete(check); window.removeEventListener("beforeunload",onUnload); };
     }, []);
     function capture() {
-      if (!loaded || dirty || !receipt.current || !["ready","saved"].includes(status)) return null;
+      if (!loaded || dirty || !receipt.current?.revision || !["ready","saved"].includes(status)) return null;
       return {scope:receipt.current.scope, revision:receipt.current.revision, snapshot, media:latestMedia.current, controller:generation.current};
     }
     function unchanged(token) {
@@ -120,6 +121,27 @@
         return false;
       }
     }
+    function markRecorded(token) {
+      if (receipt.current?.scope === token.scope && receipt.current?.revision === token.revision &&
+          token.controller === generation.current) setStatus("recorded");
+    }
+    async function startNew() {
+      if (status !== "recorded" || !receipt.current ||
+          !window.confirm("Создать новый пустой пост? Сохранённый снимок предыдущего поста будет закрыт.")) return false;
+      const prior = receipt.current, controller = generation.current;
+      if (!controller || controller.signal.aborted) return false;
+      setStatus("saving");
+      try {
+        const row = await request(base,actor,controller.signal,{scope:prior.scope,revision:prior.revision,data:null});
+        if (controller.signal.aborted || row.scope !== prior.scope) return false;
+        receipt.current = row;
+        hydrate(blank()); setSaved(serialize(blank())); setStatus("saved");
+        return true;
+      } catch(e) {
+        if (!controller.signal.aborted) setStatus(e.status === 409 ? "conflict" : "recorded");
+        return false;
+      }
+    }
     const reload = () => {
       if (dirty && !window.confirm("Несохранённые изменения будут потеряны. Загрузить сохранённый черновик?")) return;
       generation.current?.abort();
@@ -132,9 +154,11 @@
       : status === "save-error" ? "Не удалось сохранить черновик."
       : status === "loading" ? "Загрузка черновика…"
       : status === "saving" ? "Сохраняем черновик…"
+      : status === "recorded" ? "Этот снимок уже использован. Создайте новый пост отдельно."
+      : status === "consumed" ? "Результат этого снимка неизвестен. Повторная отправка заблокирована."
       : dirty ? "Есть несохранённые изменения"
       : status === "saved" ? "Черновик сохранён" : "Нет сохранённого черновика";
-    return {loaded,dirty,status,label,retry,capture,unchanged,clearSubmitted,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
+    return {loaded,dirty,status,label,retry,reload,capture,unchanged,clearSubmitted,markRecorded,startNew,canSend:loaded&&!dirty&&["ready","saved"].includes(status)};
   }
   window.CrosspostDraft = Object.freeze({useDraft,canLeave,normalize,confirmed});
 })();

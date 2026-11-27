@@ -3237,6 +3237,7 @@ function PublishView({ profile, user }) {
   async function acknowledgeOperation() {
     await ops.acknowledge(opScope, receipt);
     setPendingOperation(ops.pending(opScope)); setReceipt(null);
+    draft.reload();
     loadScheduled();
   }
 
@@ -3447,11 +3448,13 @@ function PublishView({ profile, user }) {
         if (!value?.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
           throw new Error("Результат неизвестен.");
         return value;
-      }, ops.publicationExpectation([...selected].map(parseSelKey), contentType === "article" && !!articleText.trim()));
+      }, ops.publicationExpectation([...selected].map(parseSelKey), contentType === "article" && !!articleText.trim()), submittedDraft);
+      draft.markRecorded(submittedDraft);
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
       if (window.CrosspostDraft.confirmed(res.outcomes)) {
-        if (!await draft.clearSubmitted(submittedDraft)) setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
+        if (await draft.clearSubmitted(submittedDraft)) await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+        else setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
       } else setAlert({type:"error", text:"Не все публикации подтверждены. Черновик сохранён."});
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
@@ -3483,9 +3486,11 @@ function PublishView({ profile, user }) {
         const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), {...headers, "X-Schedule-Time-Contract": "utc-v1"});
         if (!value?.id) throw new Error("Результат неизвестен.");
         return value;
-      }, {kind:"scheduled"});
+      }, {kind:"scheduled"}, submittedDraft);
+      draft.markRecorded(submittedDraft);
       if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
       const cleared = await draft.clearSubmitted(submittedDraft);
+      if (cleared) await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
       setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
@@ -3498,6 +3503,7 @@ function PublishView({ profile, user }) {
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
     h("p", {role:"status"}, draft.label, ["conflict","save-error","auth"].includes(draft.status) && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Проверить сохранение")),
+    draft.status === "recorded" && !pendingOperation && h("button", {className:"btn btn-ghost", onClick:draft.startNew}, "Новый пост"),
     mediaMissing && h("div", {role:"alert", className:"form-hint"}, "Медиа не восстановлено. Выберите файл или ссылку заново. ", h("button", {className:"btn btn-ghost", onClick:() => setMediaMissing(false)}, "Без вложения")),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
     targetState === "loading" && h("p", {role: "status"}, "Проверяем каналы…"),
