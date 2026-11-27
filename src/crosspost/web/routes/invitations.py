@@ -18,7 +18,6 @@ from crosspost.web.auth_guard import limit_auth
 from crosspost.web.deps import AdminUser, SessionDep
 from crosspost.web.private_routes import PrivateRoute
 
-
 router = APIRouter(tags=["invitations"], route_class=PrivateRoute)
 _PRIVATE = {"Cache-Control": "no-store"}
 
