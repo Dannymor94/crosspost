@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from crosspost.db.models import PublicationOperation
 from crosspost.orchestrator.task import new_publication_id
 
-
 REJECTED_BEFORE_EFFECT = "rejected_before_effect"
 
 
