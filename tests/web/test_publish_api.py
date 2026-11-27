@@ -26,7 +26,7 @@ from crosspost.db.models import ConnectionState
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.vault import get_vault
 from crosspost.web import deps
-from crosspost.web.routes import channels, profiles, publish, tg_login
+from crosspost.web.routes import channels, drafts, profiles, publish, tg_login
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +53,7 @@ async def client(factory) -> AsyncGenerator[AsyncClient, None]:
         yield
 
     app = FastAPI(lifespan=_lifespan)
-    for r in (profiles, channels, tg_login, publish):
+    for r in (profiles, channels, tg_login, publish, drafts):
         app.include_router(r.router)
 
     # Аутентифицируем как admin: обходит гейт profile-изоляции, прежние тесты
@@ -1879,6 +1879,8 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     from sqlalchemy import update as _upd
 
     from crosspost.db.models import ScheduledPost
+    from crosspost.db.publication_repo import PublicationRepository
+    from crosspost.db.scheduler_repo import SchedulerRepository
 
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path / "media"))
 
@@ -1894,7 +1896,7 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
         await s.execute(
             _upd(ScheduledPost)
             .where(ScheduledPost.id == sched_id)
-            .values(media_paths=[str(old_file)], status="publishing")
+            .values(media_paths=[str(old_file)])
         )
         await s.commit()
 
@@ -1902,7 +1904,18 @@ async def test_t209_cas_409_orphan_retained(client, factory, tmp_path, monkeypat
     media_root = tmp_path / "media"
     dirs_before = {d.name for d in media_root.iterdir()}
 
-    with _patch_image_ctx():
+    original_patch = PublicationRepository.patch_scheduled_cas
+
+    async def claim_before_patch(repo, scheduled_id, **kwargs):
+        # Real state transition after media download and before the original CAS.
+        async with factory() as session:
+            assert await SchedulerRepository(session).claim(scheduled_id)
+        return await original_patch(repo, scheduled_id, **kwargs)
+
+    with (
+        _patch_image_ctx(),
+        patch.object(PublicationRepository, "patch_scheduled_cas", new=claim_before_patch),
+    ):
         r = await client.patch(
             f"/api/profiles/{pid}/scheduled/{sched_id}",
             json={"image": "https://example.com/new.jpg"},
@@ -1997,7 +2010,7 @@ class _FakeExecutor:
         self._factory = factory
         self._statuses = statuses  # channel → (status, error)
 
-    async def publish_post_now(self, post_id: int) -> None:
+    async def publish_post_now(self, post_id: int) -> bool:
         from crosspost.db.publication_repo import PublicationRepository
         from crosspost.scheduler.executor import scheduled_publication_id
 
@@ -2009,6 +2022,7 @@ class _FakeExecutor:
                 from crosspost.db.models import PublicationStatus
 
                 await repo.set_status(pubid, ch, PublicationStatus(st), error=err)
+        return True
 
 
 async def _schedule_one(client, pid, channels: list[str]) -> int:
@@ -2037,7 +2051,7 @@ async def _client_with_executor(factory, executor):
         yield
 
     app = FastAPI(lifespan=_lifespan)
-    for r in (profiles, channels, tg_login, publish):
+    for r in (profiles, channels, tg_login, publish, drafts):
         app.include_router(r.router)
     app.state.executor = executor
 
@@ -2995,3 +3009,536 @@ async def test_cb03_deferred_api_retry_preserves_run_with_missing_publication(cl
         build.assert_not_called()
     async with factory() as s:
         assert await PublicationRepository(s, profile_id=pid).get_status(pubid, "telegram") is None
+
+
+async def test_t217_create_and_patch_share_offset_normalization(client, factory):
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    instant = datetime.now(UTC) + timedelta(days=30)
+    value = instant.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()
+    result = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={"text": "offset", "channels": '["telegram"]', "scheduled_at": value},
+    )
+    assert result.status_code == 200, result.text
+    sid = result.json()["id"]
+    expected = instant.astimezone().replace(tzinfo=None)
+    stored = await client.get(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert datetime.fromisoformat(stored.json()["scheduled_at"]) == expected
+    changed = await client.patch(
+        f"/api/profiles/{pid}/scheduled/{sid}",
+        json={"scheduled_at": instant.isoformat()},
+    )
+    assert changed.status_code == 200, changed.text
+    assert datetime.fromisoformat(changed.json()["scheduled_at"]) == expected
+
+
+async def test_t217_explicit_utc_round_trip_and_no_naive_downgrade(client, factory):
+    from datetime import datetime, timedelta, timezone
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    instant = (datetime.now(UTC) + timedelta(days=30)).replace(microsecond=0)
+    value = instant.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()
+    base = f"/api/profiles/{pid}/scheduled"
+    response = await client.post(
+        base,
+        data={"text": "utc", "channels": '["telegram"]', "scheduled_at": value},
+        headers={"X-Schedule-Time-Contract": "utc-v1"},
+    )
+    assert response.status_code == 200, response.text
+    post = response.json()
+    assert post["time_basis"] == "utc"
+    assert post["scheduled_at"] == instant.isoformat()
+    url = f"{base}/{post['id']}"
+    denied = await client.patch(url, json={"scheduled_at": "2099-01-01T10:00:00"})
+    assert denied.status_code == 422
+    later = instant + timedelta(hours=1)
+    updated = await client.patch(url, json={"scheduled_at": later.isoformat()})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["scheduled_at"] == later.isoformat()
+    assert updated.json()["time_basis"] == "utc"
+
+
+async def test_t215_moderated_schedule_requires_approval(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(s).create_user(
+            "moderated", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    response = await client.post(
+        f"/api/profiles/{pid}/scheduled",
+        data={
+            "text": "For approval",
+            "channels": '["telegram"]',
+            "scheduled_at": "2027-01-01T12:00:00",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending_approval"
+    sid = response.json()["id"]
+    response = await client.post(f"/api/profiles/{pid}/scheduled/{sid}/approve")
+    assert response.status_code == 403
+
+
+async def test_t215_cancel_claimed_returns_conflict(client, factory):
+    from crosspost.db.scheduler_repo import SchedulerRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    sid = await _schedule_one(client, pid, ["telegram"])
+    async with factory() as s:
+        assert await SchedulerRepository(s).claim(sid)
+    result = await client.delete(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 409
+    result = await client.get(f"/api/profiles/{pid}/scheduled/{sid}")
+    assert result.status_code == 200
+    assert result.json()["status"] == "publishing"
+
+
+async def test_t216_keyed_immediate_only_dispatches_once(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    adapter = _MockAdapter("telegram")
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): adapter})
+    headers = {"Idempotency-Key": "a" * 32}
+    data = {"text": "once", "channels": '["telegram"]'}
+    url = f"/api/profiles/{pid}/publish"
+    with ctx:
+        first = await client.post(url, data=data, headers=headers, files=_post_files())
+        assert first.status_code == 200, first.text
+        publish._RUNS.clear()
+        replay = await client.post(url, data=data, headers=headers, files=_post_files())
+        changed = await client.post(
+            url, data={**data, "text": "changed"}, headers=headers, files=_post_files()
+        )
+        new = await client.post(
+            url, data=data, headers={"Idempotency-Key": "b" * 32}, files=_post_files()
+        )
+    assert replay.status_code == changed.status_code == 409
+    assert replay.json() == changed.json()
+    assert new.status_code == 200, new.text
+    assert first.json()["publication_id"] != new.json()["publication_id"]
+    assert len(calls) == 2
+
+
+async def test_t216_keyed_immediate_invalid_key_does_not_dispatch(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        response = await client.post(
+            f"/api/profiles/{pid}/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers={"Idempotency-Key": "bad"},
+        )
+    assert response.status_code == 422
+    assert calls == []
+
+
+async def test_t216_recover_recorded_result_without_resend(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    headers = {"Idempotency-Key": "c" * 32, "Idempotency-Recovery": "d" * 64}
+    base = f"/api/profiles/{pid}"
+    with ctx:
+        sent = await client.post(
+            base + "/publish",
+            data={"text": "once", "channels": '["telegram"]'},
+            headers=headers,
+        )
+        assert sent.status_code == 200, sent.text
+        publish._RUNS.clear()
+        recovered = await client.get(base + "/operation-status", headers=headers)
+        denied = await client.get(
+            base + "/operation-status", headers={**headers, "Idempotency-Recovery": "e" * 64}
+        )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json() == {
+        "state": "recorded",
+        "outcomes": [{"channel": "telegram", "target": "", "status": "done"}],
+    }
+    assert denied.status_code == 404
+    assert len(calls) == 1
+
+
+async def test_t216_reserved_without_result_is_unknown(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "f" * 32, "Idempotency-Recovery": "a" * 64}
+    base = f"/api/profiles/{pid}"
+    with patch("crosspost.web.routes.publish._save_media", side_effect=RuntimeError("crash")):
+        with pytest.raises(RuntimeError, match="crash"):
+            await client.post(
+                base + "/publish",
+                data={"text": "once", "channels": '["telegram"]'},
+                headers=headers,
+            )
+    recovered = await client.get(base + "/operation-status", headers=headers)
+    assert recovered.status_code == 200
+    assert recovered.json() == {"state": "unknown", "outcomes": []}
+    replay = await client.post(
+        base + "/publish",
+        data={"text": "once", "channels": '["telegram"]'},
+        headers=headers,
+    )
+    assert replay.status_code == 409
+
+
+async def test_t216_schedule_replay_does_not_create_second_post(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "1" * 32, "Idempotency-Recovery": "2" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    first = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert first.status_code == 200, first.text
+    repeat = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert repeat.status_code == 409
+    changed = await client.post(
+        base + "/scheduled", data={**data, "text": "different"}, headers=headers
+    )
+    assert changed.status_code == 409
+    rows = await client.get(base + "/scheduled")
+    assert len(rows.json()) == 1
+    status = await client.get(base + "/operation-status", headers=headers)
+    assert status.status_code == 200
+    assert status.json() == {
+        "state": "scheduled_created",
+        "outcomes": [{"scheduled_id": str(first.json()["id"]), "status": "scheduled"}],
+    }
+
+
+async def test_t216_schedule_completion_failure_rolls_back_both_rows(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    headers = {"Idempotency-Key": "3" * 32, "Idempotency-Recovery": "4" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {
+        "text": "once",
+        "channels": '["telegram"]',
+        "scheduled_at": "2027-01-01T12:00:00",
+    }
+    with patch(
+        "crosspost.db.operation_repo.OperationRepository.finish",
+        side_effect=RuntimeError("commit boundary"),
+    ):
+        with pytest.raises(RuntimeError, match="commit boundary"):
+            await client.post(base + "/scheduled", data=data, headers=headers)
+    assert (await client.get(base + "/scheduled")).json() == []
+    assert (await client.get(base + "/operation-status", headers=headers)).status_code == 404
+    result = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert result.status_code == 200, result.text
+    assert len((await client.get(base + "/scheduled")).json()) == 1
+
+
+async def test_ux01_keyed_client_cannot_bypass_moderation(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as s:
+        await ProfileSettingsRepository(s, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(s).create_user(
+            "keyed-client", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    headers = {"Idempotency-Key": "7" * 32, "Idempotency-Recovery": "8" * 64}
+    base = f"/api/profiles/{pid}"
+    data = {"text": "approval required", "channels": '["telegram"]'}
+    denied = await client.post(base + "/publish", data=data, headers=headers)
+    assert denied.status_code == 403
+    scheduled_data = {**data, "scheduled_at": "2027-01-01T12:00:00"}
+    first = await client.post(base + "/scheduled", data=scheduled_data, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "pending_approval"
+    replay = await client.post(base + "/scheduled", data=scheduled_data, headers=headers)
+    assert replay.status_code == 409
+    assert len((await client.get(base + "/scheduled")).json()) == 1
+    recovered = await client.get(base + "/operation-status", headers=headers)
+    assert recovered.json() == {
+        "state": "scheduled_created",
+        "outcomes": [{"scheduled_id": str(first.json()["id"]), "status": "pending_approval"}],
+    }
+
+
+async def test_ux01_moderated_keyed_utc_schedule(client, factory):
+    from datetime import datetime, timedelta
+
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as session:
+        settings = ProfileSettingsRepository(session, profile_id=pid)
+        await settings.set_client_moderation(True)
+        await settings.set_schedule_timezone("Europe/Berlin")
+        user = await UserRepository(session).create_user(
+            "utc-client", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    base = f"/api/profiles/{pid}"
+    instant = (datetime.now(UTC) + timedelta(days=30)).replace(microsecond=0)
+    headers = {
+        "Idempotency-Key": "9" * 32,
+        "Idempotency-Recovery": "a" * 64,
+        "X-Schedule-Time-Contract": "utc-v1",
+    }
+    data = {
+        "text": "utc approval",
+        "channels": '["telegram"]',
+        "scheduled_at": instant.isoformat(),
+    }
+    denied = await client.post(base + "/publish", data=data, headers=headers)
+    assert denied.status_code == 403
+    first = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert first.status_code == 200, first.text
+    row = first.json()
+    assert row["status"] == "pending_approval"
+    assert row["time_basis"] == "utc"
+    assert row["scheduled_at"] == instant.isoformat()
+    repeat = await client.post(base + "/scheduled", data=data, headers=headers)
+    assert repeat.status_code == 409
+    assert len((await client.get(base + "/scheduled")).json()) == 1
+    receipt = await client.get(base + "/operation-status", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    assert receipt.json()["state"] == "scheduled_created"
+    assert receipt.json()["outcomes"] == [
+        {"scheduled_id": str(row["id"]), "status": "pending_approval"}
+    ]
+
+
+async def test_editor_revision_consumed_before_second_dispatch(client, factory):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    saved = await client.put(
+        base + "/editor-draft",
+        json={
+            "scope": row["scope"],
+            "revision": row["revision"],
+            "data": {"text": "once", "targets": ["telegram"]},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "once", "channels": '["telegram"]'}
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        first = await client.post(base + "/publish", data=data, headers=headers)
+        assert first.status_code == 200, first.text
+        other = await client.post(
+            base + "/publish", data=data, headers={**headers, "Idempotency-Recovery": "c" * 64}
+        )
+        different_key = await client.post(
+            base + "/publish", data=data, headers={**headers, "Idempotency-Key": "f" * 32}
+        )
+        assert other.status_code == 409
+        assert different_key.status_code == 422
+        wrong_proof = {**headers, "Idempotency-Recovery": "c" * 64}
+        excluded = await client.get(base + "/operation-status", headers=wrong_proof)
+        assert excluded.json() == {"state": "not_admitted", "outcomes": []}
+        assert (await client.get(base + "/editor-draft")).json()["operation_state"] == "recorded"
+        edit = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {"text": "once", "targets": ["telegram"]},
+            },
+        )
+        assert edit.status_code == 409
+        cleared = await client.put(
+            base + "/editor-draft",
+            json={"scope": draft["scope"], "revision": draft["revision"], "data": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        stale = await client.post(base + "/publish", data=data, headers=headers)
+        assert stale.status_code == 409
+        excluded = await client.get(base + "/operation-status", headers=wrong_proof)
+        assert excluded.json() == {"state": "not_admitted", "outcomes": []}
+        recorded = await client.get(base + "/operation-status", headers=headers)
+        assert recorded.json()["state"] == "recorded"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+async def test_editor_pre_effect_rejection_recover_and_renew(client, factory, scheduled):
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    draft_data = {"text": "", "targets": ["telegram"]}
+    saved = await client.put(
+        base + "/editor-draft",
+        json={"scope": row["scope"], "revision": row["revision"], "data": draft_data},
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "", "channels": '["telegram"]'}
+    if scheduled:
+        data["scheduled_at"] = "2099-01-01T12:00:00"
+    url = base + ("/scheduled" if scheduled else "/publish")
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        denied = await client.post(url, data=data, headers=headers)
+        assert denied.status_code == 422, denied.text
+        recovery = await client.get(base + "/operation-status", headers=headers)
+        assert recovery.json() == {
+            "state": "rejected",
+            "outcomes": [{"status": "rejected_before_effect", "http_status": "422"}],
+        }
+        assert (await client.get(base + "/editor-draft")).json()["operation_state"] == "rejected"
+        fixed = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {**draft_data, "text": "fixed"},
+            },
+        )
+        assert fixed.status_code == 200, fixed.text
+        new_revision = fixed.json()["revision"]
+        old = await client.post(url, data={**data, "text": "fixed"}, headers=headers)
+        assert old.status_code == 409
+        retry = await client.post(
+            url,
+            data={**data, "text": "fixed"},
+            headers={
+                **headers,
+                "Idempotency-Key": new_revision,
+                "X-Draft-Revision": new_revision,
+            },
+        )
+        assert retry.status_code == 200, retry.text
+    assert len(calls) == (0 if scheduled else 1)
+
+
+async def test_editor_moderation_rejection_can_be_replanned(client, factory):
+    from crosspost.auth.sessions import sign_session
+    from crosspost.db.models import Role
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+    from crosspost.db.user_repo import UserRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram"])
+    async with factory() as session:
+        await ProfileSettingsRepository(session, profile_id=pid).set_client_moderation(True)
+        user = await UserRepository(session).create_user(
+            "draft-moderated", "pw", role=Role.CLIENT, profile_id=pid
+        )
+        uid = user.id
+    client.cookies.set("session", sign_session(uid))
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    draft_data = {"text": "moderated", "targets": ["telegram"]}
+    saved = await client.put(
+        base + "/editor-draft",
+        json={"scope": row["scope"], "revision": row["revision"], "data": draft_data},
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "a" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    data = {"text": "moderated", "channels": '["telegram"]'}
+    ctx, calls = _patch_adapters_by_target({("telegram", ""): _MockAdapter("telegram")})
+    with ctx:
+        denied = await client.post(base + "/publish", data=data, headers=headers)
+        assert denied.status_code == 403
+        recovery = await client.get(base + "/operation-status", headers=headers)
+        assert recovery.json()["state"] == "rejected"
+        fixed = await client.put(
+            base + "/editor-draft",
+            json={
+                "scope": draft["scope"],
+                "revision": draft["revision"],
+                "data": {**draft_data, "when": "later"},
+            },
+        )
+        assert fixed.status_code == 200, fixed.text
+        new_revision = fixed.json()["revision"]
+        planned = await client.post(
+            base + "/scheduled",
+            data={**data, "scheduled_at": "2099-01-01T12:00:00"},
+            headers={
+                **headers,
+                "Idempotency-Key": new_revision,
+                "X-Draft-Revision": new_revision,
+            },
+        )
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["status"] == "pending_approval"
+    assert not calls
+
+
+async def test_editor_incomplete_durable_receipt_does_not_clear_draft(client, factory):
+    from crosspost.db.operation_repo import OperationRepository
+
+    pid = await _make_profile_with_live(factory, ["telegram", "vk_wall"])
+    base = f"/api/profiles/{pid}"
+    row = (await client.get(base + "/editor-draft")).json()
+    saved = await client.put(
+        base + "/editor-draft",
+        json={
+            "scope": row["scope"],
+            "revision": row["revision"],
+            "data": {"text": "once", "targets": ["telegram", "vk_wall"]},
+        },
+    )
+    draft = saved.json()
+    headers = {
+        "Idempotency-Key": draft["revision"],
+        "Idempotency-Recovery": "b" * 64,
+        "X-Draft-Scope": draft["scope"],
+        "X-Draft-Revision": draft["revision"],
+    }
+    original = OperationRepository.finish
+
+    async def incomplete(repo, publication_id, summary):
+        await original(repo, publication_id, summary[:1])
+
+    ctx, calls = _patch_adapters_by_target(
+        {
+            ("telegram", ""): _MockAdapter("telegram"),
+            ("vk_wall", ""): _MockAdapter("vk_wall"),
+        }
+    )
+    with ctx, patch.object(OperationRepository, "finish", incomplete):
+        sent = await client.post(
+            base + "/publish",
+            data={"text": "once", "channels": '["telegram","vk_wall"]'},
+            headers=headers,
+        )
+    assert sent.status_code == 200, sent.text
+    assert len(calls) == 2
+    latest = (await client.get(base + "/editor-draft")).json()
+    assert latest["operation_state"] == "used"
+    cleared = await client.put(
+        base + "/editor-draft",
+        json={"scope": draft["scope"], "revision": draft["revision"], "data": None},
+    )
+    assert cleared.status_code == 409

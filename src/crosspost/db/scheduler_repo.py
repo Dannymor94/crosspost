@@ -18,6 +18,7 @@ from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import ScheduledPost, ScheduledPostStatus
+from crosspost.db.schedule_order import order_schedules
 
 
 class SchedulerRepository:
@@ -36,9 +37,9 @@ class SchedulerRepository:
         result = await self._s.execute(
             select(ScheduledPost)
             .where(ScheduledPost.status == ScheduledPostStatus.SCHEDULED)
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def get(self, scheduled_id: int) -> ScheduledPost | None:
         """Пост по id (любого профиля) — свежий из БД, мимо identity-map."""
@@ -49,7 +50,9 @@ class SchedulerRepository:
         )
         return result.scalar_one_or_none()
 
-    async def claim(self, scheduled_id: int) -> bool:
+    async def claim(
+        self, scheduled_id: int, *, expected_time: tuple[datetime, datetime | None] | None = None
+    ) -> bool:
         """Атомарно заклеймить пост под исполнение: SCHEDULED → PUBLISHING.
 
         Единственная точка входа в обработку. UPDATE ... WHERE status='scheduled'
@@ -57,14 +60,17 @@ class SchedulerRepository:
         (пост уже взят/отменён/исполнен) и обработку не начинают. Так закрыт гонок
         двух тиков/воркеров на один пост без внешнего лока.
         """
-        result = await self._s.execute(
-            sql_update(ScheduledPost)
-            .where(
-                ScheduledPost.id == scheduled_id,
-                ScheduledPost.status == ScheduledPostStatus.SCHEDULED,
-            )
-            .values(status=ScheduledPostStatus.PUBLISHING)
+        stmt = sql_update(ScheduledPost).where(
+            ScheduledPost.id == scheduled_id,
+            ScheduledPost.status == ScheduledPostStatus.SCHEDULED,
         )
+        if expected_time is not None:
+            wall, instant = expected_time
+            stmt = stmt.where(
+                ScheduledPost.scheduled_at == wall,
+                ScheduledPost.scheduled_at_utc == instant,
+            )
+        result = await self._s.execute(stmt.values(status=ScheduledPostStatus.PUBLISHING))
         await self._s.commit()
         return getattr(result, "rowcount", 0) == 1
 

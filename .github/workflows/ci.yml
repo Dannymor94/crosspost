@@ -7,7 +7,7 @@ on:
 jobs:
   quality:
     name: ruff + mypy + pytest (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.11", "3.13"]
@@ -23,7 +23,11 @@ jobs:
         run: uv sync --extra dev --extra browser --extra infra --extra crypto
 
       - name: Install Playwright browsers
-        run: uv run playwright install chromium --with-deps
+        run: |
+          sudo apt-get update
+          uv run playwright install chromium --with-deps
 
       - name: Check (ruff + mypy + pytest)
-        run: make check
+        run: |
+          uv run ruff format --diff src tests
+          make check

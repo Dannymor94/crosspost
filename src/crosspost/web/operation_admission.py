@@ -1,0 +1,321 @@
+"""Opt-in immediate HTTP admission; no automatic re-dispatch or result disclosure."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy import update as sql_update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from crosspost.db.models import EditorDraft, Profile, User
+from crosspost.db.operation_repo import (
+    REJECTED_BEFORE_EFFECT,
+    OperationConflict,
+    OperationRepository,
+    Reservation,
+)
+
+_CHUNK_SIZE = 1024 * 1024
+
+
+async def immediate_fingerprint(
+    fields: dict, media: Sequence[UploadFile], *, kind: str = "immediate"
+) -> str:
+    """Versioned exact fields, canonical targets, ordered media bytes and metadata.
+
+    External image is a source identifier, not a claim that its contents are immutable.
+    Hash the uploads without changing the subsequent upload reader's initial position.
+    """
+    uploads = []
+    for upload in media:
+        if not upload.filename:
+            continue
+        digest = hashlib.sha256()
+        await upload.seek(0)
+        try:
+            while chunk := await upload.read(_CHUNK_SIZE):
+                digest.update(chunk)
+        finally:
+            await upload.seek(0)
+        uploads.append([upload.filename, upload.content_type, digest.hexdigest()])
+    payload = {"version": 1, "kind": kind, "fields": fields, "uploads": uploads}
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def recovery_digest(secret: str, user: User, profile: Profile) -> str:
+    """Bind the proof to the current account and workspace incarnation.
+
+    Password changes deliberately invalidate recovery. The salted password hash
+    is never returned, logged or stored in the ledger. The separate random
+    secret is required even when numeric database IDs have been recycled.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", secret):
+        raise HTTPException(status_code=422, detail="Invalid recovery proof")
+    material = [
+        "recovery-v1",
+        secret,
+        user.id,
+        user.created_at.isoformat(),
+        user.password_hash,
+        profile.id,
+        profile.created_at.isoformat(),
+    ]
+    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class DraftBinding:
+    scope: str
+    revision: str
+
+
+async def draft_binding(
+    session: AsyncSession,
+    user: User,
+    profile_id: int,
+    operation_key: str | None,
+    recovery_secret: str | None,
+    scope: str | None,
+    revision: str | None,
+) -> DraftBinding | None:
+    """Optional legacy-compatible binding; editor requests always supply both headers."""
+    if scope is None and revision is None:
+        return None
+    if (
+        scope is None
+        or revision is None
+        or not re.fullmatch(r"[0-9a-f]{64}", scope)
+        or not re.fullmatch(r"[0-9a-f]{32}", revision)
+        or operation_key != revision
+        or recovery_secret is None
+    ):
+        raise HTTPException(status_code=422, detail="Invalid draft operation binding")
+    from crosspost.web.routes.drafts import _identity
+
+    if scope != await _identity(session, user, profile_id):
+        raise operation_conflict()
+    return DraftBinding(scope, revision)
+
+
+async def fence_draft(
+    session: AsyncSession, binding: DraftBinding, *, actor_id: int, profile_id: int
+) -> dict:
+    """Acquire SQLite write ownership and check the revision before admission.
+
+    Caller must reserve the operation in this same transaction. The revision is
+    the operation ID, so a second key cannot admit the same editor revision.
+    """
+    result = await session.execute(
+        sql_update(EditorDraft)
+        .where(
+            EditorDraft.scope == binding.scope,
+            EditorDraft.revision == binding.revision,
+            EditorDraft.user_id == actor_id,
+            EditorDraft.profile_id == profile_id,
+        )
+        .values(revision=EditorDraft.revision)
+        .returning(EditorDraft.data)
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
+        await session.rollback()
+        raise operation_conflict()
+    return snapshot
+
+
+async def reserve_bound_editor(
+    session: AsyncSession,
+    *,
+    binding: DraftBinding,
+    actor_id: int,
+    profile_id: int,
+    kind: str,
+    fields: dict,
+    media: Sequence[UploadFile],
+    recovery_hash: str,
+) -> tuple[Reservation, dict]:
+    """Commit a single revision-bound operation before any fallible preflight."""
+    fingerprint = await immediate_fingerprint(fields, media, kind=kind)
+    await session.rollback()
+    snapshot = await fence_draft(session, binding, actor_id=actor_id, profile_id=profile_id)
+    repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+    try:
+        reservation = await repo.reserve(
+            binding.revision, kind=kind, fingerprint=fingerprint, recovery_hash=recovery_hash
+        )
+    except OperationConflict as exc:
+        raise operation_conflict() from exc
+    if not reservation.acquired:
+        raise operation_conflict()
+    return reservation, snapshot
+
+
+async def current_draft_revision(
+    session: AsyncSession, binding: DraftBinding, *, actor_id: int, profile_id: int
+) -> str | None:
+    revision: str | None = await session.scalar(
+        select(EditorDraft.revision).where(
+            EditorDraft.scope == binding.scope,
+            EditorDraft.user_id == actor_id,
+            EditorDraft.profile_id == profile_id,
+        )
+    )
+    return revision
+
+
+def snapshot_targets(snapshot: dict) -> set[tuple[str, str]]:
+    targets = set()
+    for key in snapshot.get("targets", []):
+        separator = "␟" if "␟" in key else "::"
+        channel, _, target = key.partition(separator)
+        targets.add((channel, target))
+    return targets
+
+
+def complete_summary(snapshot: dict, kind: str, summary: list | None) -> bool:
+    """Match the effective targets before declaring a draft safely discardable."""
+    if not isinstance(summary, list) or not summary or not snapshot:
+        return False
+    if kind == "scheduled":
+        row = summary[0]
+        if len(summary) != 1 or not isinstance(row, dict):
+            return False
+        sid = row.get("scheduled_id")
+        return (
+            isinstance(sid, str)
+            and re.fullmatch(r"[1-9][0-9]{0,15}", sid) is not None
+            and int(sid) <= 2**53 - 1
+            and row.get("status") in ("scheduled", "pending_approval")
+        )
+    if kind != "immediate":
+        return False
+    expected = snapshot_targets(snapshot)
+    if snapshot.get("content_type") == "article" and snapshot.get("article_text", "").strip():
+        expected.add(("telegraph", ""))
+    if not expected or len(summary) != len(expected):
+        return False
+    statuses = {"done", "submitted", "failed", "needs_relogin", "deferred", "banned"}
+    for row in summary:
+        if not isinstance(row, dict):
+            return False
+        channel, target = row.get("channel"), row.get("target")
+        if not isinstance(channel, str) or not isinstance(target, str):
+            return False
+        if row.get("status") not in statuses or (channel, target) not in expected:
+            return False
+        expected.remove((channel, target))
+    return not expected
+
+
+def validate_snapshot(
+    snapshot: dict | None,
+    *,
+    content_type: str,
+    text: str,
+    title: str | None,
+    article_text: str,
+    link_phrase: str,
+    selections: Sequence[tuple[str, str]],
+    has_media: bool,
+) -> None:
+    if snapshot is None:
+        return
+    if (
+        not snapshot
+        or snapshot.get("content_type", "post") != content_type
+        or snapshot.get("text", "") != text
+        or snapshot_targets(snapshot) != set(selections)
+        or bool(snapshot.get("media_required")) != has_media
+        or (
+            content_type == "article"
+            and (
+                snapshot.get("article_title", "").strip() != (title or "").strip()
+                or snapshot.get("article_text", "") != article_text
+                or snapshot.get("link_phrase", "") != link_phrase
+            )
+        )
+        or (content_type != "article" and bool(article_text))
+    ):
+        raise HTTPException(status_code=422, detail="Отправка не соответствует черновику")
+
+
+@asynccontextmanager
+async def pre_effect_rejections(
+    session: AsyncSession,
+    *,
+    reservation: Reservation | None,
+    actor_id: int,
+    profile_id: int,
+) -> AsyncIterator[None]:
+    """Record only explicit rejection inside a strictly pre-effect region.
+
+    Unexpected crashes and all errors after entering dispatch remain unknown.
+    """
+    try:
+        yield
+    except HTTPException as exc:
+        if reservation is not None and 400 <= exc.status_code < 500:
+            await session.rollback()
+            repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+            await repo.finish(
+                reservation.publication_id,
+                [{"status": REJECTED_BEFORE_EFFECT, "http_status": str(exc.status_code)}],
+            )
+        raise
+
+
+async def reserve_immediate(
+    session: AsyncSession,
+    *,
+    actor_id: int,
+    profile_id: int,
+    operation_key: str,
+    fields: dict,
+    media: Sequence[UploadFile],
+    recovery_hash: str | None = None,
+) -> str:
+    """Only the first committed reservation may proceed to media save and send.
+
+    Replays and mismatches intentionally receive the same generic 409 until
+    identity lifecycle and scoped result lookup are implemented. No old receipt
+    or publication identifier is disclosed, including after account ID reuse.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", operation_key):
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key")
+    fingerprint = await immediate_fingerprint(fields, media)
+    # The route has only performed reads at this point. End that read transaction
+    # before acquiring SQLite's write reservation.
+    await session.rollback()
+    repo = OperationRepository(session, actor_id=actor_id, profile_id=profile_id)
+    try:
+        reservation = await repo.reserve(
+            operation_key, kind="immediate", fingerprint=fingerprint, recovery_hash=recovery_hash
+        )
+    except OperationConflict:
+        reservation = None
+    if reservation is None or not reservation.acquired:
+        raise HTTPException(
+            status_code=409,
+            detail="Операция уже использована. Не отправляйте повторно; проверьте результат.",
+        )
+    return reservation.publication_id
+
+
+def validate_operation_key(key: str) -> None:
+    if not re.fullmatch(r"[0-9a-f]{32}", key):
+        raise HTTPException(status_code=422, detail="Invalid Idempotency-Key")
+
+
+def operation_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Операция уже использована. Не отправляйте повторно; проверьте результат.",
+    )

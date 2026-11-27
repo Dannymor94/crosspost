@@ -9,8 +9,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.models import PublicationStatus
+from crosspost.db.models import PublicationStatus, ScheduledPostStatus
 from crosspost.db.publication_repo import PublicationRepository
+from crosspost.db.scheduler_repo import SchedulerRepository
 
 
 @pytest_asyncio.fixture
@@ -121,7 +122,7 @@ async def test_create_and_list_scheduled(session):
     assert listed[0].text == "позже"
 
 
-async def test_cancel_scheduled_removes_it(session):
+async def test_cancel_scheduled_retains_history(session):
     repo = _repo(session)
     post = await repo.create_scheduled(
         content_type="post",
@@ -133,6 +134,9 @@ async def test_cancel_scheduled_removes_it(session):
     )
     assert await repo.cancel_scheduled(post.id) is True
     assert await repo.list_scheduled() == []
+    retained = await repo.get_scheduled(post.id)
+    assert retained is not None
+    assert str(retained.status) == "cancelled"
     # Повторная отмена — no-op.
     assert await repo.cancel_scheduled(post.id) is False
 
@@ -218,3 +222,39 @@ async def test_migration_is_idempotent_on_fresh_db(tmp_path):
     cols = {r[1] for r in con.execute("PRAGMA table_info(publications)")}
     con.close()
     assert "target" in cols
+
+
+async def test_schedule_order_utc_fold_and_legacy_slots(session):
+    repo = _repo(session)
+
+    async def create(wall, instant=None, status=ScheduledPostStatus.SCHEDULED):
+        return await repo.create_scheduled(
+            content_type="post",
+            text="test",
+            title=None,
+            media_paths=[],
+            channels=["telegram"],
+            scheduled_at=datetime.fromisoformat(wall),
+            scheduled_at_utc=datetime.fromisoformat(instant) if instant else None,
+            initial_status=status,
+        )
+
+    late = await create("2027-10-31T02:10", "2027-10-31T01:10")
+    legacy = await create("2027-10-31T02:30")
+    early = await create("2027-10-31T02:50", "2027-10-31T00:50")
+    tie = await create("2027-10-31T02:50", "2027-10-31T00:50")
+    expected = [early.id, legacy.id, tie.id, late.id]
+    assert [row.id for row in await repo.list_scheduled()] == expected
+    active = await SchedulerRepository(session).list_scheduled_active()
+    assert [row.id for row in active] == expected
+
+    pending_late = await create(
+        "2027-10-31T02:10", "2027-10-31T01:10", ScheduledPostStatus.PENDING_APPROVAL
+    )
+    pending_early = await create(
+        "2027-10-31T02:50", "2027-10-31T00:50", ScheduledPostStatus.PENDING_APPROVAL
+    )
+    assert [row.id for row in await repo.list_pending_approval()] == [
+        pending_early.id,
+        pending_late.id,
+    ]

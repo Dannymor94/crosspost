@@ -52,6 +52,7 @@ from crosspost.orchestrator.publish_service import (
     selections_from_stored,
 )
 from crosspost.scheduler.browser_cooldown import BrowserCooldown
+from crosspost.scheduler.schedule_time import schedule_is_due
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +116,12 @@ class ScheduledExecutor:
 
     # ── Публичный API ─────────────────────────────────────────────────────────
 
-    async def publish_post_now(self, post_id: int) -> None:
+    async def publish_post_now(self, post_id: int) -> bool:
         """Немедленно опубликовать запланированный пост, не дожидаясь тика.
 
         Идемпотентно: если пост уже исполнен или отменён — ничего не делает.
         """
-        await self._process_post(post_id)
+        return await self._process_post(post_id)
 
     async def run_forever(self) -> None:
         """Бесконечный цикл поллинга. Отменяется через task.cancel() в lifespan."""
@@ -148,7 +149,9 @@ class ScheduledExecutor:
         moment = now if now is not None else self._clock()
         async with self._factory() as session:
             active = await SchedulerRepository(session).list_scheduled_active()
-        due_ids = [p.id for p in active if _as_naive(p.scheduled_at) <= _as_naive(moment)]
+        due_ids = [
+            p.id for p in active if schedule_is_due(p.scheduled_at, p.scheduled_at_utc, moment)
+        ]
 
         processed: list[int] = []
         for i, post_id in enumerate(due_ids):
@@ -160,20 +163,29 @@ class ScheduledExecutor:
 
     # ── Обработка одного поста ────────────────────────────────────────────────
 
-    async def _process_post(self, post_id: int, *, now: datetime | None = None) -> None:
+    async def _process_post(self, post_id: int, *, now: datetime | None = None) -> bool:
         moment = now if now is not None else self._clock()
         async with self._factory() as session:
             sched_repo = SchedulerRepository(session)
             post = await sched_repo.get(post_id)
             if post is None or str(post.status) != "scheduled":
-                return  # отменён/уже исполнен между сканом и обработкой
-            if not await sched_repo.claim(post_id):
-                return  # атомарный клейм не удался — пост уже взят/изменён
+                return False  # отменён/уже исполнен между сканом и обработкой
+            if now is not None and not schedule_is_due(
+                post.scheduled_at, post.scheduled_at_utc, moment
+            ):
+                return False
+            expected = (post.scheduled_at, post.scheduled_at_utc) if now is not None else None
+            if not await sched_repo.claim(post_id, expected_time=expected):
+                return False  # атомарный клейм не удался — пост уже взят/изменён
 
+            # PATCH may have committed between the first read and claim.
+            # The claimed snapshot is the only one that may be dispatched.
+            post = await sched_repo.get(post_id)
+            assert post is not None
             selections = selections_from_stored(post.channels)
             if not selections:
                 await sched_repo.finalize(post_id, success=True)  # нечего слать → закрыть
-                return
+                return True
 
             pub_repo = PublicationRepository(session, profile_id=post.profile_id)
             pubid = scheduled_publication_id(post_id)
@@ -210,11 +222,12 @@ class ScheduledExecutor:
             # pending → не финализируем: вернуть в SCHEDULED, следующий тик добьёт.
             if flow.pending:
                 await sched_repo.release(post_id)
-                return
+                return True
             # Все каналы терминально-успешны → DONE; есть упавший (после потолка) → FAILED.
             success = all(o.status in _SUCCESS for o in flow.outcomes)
             await sched_repo.finalize(post_id, success=success)
             await self._cleanup_checkpoints(session, post.profile_id, pubid)
+            return True
 
     def _ceiling_step(
         self,

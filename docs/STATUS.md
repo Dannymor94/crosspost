@@ -117,3 +117,79 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 ## UX 2.0 — планирование (2026-11-24)
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
+
+## T-218 first slice (draft)
+Client/admin target intersection, stale request fence and error/empty distinction; no auto-expansion of targets. Shared browser regression added. Draft persistence design only, no durable media or text storage yet. Integration with T-215/216/217 and independent QA pending.
+
+### T-218 second slice (draft)
+Private server-side draft API, scoped identity and revision CAS. No local text storage, no media bytes/URLs. UI autosave not yet wired. Migration integration and auth lifecycle review required. CI pending.
+
+### T-218 third slice (draft)
+Both editors load/autosave scoped drafts with acknowledged revisions, conflict handling, media reselection and navigation warning. Actual browser lifecycle and exact send/clear integration remain pending. CI/QA pending.
+
+### T-218 fourth slice (draft)
+Exact revision clearing on confirmed publication or scheduling receipt, preserve partial/unknown and changed snapshots. Regression tests added; formatter fix; CI, full browser lifecycle and T-216 integration pending.
+
+### T-218 CI regression fix
+1293 passed / 3 failed at d7482b67; pure feedback helper no longer depends on browser globals. Added empty/unknown/deferred regression cases. New CI pending.
+
+## T-217 — первая безопасная часть (draft)
+Create/PATCH use one offset-to-legacy-local helper, avoiding silent offset stripping on new writes. Existing naive rows unchanged. Added explicit UTC instant/DST primitives and read-only active-queue inventory on a backup. UTC storage cutover, profile zone, import, report and frontend still open; no production audit or migration executed. See [T-217.md](T-217.md). CI/QA pending.
+
+### T-217 second slice (draft)
+Opt-in UTC column and API contract, UTC due comparison and time-fenced claim. No rewrite of existing rows. Fixed audit type annotation. CI pending; T-216 migration graph reconciliation and legacy review required before activation.
+
+### T-217 third slice (draft)
+Profile IANA timezone setting (admin write, scoped read), server wall-time resolution, DST rejection and UTC editor create/PATCH. Read-only audit uses SQLAlchemy. Import, full mixed-list display and integration remain open. CI/QA pending.
+
+### T-217 fourth slice (draft)
+Explicit-zone import preview/commit with UTC resolution and row-level DST/past rejection. Fixed previous formatter findings. Legacy import remains compatible. No immutable preview binding or batch idempotency yet; CI/QA pending.
+
+## T-215 — серверный guard (первая часть, PR draft)
+
+Для клиента при включённой модерации запрещены прямой publish, retry, publish-now расписания, PATCH расписания и commit импорта. Поддерживаемый путь — создание scheduled с PENDING_APPROVAL. Администратор не может вручную запустить pending до approve. Это первая часть задачи, не полная приёмка: CAS отмены, границы гонок при смене настройки модерации, UI и проверка всех переходов остаются открыты. CI и независимый QA обязательны. Не изменяет retry SUBMITTED или retention медиа.
+
+### T-215 follow-up (draft)
+CAS отмены сохраняет CANCELLED и медиа; claim и отмена взаимоисключающие. Исполнитель перечитывает снимок после claim, publish-now возвращает 409 при проигранном claim. Клиент читает только scoped настройку модерации и скрывает запрещённые действия; неизвестная настройка блокирует отправку. Политика применяется к новым запросам при проверке на входе; изменение настройки не отзывает уже допущенную операцию. Ретроактивная модерация существующей очереди не реализована. CI и независимое QA pending.
+
+## T-216 — persistent admission ledger (draft, first slice)
+
+Added isolated reservation repository and additive Alembic migration; one winner, stable publication ID, scoped conflict, replay never reacquires after restart. No HTTP route or UI wired yet. No guarantee against current production duplicates until integration and QA. See [T-216.md](T-216.md). Retention policy, scope lifecycle, completion/reconciliation and atomic scheduled insertion require review before activation.
+
+### T-216 second slice (draft)
+Opt-in immediate HTTP admission via Idempotency-Key, with generic replay conflict and no redispatch. Legacy API without key, scheduled, and client UI not protected by this slice. Result recovery still open. CI and integration with T-215 pending.
+
+### T-216 third slice (draft)
+Read-only recovery with separate secret and bound scope; durable safe result summary, unknown if no recorded outcome. No resends, no changes to adapter retry policy. Requires CI/QA; scheduled and UI not integrated.
+
+### T-216 fourth slice (draft)
+Keyed scheduled creation: reservation, post and initial receipt commit together; pre-commit rollback of both rows. Read-only creation receipt recovery. Legacy calls unchanged; keyed external URL media not supported yet. Direct-upload staging may retain orphan media. CI/QA pending.
+
+### T-216 fifth slice (draft)
+Both editors use shared operation guard with local pending proof, browser lock and read-only recovery. No automatic resend. Unknown operation remains blocked; no admin resolution yet. Direct-upload-only keyed scheduling, import and legacy API not covered. CI/QA pending.
+
+## UX-01 integration rehearsal — T-215 + T-216
+
+Separate validation-only branch, not for merge. Inputs: PR #53 HEAD 917f38cd and PR #54 HEAD 31d98d2d, both CI green individually. Combined client guards and backend routes, retained cancellation CAS and operation ledger. Added keyed moderation integration regression. CI pending; owner-assisted recovery, import, mandatory rollout and independent QA remain open. Do not deploy or merge this rehearsal.
+
+## UX-01 integration rehearsal — T-215 + T-216 + T-217
+Validation only; migration chain t216_operation_result → t217_schedule_utc, canonical UTC inside keyed schedule transaction. CI and independent QA pending; legacy migration, batch import idempotency and unknown-operation resolution remain open. Do not merge or deploy this rehearsal.
+
+## UX-01 browser acceptance rehearsal
+Integration 40581ba2 passed CI (run 45781351710); T-218 3dba39f0 passed CI (45781133269). Added dedicated Chromium client-page scenario with pinned Preact/HTM assets and mocked HTTP, no real credentials or external publishes. Exercises actual client.html with draft CAS, reload, missing attachment, unknown send and pending guard. Separate workflow must pass; admin full browser and live owner smoke still pending. Validation branch only; do not deploy or merge.
+
+### Client browser evidence
+Dedicated mocked client browser acceptance passed at 4d2c629b (run 45790819952). General CI failed on formatting of the new test (45790819940); formatter fix and screenshot artifact added. Artifact `ux-client-preview` is generated only by the new run, with synthetic client data. Open Actions run → Artifacts → download ZIP → open PNGs. No hosted interactive preview or production deploy. Admin browser E2E and independent QA remain pending.
+
+### Screenshot run recovery
+Run 45812196139 failed before browser execution: stale Ubuntu package URLs returned HTTP 404. General CI 45812195771 also stopped on test formatting. Pin rehearsal runners to Ubuntu 24.04 and refresh apt indexes before Playwright dependency installation; simplify formatting-sensitive test statements and print formatter diff before checks. Screenshot archive still unverified until new run passes. No changes to main or production.
+
+### Desktop browser rehearsal
+Client browser run 45881474479 passed and artifact 15147880520 was reviewed by owner. General CI 45881474573 stopped on three formatter findings; applied exact diff. Static audit exposed missing admin recovery banner and content-switch selection reset in merged editor; restored them. Added desktop Chromium test of actual admin page, test-only dependency substitution to pinned React UMD, synthetic API, saved draft reload, UTC schedule lost response, recovery unknown and persistent block. No real platform access. New CI/browser runs pending; admin screenshots separate `ux-admin-preview`. Validation branch only, no merge/deploy. Independent QA and remaining UX-01 production gates still open.
+
+### Desktop browser finding (UX-01)
+General CI 45884359516 passed at 05600b97. Client browser passed, but desktop scenario 45884359462 failed because target loading never transitioned to ready: merged loadTargets retained the legacy success/error handler. Restore current-request fencing, eligibility intersection and ready/error transitions. Correct test expectation to actual admin selection key telegram plus separator (U+241F). Failure screenshots enabled. New CI and browser run pending; independent QA remains required; no main or deployment changes.
+
+## UX-01 R3 — технический допуск исправлений, 2026-11-27
+
+На validation-only HEAD `83912d1` exact-head CI зелёный, 1353 теста на каждой версии Python; synthetic Chromium client/admin 5/5 каждый; независимый targeted APPROVE и 3 adversarial API probes. Пять находок закрыты, а не весь UX-01. Подготовлен draft delivery-кандидат с сохранением проверенного кода; исходные PR не закрыты. [Матрица поставки и открытые gates](UX01_DELIVERY.md). Main не менялся, production deploy запрещён до отдельных допусков.

@@ -23,11 +23,12 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from crosspost.channels.validators import PLATFORM_ORDER, VALIDATORS
@@ -37,6 +38,11 @@ from crosspost.content.media_kind import MediaKind, detect_media_kind
 from crosspost.content.validation import ContentValidationError, validate
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import ConnectionState, PublicationStatus
+from crosspost.db.operation_repo import (
+    OperationConflict,
+    OperationRepository,
+    rejected_before_effect,
+)
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.publication_repo import PublicationRepository
 from crosspost.db.target_repo import ChannelTargetRepository
@@ -49,8 +55,27 @@ from crosspost.orchestrator.publish_service import (
 )
 from crosspost.orchestrator.task import new_publication_id
 from crosspost.scheduler.media_sources import MediaSourceError, fetch_media
+from crosspost.scheduler.schedule_time import (
+    legacy_schedule_time,
+    parse_instant,
+    schedule_iso,
+    wall_candidates,
+)
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
+from crosspost.web.moderation import require_unmoderated_action
+from crosspost.web.operation_admission import (
+    current_draft_revision,
+    draft_binding,
+    immediate_fingerprint,
+    operation_conflict,
+    pre_effect_rejections,
+    recovery_digest,
+    reserve_bound_editor,
+    reserve_immediate,
+    validate_operation_key,
+    validate_snapshot,
+)
 from crosspost.web.signed_media import redact_media_tokens
 
 logger = logging.getLogger(__name__)
@@ -183,6 +208,7 @@ class ScheduledOut(BaseModel):
     # Round-trip формы сохраняется; нормализацию в единицы делает executor.
     channels: list[str | dict]
     scheduled_at: str
+    time_basis: str = "legacy_local"
     status: str
     has_article: bool = False  # задан article_text → карточка покажет бейдж «+ статья»
     media_paths: list[str] = []  # пути к файлам медиа (для показа в форме редактирования)
@@ -557,6 +583,11 @@ async def publish_targets(
 async def publish_now(
     profile_id: int,
     session: SessionDep,
+    user: CurrentUser,
+    operation_key: str | None = Header(None, alias="Idempotency-Key"),
+    recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -568,36 +599,110 @@ async def publish_now(
 ) -> PublishResult:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
-
-    selections = _parse_selections(channels)
-    # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
-    _vbytes = _upload_video_bytes(media)
-    await _reject_ineligible(
-        profile_repo,
-        profile_id,
-        selections,
-        content_type,
-        session=session,
-        has_video=_has_video(media, image),
-        video_bytes=_vbytes,
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
     )
+    actor_id = user.id
+    proof = None
+    reservation = None
+    snapshot = None
+    if binding is not None:
+        assert recovery_secret is not None
+        profile = await profile_repo.get_profile(profile_id)
+        assert profile is not None
+        proof = recovery_digest(recovery_secret, user, profile)
+        reservation, snapshot = await reserve_bound_editor(
+            session,
+            binding=binding,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            kind="immediate",
+            fields={
+                "content_type": content_type,
+                "text": text,
+                "title": title,
+                "channels": channels,
+                "article_text": article_text,
+                "link_phrase": link_phrase,
+                "image": image,
+            },
+            media=media,
+            recovery_hash=proof,
+        )
 
-    publication_id = new_publication_id()
-    media_paths = await _save_media(media, publication_id)
-    if not media_paths and image.strip():
-        from crosspost.db.settings_repo import ProfileSettingsRepository
+    async with pre_effect_rejections(
+        session, reservation=reservation, actor_id=actor_id, profile_id=profile_id
+    ):
+        await require_unmoderated_action(user, session, profile_id)
+        selections = _parse_selections(channels)
+        validate_snapshot(
+            snapshot,
+            content_type=content_type,
+            text=text,
+            title=title,
+            article_text=article_text,
+            link_phrase=link_phrase,
+            selections=[(s.channel, s.target_id) for s in selections],
+            has_media=bool(image.strip() or any(upload.filename for upload in media)),
+        )
+        # Отсекаем нерабочие каналы/цели ДО отправки (defense in depth к фронту).
+        _vbytes = _upload_video_bytes(media)
+        await _reject_ineligible(
+            profile_repo,
+            profile_id,
+            selections,
+            content_type,
+            session=session,
+            has_video=_has_video(media, image),
+            video_bytes=_vbytes,
+        )
 
-        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
-        try:
-            async with _make_http_client() as http:
-                fetched = await fetch_media(image.strip(), folder=folder, client=http)
-            media_paths = media_store.save_binaries(
-                [(fetched.filename, fetched.data)], publication_id
+        if binding is None and recovery_secret is not None:
+            if operation_key is None:
+                raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+            profile = await profile_repo.get_profile(profile_id)
+            assert profile is not None
+            proof = recovery_digest(recovery_secret, user, profile)
+
+        if reservation is not None:
+            publication_id = reservation.publication_id
+        elif operation_key is None:
+            publication_id = new_publication_id()
+        else:
+            publication_id = await reserve_immediate(
+                session,
+                actor_id=user.id,
+                profile_id=profile_id,
+                operation_key=operation_key,
+                fields={
+                    "content_type": content_type,
+                    "text": text,
+                    "title": title,
+                    "channels": [[s.channel, s.target_id] for s in selections],
+                    "article_text": article_text,
+                    "link_phrase": link_phrase,
+                    "image": image,
+                },
+                media=media,
+                recovery_hash=proof,
             )
-        except MediaSourceError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    content = _build_content(content_type, text, title, media_paths)
-    _validate_or_422(content)
+        media_paths = await _save_media(media, publication_id)
+        if not media_paths and image.strip():
+            from crosspost.db.settings_repo import ProfileSettingsRepository
+
+            folder = await ProfileSettingsRepository(
+                session, profile_id=profile_id
+            ).get_media_folder()
+            try:
+                async with _make_http_client() as http:
+                    fetched = await fetch_media(image.strip(), folder=folder, client=http)
+                media_paths = media_store.save_binaries(
+                    [(fetched.filename, fetched.data)], publication_id
+                )
+            except MediaSourceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        content = _build_content(content_type, text, title, media_paths)
+        _validate_or_422(content)
 
     svc = _make_service(profile_repo, pub_repo, profile_id)
     outcomes = await svc.publish(
@@ -608,6 +713,21 @@ async def publish_now(
         article_title=title or None,
         link_phrase=link_phrase or None,
     )
+
+    if proof is not None:
+        # Durable evidence before cleanup, logging or returning the response.
+        allowed = {status.value for status in PublicationStatus} | {"deferred", "banned"}
+        summary = [
+            {
+                "channel": o.channel,
+                "target": o.target,
+                "status": o.status if o.status in allowed else "unknown",
+            }
+            for o in outcomes
+        ]
+        await OperationRepository(session, profile_id=profile_id, actor_id=user.id).finish(
+            publication_id, summary
+        )
 
     _RUNS[(profile_id, publication_id)] = _Run(
         content,
@@ -624,6 +744,55 @@ async def publish_now(
         publication_id=publication_id,
         outcomes=[_outcome_out(o, names) for o in outcomes],
     )
+
+
+class OperationResultOut(BaseModel):
+    state: str
+    outcomes: list[dict[str, str]]
+
+
+@router.get("/api/profiles/{profile_id}/operation-status", response_model=OperationResultOut)
+async def operation_status(
+    profile_id: int,
+    session: SessionDep,
+    user: CurrentUser,
+    operation_key: str = Header(..., alias="Idempotency-Key"),
+    recovery_secret: str = Header(..., alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
+) -> OperationResultOut:
+    """Read-only recovery; missing and unauthorized operations are indistinguishable."""
+    profile_repo, _ = _repos(session, profile_id)
+    profile = await profile_repo.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Операция недоступна")
+    proof = recovery_digest(recovery_secret, user, profile)
+    repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
+    )
+    # Observe irreversible exclusion BEFORE proof lookup. If the revision is
+    # stale or the key exists, a later matching reservation cannot appear.
+    excluded = False
+    if binding is not None:
+        current = await current_draft_revision(
+            session, binding, actor_id=user.id, profile_id=profile_id
+        )
+        excluded = current != binding.revision or await repo.exists_in_scope(operation_key)
+    operation = await repo.recover(operation_key, proof)
+    if operation is None:
+        if excluded:
+            return OperationResultOut(state="not_admitted", outcomes=[])
+        raise HTTPException(status_code=404, detail="Операция недоступна")
+    summary = operation.result_summary
+    if rejected_before_effect(summary):
+        assert summary is not None
+        return OperationResultOut(state="rejected", outcomes=summary)
+    if not summary:
+        return OperationResultOut(state="unknown", outcomes=[])
+    # A recorded dispatch result is not a claim of platform delivery.
+    state = "scheduled_created" if operation.kind == "scheduled" else "recorded"
+    return OperationResultOut(state=state, outcomes=summary)
 
 
 @router.get("/api/profiles/{profile_id}/publish/{publication_id}", response_model=list[OutcomeOut])
@@ -651,10 +820,16 @@ async def publish_status(
     response_model=OutcomeOut,
 )
 async def publish_retry(
-    profile_id: int, publication_id: str, channel: str, session: SessionDep, target_id: str = ""
+    profile_id: int,
+    publication_id: str,
+    channel: str,
+    session: SessionDep,
+    user: CurrentUser,
+    target_id: str = "",
 ) -> OutcomeOut:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     run = _RUNS.get((profile_id, publication_id))
     if run is None:
@@ -705,6 +880,11 @@ async def schedule_post(
     session: SessionDep,
     user: CurrentUser,
     scheduled_at: str = Form(...),
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
+    operation_key: str | None = Header(None, alias="Idempotency-Key"),
+    recovery_secret: str | None = Header(None, alias="Idempotency-Recovery"),
+    draft_scope: str | None = Header(None, alias="X-Draft-Scope"),
+    draft_revision: str | None = Header(None, alias="X-Draft-Revision"),
     content_type: str = Form("post"),
     text: str = Form(""),
     title: str | None = Form(None),
@@ -716,53 +896,166 @@ async def schedule_post(
 ) -> ScheduledOut:
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
-
-    try:
-        when = datetime.fromisoformat(scheduled_at)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="scheduled_at: ISO-8601 дата/время") from exc
-    try:
-        channel_list = json.loads(channels)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
-    if not isinstance(channel_list, list) or not channel_list:
-        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
-
-    # Валидируем по единицам, но храним channel_list ВЕРБАТИМ (старый list[str]
-    # или новый list[{channel,target_id}]) — executor нормализует при исполнении,
-    # round-trip формы сохраняется (см. selections_from_stored).
-    try:
-        selections = selections_from_stored(channel_list)
-    except (TypeError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
-    _vbytes = _upload_video_bytes(media)
-    await _reject_ineligible(
-        profile_repo,
-        profile_id,
-        selections,
-        content_type,
-        session=session,
-        has_video=_has_video(media, image),
-        video_bytes=_vbytes,
+    binding = await draft_binding(
+        session, user, profile_id, operation_key, recovery_secret, draft_scope, draft_revision
     )
 
-    key = f"sched-{new_publication_id()}"
-    media_paths = await _save_media(media, key)
-    if not media_paths and image.strip():
-        from crosspost.db.settings_repo import ProfileSettingsRepository
+    operation_repo = OperationRepository(session, profile_id=profile_id, actor_id=user.id)
+    actor_id = user.id
+    proof = None
+    reservation = None
+    snapshot = None
+    if binding is not None:
+        assert recovery_secret is not None
+        profile = await profile_repo.get_profile(profile_id)
+        assert profile is not None
+        proof = recovery_digest(recovery_secret, user, profile)
+        reservation, snapshot = await reserve_bound_editor(
+            session,
+            binding=binding,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            kind="scheduled",
+            fields={
+                "content_type": content_type,
+                "text": text,
+                "title": title,
+                "channels": channels,
+                "scheduled_at": scheduled_at,
+                "time_contract": time_contract,
+                "article_text": article_text,
+                "link_phrase": link_phrase,
+                "image": image,
+            },
+            media=media,
+            recovery_hash=proof,
+        )
 
-        folder = await ProfileSettingsRepository(session, profile_id=profile_id).get_media_folder()
+    async with pre_effect_rejections(
+        session, reservation=reservation, actor_id=actor_id, profile_id=profile_id
+    ):
+        utc_time = None
+        if time_contract not in (None, "utc-v1"):
+            raise HTTPException(status_code=422, detail="Unknown schedule time contract")
         try:
-            async with _make_http_client() as http:
-                fetched = await fetch_media(image.strip(), folder=folder, client=http)
-            media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
-        except MediaSourceError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    content = _build_content(content_type, text, title, media_paths)
-    _validate_or_422(content)
+            if time_contract == "utc-v1":
+                instant = parse_instant(scheduled_at)
+                if instant < datetime.now(UTC) - timedelta(seconds=60):
+                    raise HTTPException(
+                        status_code=422, detail="scheduled_at: нельзя назначить в прошлое"
+                    )
+                utc_time = instant.replace(tzinfo=None)
+                when = instant.astimezone().replace(tzinfo=None)
+            else:
+                when = legacy_schedule_time(scheduled_at)
+        except (ValueError, OverflowError) as exc:
+            raise HTTPException(
+                status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
+            ) from exc
+        try:
+            channel_list = json.loads(channels)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="channels: ожидается JSON-массив") from exc
+        if not isinstance(channel_list, list) or not channel_list:
+            raise HTTPException(status_code=422, detail="Выберите хотя бы один канал")
+
+        # Валидируем по единицам, но храним channel_list ВЕРБАТИМ (старый list[str]
+        # или новый list[{channel,target_id}]) — executor нормализует при исполнении,
+        # round-trip формы сохраняется (см. selections_from_stored).
+        try:
+            selections = selections_from_stored(channel_list)
+        except (TypeError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail="channels: некорректный элемент") from exc
+        validate_snapshot(
+            snapshot,
+            content_type=content_type,
+            text=text,
+            title=title,
+            article_text=article_text,
+            link_phrase=link_phrase,
+            selections=[(s.channel, s.target_id) for s in selections],
+            has_media=bool(image.strip() or any(upload.filename for upload in media)),
+        )
+        _vbytes = _upload_video_bytes(media)
+        await _reject_ineligible(
+            profile_repo,
+            profile_id,
+            selections,
+            content_type,
+            session=session,
+            has_video=_has_video(media, image),
+            video_bytes=_vbytes,
+        )
+
+        fingerprint = None
+        if recovery_secret is not None and operation_key is None:
+            raise HTTPException(status_code=422, detail="Idempotency-Key is required")
+        if operation_key is not None:
+            validate_operation_key(operation_key)
+            if image.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Для защищённого планирования загрузите файл напрямую.",
+                )
+            if binding is None and await operation_repo.exists(operation_key):
+                raise operation_conflict()
+            if binding is None and recovery_secret is not None:
+                profile = await profile_repo.get_profile(profile_id)
+                assert profile is not None
+                proof = recovery_digest(recovery_secret, user, profile)
+            if binding is None:
+                fingerprint = await immediate_fingerprint(
+                    {
+                        "content_type": content_type,
+                        "text": text,
+                        "title": title,
+                        "channels": channel_list,
+                        "scheduled_at": schedule_iso(when, utc_time),
+                        "time_contract": time_contract,
+                        "article_text": article_text,
+                        "link_phrase": link_phrase,
+                        "image": image,
+                    },
+                    media,
+                    kind="scheduled",
+                )
+
+        key = f"sched-{new_publication_id()}"
+        media_paths = await _save_media(media, key)
+        if not media_paths and image.strip():
+            from crosspost.db.settings_repo import ProfileSettingsRepository
+
+            folder = await ProfileSettingsRepository(
+                session, profile_id=profile_id
+            ).get_media_folder()
+            try:
+                async with _make_http_client() as http:
+                    fetched = await fetch_media(image.strip(), folder=folder, client=http)
+                media_paths = media_store.save_binaries([(fetched.filename, fetched.data)], key)
+            except MediaSourceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        content = _build_content(content_type, text, title, media_paths)
+        _validate_or_422(content)
 
     from crosspost.db.models import Role, ScheduledPostStatus
     from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    if operation_key is not None and reservation is None:
+        assert fingerprint is not None
+        await session.rollback()
+        try:
+            reservation = await operation_repo.reserve(
+                operation_key,
+                kind="scheduled",
+                fingerprint=fingerprint,
+                recovery_hash=proof,
+                commit=False,
+            )
+        except OperationConflict as exc:
+            raise operation_conflict() from exc
+        if not reservation.acquired:
+            await session.rollback()
+            raise operation_conflict()
 
     initial_status = ScheduledPostStatus.SCHEDULED
     if user.role == Role.CLIENT:
@@ -779,10 +1072,19 @@ async def schedule_post(
         media_paths=media_paths,
         channels=channel_list,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         article_text=article_text or None,
         link_phrase=link_phrase or None,
         initial_status=initial_status,
+        commit=reservation is None,
     )
+    if reservation is not None:
+        response = _scheduled_out(post)
+        await operation_repo.finish(
+            reservation.publication_id,
+            [{"scheduled_id": str(post.id), "status": str(post.status)}],
+        )
+        return response
     return _scheduled_out(post)
 
 
@@ -847,7 +1149,7 @@ async def scheduled_report(
                 id=post.id,
                 content_type=post.content_type,
                 text=post.text,
-                scheduled_at=post.scheduled_at.isoformat(),
+                scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
                 cursor=post.published_at.isoformat(),
                 overall=_overall_status(outcomes),
                 outcomes=outcomes,
@@ -956,16 +1258,25 @@ RescheduleBody = PatchScheduledBody
 
 @router.patch("/api/profiles/{profile_id}/scheduled/{scheduled_id}", response_model=ScheduledOut)
 async def reschedule(
-    profile_id: int, scheduled_id: int, body: PatchScheduledBody, session: SessionDep
+    profile_id: int,
+    scheduled_id: int,
+    body: PatchScheduledBody,
+    session: SessionDep,
+    user: CurrentUser,
+    time_contract: str | None = Header(None, alias="X-Schedule-Time-Contract"),
 ) -> ScheduledOut:
     """Редактировать запланированный пост: текст, цели, время. Изоляция по profile_id."""
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     # 404 если пост не найден или чужой профиль — до CAS, чтобы не палить существование.
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+
+    if str(post.status) not in {"scheduled", "failed"}:
+        raise HTTPException(status_code=409, detail="Пост не подлежит редактированию")
 
     # Валидация каналов и capability ДО CAS и ДО скачивания медиа — 422 не меняет данные.
     effective_channels = body.channels if body.channels is not None else list(post.channels or [])
@@ -979,18 +1290,27 @@ async def reschedule(
         )
 
     when: datetime | None = None
+    utc_time: datetime | None = None
+    if time_contract not in (None, "utc-v1"):
+        raise HTTPException(status_code=422, detail="Unknown schedule time contract")
     if body.scheduled_at is not None:
         try:
-            when = datetime.fromisoformat(body.scheduled_at)
-        except ValueError as exc:
+            if time_contract == "utc-v1" or post.scheduled_at_utc is not None:
+                instant = parse_instant(body.scheduled_at)
+                utc_time = instant.replace(tzinfo=None)
+                when = instant.astimezone().replace(tzinfo=None)
+            else:
+                when = legacy_schedule_time(body.scheduled_at)
+        except (ValueError, OverflowError) as exc:
             raise HTTPException(
-                status_code=422, detail="scheduled_at: ISO-8601 дата/время"
+                status_code=422, detail="scheduled_at: некорректное или неоднозначное время"
             ) from exc
-        # Нормализуем в naive-local (конвенция хранения — как datetime.combine в import_plan):
-        # aware → конвертируем в локальное время системы, потом снимаем tzinfo.
-        # Голый .replace(tzinfo=None) НЕЛЬЗЯ — он молча сдвигает стену на величину offset.
-        when = when.astimezone().replace(tzinfo=None) if when.tzinfo is not None else when
-        if when < datetime.now() - timedelta(seconds=60):
+        past = (
+            utc_time < datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=60)
+            if utc_time is not None
+            else when < datetime.now() - timedelta(seconds=60)
+        )
+        if past:
             raise HTTPException(status_code=422, detail="scheduled_at: нельзя назначить в прошлое")
 
     # Разрешаем медиа ДО CAS: если источник невалиден — 422 без записи в БД.
@@ -1013,6 +1333,7 @@ async def reschedule(
         text=body.text,
         channels=body.channels,
         scheduled_at=when,
+        scheduled_at_utc=utc_time,
         media_paths=new_media_paths,
         rewind_failed=True,
     )
@@ -1035,14 +1356,15 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
-    await pub_repo.cancel_scheduled(scheduled_id)
+    if not await pub_repo.cancel_scheduled(scheduled_id):
+        raise HTTPException(status_code=409, detail="Пост уже исполняется или не подлежит отмене")
     # T-209: media not deleted on cancel — retained indefinitely until T-214.
     return {"cancelled": True}
 
 
 @router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/publish-now")
 async def publish_scheduled_now(
-    profile_id: int, scheduled_id: int, request: Request, session: SessionDep
+    profile_id: int, scheduled_id: int, request: Request, session: SessionDep, user: CurrentUser
 ) -> dict:
     """Немедленно опубликовать запланированный пост, не дожидаясь тика исполнителя.
 
@@ -1050,10 +1372,13 @@ async def publish_scheduled_now(
     """
     profile_repo, pub_repo = _repos(session, profile_id)
     await _require_profile(profile_repo, profile_id)
+    await require_unmoderated_action(user, session, profile_id)
 
     post = await pub_repo.get_scheduled(scheduled_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Запланированный пост не найден")
+    if str(post.status) != "scheduled":
+        raise HTTPException(status_code=409, detail="Пост не готов к немедленному исполнению")
 
     executor = getattr(request.app.state, "executor", None)
     if executor is None:
@@ -1061,7 +1386,8 @@ async def publish_scheduled_now(
             status_code=503, detail="Исполнитель расписания недоступен (SCHEDULER_ENABLED=false)"
         )
 
-    await executor.publish_post_now(scheduled_id)
+    if not await executor.publish_post_now(scheduled_id):
+        raise HTTPException(status_code=409, detail="Пост уже взят в работу или отменён")
 
     # Читаем итоги из БД (executor пишет в свои сессии, коммитит до return)
     from crosspost.scheduler.executor import scheduled_publication_id
@@ -1247,6 +1573,87 @@ def _overall_status(outcomes: list[OutcomeOut]) -> str:
     return "done"
 
 
+# ── Profile schedule timezone ──────────────────────────────────────────────
+
+
+class ScheduleTimezone(BaseModel):
+    zone: str | None = None
+
+
+class ScheduleWallTime(BaseModel):
+    wall: str
+    zone: str
+
+
+class ResolvedScheduleTime(BaseModel):
+    instant: str
+
+
+def _schedule_zone(value: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(value)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail="Некорректный часовой пояс IANA") from exc
+
+
+@router.get("/api/profiles/{profile_id}/settings/timezone", response_model=ScheduleTimezone)
+async def get_schedule_timezone(profile_id: int, session: SessionDep) -> ScheduleTimezone:
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _ = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    zone = await settings.get_schedule_timezone()
+    return ScheduleTimezone(zone=zone)
+
+
+@router.put("/api/profiles/{profile_id}/settings/timezone", response_model=ScheduleTimezone)
+async def set_schedule_timezone(
+    profile_id: int, body: ScheduleTimezone, session: SessionDep, _: AdminUser
+) -> ScheduleTimezone:
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _pub_repo = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    if body.zone is None:
+        raise HTTPException(status_code=422, detail="Укажите часовой пояс")
+    _schedule_zone(body.zone)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    await settings.set_schedule_timezone(body.zone)
+    return body
+
+
+@router.post(
+    "/api/profiles/{profile_id}/scheduled/resolve-time", response_model=ResolvedScheduleTime
+)
+async def resolve_schedule_time(
+    profile_id: int, body: ScheduleWallTime, session: SessionDep
+) -> ResolvedScheduleTime:
+    """Resolve only the explicitly displayed profile zone; never select a DST fold."""
+    from crosspost.db.settings_repo import ProfileSettingsRepository
+
+    profile_repo, _ = _repos(session, profile_id)
+    await _require_profile(profile_repo, profile_id)
+    settings = ProfileSettingsRepository(session, profile_id=profile_id)
+    configured = await settings.get_schedule_timezone()
+    if configured is None or configured != body.zone:
+        raise HTTPException(status_code=409, detail="Часовой пояс изменился или не настроен")
+    zone = _schedule_zone(configured)
+    try:
+        wall = datetime.fromisoformat(body.wall)
+        if "T" not in body.wall:
+            raise ValueError("Expected local date and time")
+        candidates = wall_candidates(wall, zone)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail="Некорректное местное время") from exc
+    if len(candidates) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Это время пропущено или повторяется при переводе часов. Выберите другое.",
+        )
+    return ResolvedScheduleTime(instant=candidates[0].isoformat())
+
+
 # ── Модерация клиентских постов (только admin) ────────────────────────────────
 
 
@@ -1255,8 +1662,8 @@ class ModerationSetting(BaseModel):
 
 
 @router.get("/api/profiles/{profile_id}/settings/moderation", response_model=ModerationSetting)
-async def get_moderation(profile_id: int, session: SessionDep, _: AdminUser) -> ModerationSetting:
-    """Настройка режима модерации клиентских постов (только admin)."""
+async def get_moderation(profile_id: int, session: SessionDep) -> ModerationSetting:
+    """Read-only setting for the scoped profile; modification is admin-only."""
     from crosspost.db.settings_repo import ProfileSettingsRepository
 
     enabled = await ProfileSettingsRepository(
@@ -1334,7 +1741,8 @@ def _scheduled_out(post) -> ScheduledOut:
         text=post.text,
         title=post.title,
         channels=list(post.channels or []),
-        scheduled_at=post.scheduled_at.isoformat(),
+        scheduled_at=schedule_iso(post.scheduled_at, post.scheduled_at_utc),
+        time_basis="utc" if post.scheduled_at_utc is not None else "legacy_local",
         status=str(post.status),
         has_article=bool(post.article_text),
         media_paths=list(post.media_paths or []),

@@ -71,6 +71,16 @@ _EXPECTED: list[tuple[str, str]] = [
     ("DELETE", "/api/profiles/{*}/channels/{*}/targets/{*}"),
     ("POST", "/api/profiles/{*}/channels/telegram/targets/from-link"),
     ("POST", "/api/profiles/{*}/channels/telegram/targets/bulk"),
+    # editor draft
+    ("GET", "/api/profiles/{*}/editor-draft"),
+    ("PUT", "/api/profiles/{*}/editor-draft"),
+    # UX-01 operation recovery and scheduling settings
+    ("GET", "/api/profiles/{*}/operation-status"),
+    ("GET", "/api/profiles/{*}/settings/timezone"),
+    ("PUT", "/api/profiles/{*}/settings/timezone"),
+    ("POST", "/api/profiles/{*}/scheduled/resolve-time"),
+    ("GET", "/api/profiles/{*}/settings/moderation"),
+    ("PUT", "/api/profiles/{*}/settings/moderation"),
     # publish
     ("GET", "/api/profiles/{*}/publish/targets"),
     ("POST", "/api/profiles/{*}/publish/{*}/retry/{*}"),

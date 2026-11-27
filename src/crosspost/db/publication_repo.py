@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from crosspost.db.models import (
     ScheduledPost,
     ScheduledPostStatus,
 )
+from crosspost.db.schedule_order import order_schedules
 
 
 class PublicationRepository:
@@ -206,6 +207,8 @@ class PublicationRepository:
         article_text: str | None = None,
         link_phrase: str | None = None,
         initial_status: ScheduledPostStatus = ScheduledPostStatus.SCHEDULED,
+        scheduled_at_utc: datetime | None = None,
+        commit: bool = True,
     ) -> ScheduledPost:
         post = ScheduledPost(
             profile_id=self._pid,
@@ -215,12 +218,16 @@ class PublicationRepository:
             media_paths=media_paths,
             channels=channels,
             scheduled_at=scheduled_at,
+            scheduled_at_utc=scheduled_at_utc,
             article_text=article_text,
             link_phrase=link_phrase,
             status=initial_status,
         )
         self._s.add(post)
-        await self._s.commit()
+        if commit:
+            await self._s.commit()
+        else:
+            await self._s.flush()
         await self._s.refresh(post)
         return post
 
@@ -234,9 +241,9 @@ class PublicationRepository:
                     (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PENDING_APPROVAL)
                 ),
             )
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def list_pending_approval(self) -> list[ScheduledPost]:
         """Посты, ожидающие одобрения администратора (PENDING_APPROVAL), по времени."""
@@ -246,9 +253,9 @@ class PublicationRepository:
                 ScheduledPost.profile_id == self._pid,
                 ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
             )
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def approve_pending(self, scheduled_id: int) -> bool:
         """CAS: PENDING_APPROVAL → SCHEDULED. Возвращает True если переход прошёл."""
@@ -330,6 +337,7 @@ class PublicationRepository:
             .where(
                 ScheduledPost.id == scheduled_id,
                 ScheduledPost.profile_id == self._pid,
+                ScheduledPost.scheduled_at_utc.is_(None),
             )
             .values(scheduled_at=new_time)
         )
@@ -365,6 +373,7 @@ class PublicationRepository:
         text: str | None = None,
         channels: list | None = None,
         scheduled_at: datetime | None = None,
+        scheduled_at_utc: datetime | None = None,
         media_paths: list[str] | None = None,
         rewind_failed: bool = False,
     ) -> bool:
@@ -378,7 +387,6 @@ class PublicationRepository:
         _editable = (
             ScheduledPostStatus.SCHEDULED.value,
             ScheduledPostStatus.FAILED.value,
-            ScheduledPostStatus.PENDING_APPROVAL.value,
         )
         values: dict = {}
         if text is not None:
@@ -387,6 +395,7 @@ class PublicationRepository:
             values["channels"] = channels
         if scheduled_at is not None:
             values["scheduled_at"] = scheduled_at
+            values["scheduled_at_utc"] = scheduled_at_utc
         if media_paths is not None:
             values["media_paths"] = media_paths
 
@@ -407,6 +416,8 @@ class PublicationRepository:
             .values(**values)
             .returning(ScheduledPost.status)
         )
+        if scheduled_at is not None and scheduled_at_utc is None:
+            stmt = stmt.where(ScheduledPost.scheduled_at_utc.is_(None))
         result = await self._s.execute(stmt)
         row = result.fetchone()
         if row is None:
@@ -455,12 +466,17 @@ class PublicationRepository:
         return result.scalar_one_or_none() is not None
 
     async def cancel_scheduled(self, scheduled_id: int) -> bool:
-        """Удалить запланированный пост профиля. True если что-то удалено."""
+        """CAS: active post → CANCELLED; retain history and media."""
         result = await self._s.execute(
-            delete(ScheduledPost).where(
+            sql_update(ScheduledPost)
+            .where(
                 ScheduledPost.id == scheduled_id,
                 ScheduledPost.profile_id == self._pid,
+                ScheduledPost.status.in_(
+                    (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PENDING_APPROVAL)
+                ),
             )
+            .values(status=ScheduledPostStatus.CANCELLED)
         )
         await self._s.commit()
         # rowcount есть у CursorResult (DELETE), но session.execute типизирован как

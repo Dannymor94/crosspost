@@ -141,3 +141,99 @@ def test_reject_body_optional(seeded_app):
     # Post doesn't exist → 404/409, but no 422 (body parsing should succeed)
     r = c.post("/api/profiles/1/scheduled/9999/reject", json={})
     assert r.status_code in (404, 409)
+
+
+def test_private_draft_cas_and_account_isolation(seeded_app):
+    c = seeded_app
+    c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    url = "/api/profiles/1/editor-draft"
+    initial = c.get(url)
+    assert initial.status_code == 200, initial.text
+    assert initial.headers["cache-control"] == "no-store"
+    first = initial.json()
+    assert first["revision"] is None
+    payload = {**first, "data": {"text": "private admin draft", "media_required": True}}
+    saved = c.put(url, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision"] is not None
+    assert c.put(url, json=payload).status_code == 409
+    assert c.put(url, json={**first, "data": None}).status_code == 409
+    assert c.get(url).json()["data"]["text"] == "private admin draft"
+    c.post("/api/auth/logout")
+    assert c.get(url).status_code == 401
+    c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    other = c.get(url).json()
+    assert other["data"] is None
+    assert other["scope"] != first["scope"]
+    assert c.put(url, json=saved.json()).status_code == 409
+    assert c.get("/api/profiles/9999/editor-draft").status_code == 403
+    client_saved = c.put(url, json={**other, "data": {"text": "client draft"}})
+    assert client_saved.status_code == 200, client_saved.text
+    c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    current = c.get(url).json()
+    assert current["data"]["text"] == "private admin draft"
+    cleared = c.put(url, json={**current, "data": None})
+    assert cleared.status_code == 200
+    assert c.get(url).json()["data"] is None
+    assert c.put(url, json=current).status_code == 409
+
+
+def test_schedule_timezone_scope_and_dst_resolution(seeded_app):
+    c = seeded_app
+    login = c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    assert login.status_code == 200
+    base = "/api/profiles/1"
+    assert c.get(base + "/settings/timezone").json() == {"zone": None}
+    assert c.put(base + "/settings/timezone", json={"zone": "Invalid/Zone"}).status_code == 422
+    assert c.put(base + "/settings/timezone", json={"zone": "Europe/Berlin"}).status_code == 200
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
+    assert c.get(base + "/settings/timezone").json() == {"zone": "Europe/Berlin"}
+    assert c.put(base + "/settings/timezone", json={"zone": "UTC"}).status_code == 403
+    assert c.get("/api/profiles/9999/settings/timezone").status_code == 403
+    url = base + "/scheduled/resolve-time"
+    for wall in ["2027-03-28T02:30", "2027-10-31T02:30"]:
+        assert c.post(url, json={"wall": wall, "zone": "Europe/Berlin"}).status_code == 422
+    result = c.post(url, json={"wall": "2027-01-01T12:00", "zone": "Europe/Berlin"})
+    assert result.json() == {"instant": "2027-01-01T11:00:00+00:00"}
+    assert c.post(url, json={"wall": "2027-01-01T12:00", "zone": "UTC"}).status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("POST", "/publish", {"data": {"channels": '["telegram"]', "text": "test"}}),
+        ("POST", "/publish/example/retry/telegram", {}),
+        ("POST", "/scheduled/1/publish-now", {}),
+        ("PATCH", "/scheduled/1", {"json": {"text": "changed"}}),
+        ("POST", "/import/commit", {"data": {"channels": '["telegram"]'}}),
+    ],
+)
+def test_moderated_client_cannot_bypass_approval(seeded_app, method, path, kwargs):
+    c = seeded_app
+    login = c.post("/api/auth/login", json={"login": "admin", "password": "adminpass"})
+    assert login.status_code == 200
+    assert c.put("/api/profiles/1/settings/moderation", json={"enabled": True}).status_code == 200
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
+    response = c.request(method, "/api/profiles/1" + path, **kwargs)
+    assert response.status_code == 403
+    assert "модерац" in response.json()["detail"].lower()
+
+
+def test_unmoderated_client_keeps_direct_publish_validation(seeded_app):
+    c = seeded_app
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
+    response = c.post("/api/profiles/1/publish", data={"channels": "[]", "text": "test"})
+    assert response.status_code == 422
+
+
+def test_client_can_read_own_moderation_but_not_foreign(seeded_app):
+    c = seeded_app
+    login = c.post("/api/auth/login", json={"login": "client1", "password": "clientpass"})
+    assert login.status_code == 200
+    own = c.get("/api/profiles/1/settings/moderation")
+    assert own.status_code == 200
+    assert own.json() == {"enabled": False}
+    assert c.get("/api/profiles/9999/settings/moderation").status_code == 403

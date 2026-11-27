@@ -1238,6 +1238,10 @@ body {
 <body>
 <div id="root"></div>
 
+<script src="/static/operation-guard.js"></script>
+<script src="/static/schedule-time.js"></script>
+<script src="/static/editor-targets.js"></script>
+<script src="/static/editor-draft.js"></script>
 <script type="module">
 // ── React from CDN (no build step) ────────────────────────────────────────
 const React = await import("https://esm.sh/react@18");
@@ -3065,20 +3069,44 @@ function OutcomeCard({ o, onRetry, retrying }) {
   );
 }
 
-function ScheduleModal({ onClose, onConfirm }) {
-  const now = new Date(Date.now() + 3600_000);
-  const pad = (n) => String(n).padStart(2, "0");
-  const local = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const [when, setWhen] = useState(local);
+function ScheduleModal({ base, onClose, onConfirm }) {
+  const time = window.CrosspostTime;
+  const [zone, setZone] = useState(null);
+  const [draftZone, setDraftZone] = useState(time.deviceZone());
+  const [when, setWhen] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    time.get(base).then(z => { if (active) { setZone(z); if (z) setDraftZone(z); } })
+      .catch(e => { if (active) setError(e.message); });
+    return () => { active = false; };
+  }, [base]);
+  async function saveZone() {
+    setBusy(true); setError("");
+    try { setZone(await time.set(base, draftZone.trim())); setWhen(""); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+  async function confirm() {
+    setBusy(true); setError("");
+    try { const instant = await time.resolve(base, when, zone); onConfirm(instant); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
   return h(Modal, { title: "Запланировать публикацию", onClose },
     h("div", { className: "form-group" },
+      h("label", { className: "form-label" }, "Часовой пояс профиля"),
+      h("input", { className: "form-input", value: draftZone, onChange: e => setDraftZone(e.target.value) }),
+      h("button", { className: "btn btn-ghost", disabled: busy || !draftZone.trim(), onClick: saveZone }, "Сохранить часовой пояс"),
+      h("p", { className: "form-hint" }, zone ? "Выбор времени: " + zone : "Подтвердите часовой пояс. Предложен пояс устройства."),
       h("label", { className: "form-label", htmlFor: "sched-when" }, "Дата и время"),
       h("input", { id: "sched-when", className: "form-input", type: "datetime-local",
-        value: when, onChange: (e) => setWhen(e.target.value) }),
-      h("p", { className: "form-hint" }, "Пост уйдёт сам в указанное время (местное). Планировщик публикует по расписанию."),
+        value: when, disabled: !zone || busy || draftZone.trim() !== zone, onChange: e => setWhen(e.target.value) }),
+      error && h("p", { className: "outcome-err", role: "alert" }, error),
     ),
     h("div", { className: "flex-gap mt-2" },
-      h("button", { className: "btn btn-primary", onClick: () => onConfirm(when), disabled: !when }, "Сохранить в план"),
+      h("button", { className: "btn btn-primary", onClick: confirm, disabled: busy || !when || !zone || draftZone.trim() !== zone }, "Сохранить в план"),
       h("button", { className: "btn btn-ghost", onClick: onClose }, "Отмена"),
     ),
   );
@@ -3168,7 +3196,7 @@ function BlockPreview({ profileId, text }) {
   );
 }
 
-function PublishView({ profile }) {
+function PublishView({ profile, user }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
   const [articleTitle, setArticleTitle] = useState("");
@@ -3183,6 +3211,9 @@ function PublishView({ profile }) {
   const [uploadProgress, setUploadProgress] = useState(null); // 0-100 | null
   const [targets, setTargets] = useState(null);
   const [selected, setSelected] = useState(new Set());
+  const [targetState, setTargetState] = useState('loading');
+  const targetFence = useRef(window.CrosspostEditorTargets.latest());
+  const mediaFence = useRef(window.CrosspostEditorTargets.latest());
   const [outcomes, setOutcomes] = useState(null);
   const [pubId, setPubId] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -3193,18 +3224,54 @@ function PublishView({ profile }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [alert, setAlert] = useState(null);
   const base = `/api/profiles/${profile.id}`;
+  const ops = window.CrosspostOperations;
+  const opScope = ops.scope(user, profile.id);
+  const [pendingOperation, setPendingOperation] = useState(() => ops.pending(opScope));
+  const [receipt, setReceipt] = useState(null);
+  const operationBusy = useRef(false);
+  async function checkOperation() {
+    if (operationBusy.current) return;
+    try { setReceipt(await ops.recover(opScope, base)); }
+    catch (e) { setAlert({type: "error", text: e.message}); }
+  }
+  async function acknowledgeOperation() {
+    const matched = draft.markRecovered(receipt);
+    await ops.acknowledge(opScope, receipt);
+    setPendingOperation(ops.pending(opScope)); setReceipt(null);
+    if (!matched) draft.reload();
+    loadScheduled();
+  }
+
+  const [mediaMissing, setMediaMissing] = useState(false);
+  const draft = window.CrosspostDraft.useDraft({useState,useRef,useEffect}, {
+    base, actor: user.id, paused: busy, mediaIdentity: mediaFile || mediaUrl,
+    data: {content_type:contentType,text,article_title:articleTitle,article_text:articleText,link_phrase:linkPhrase,targets:[...selected],media_required:!!mediaFile||!!mediaUrl.trim()||mediaMissing},
+    hydrate: value => {
+      setContentType(value.content_type); setText(value.text); setArticleTitle(value.article_title);
+      setArticleText(value.article_text); setLinkPhrase(value.link_phrase); setSelected(new Set(value.targets));
+      mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+      setMediaFile(null); setMediaUrl(''); setMediaThumb(null); setMediaMissing(value.media_required);
+    }
+  });
 
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
 
   const loadTargets = useCallback(async (hv) => {
+    const current = targetFence.current.begin();
+    setTargetState('loading');
     const videoFlag = hv != null ? hv : ((mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl));
     try {
       const t = await api.get(`${base}/publish/targets?content_type=${contentType}&has_video=${videoFlag ? "true" : "false"}`);
+      if (!current()) return;
+      if (!Array.isArray(t)) throw new Error("invalid targets");
       setTargets(t);
-      // Отсеять выбор, ставший недоступным (цель удалили / канал отвалился).
-      setSelected((prev) => new Set([...prev].filter((k) =>
-        t.find((x) => selKey(x.channel, x.target_id) === k && x.eligible))));
-    } catch (ex) { setAlert({ type: "error", text: ex.message }); }
+      setSelected(prev => new Set(window.CrosspostEditorTargets.intersection(
+        prev, t, x => selKey(x.channel, x.target_id)
+      ).retained));
+      setTargetState("ready");
+    } catch {
+      if (current()) setTargetState("error");
+    }
   }, [base, contentType, mediaFile, mediaUrl]);
 
   const loadScheduled = useCallback(async () => {
@@ -3249,7 +3316,9 @@ function PublishView({ profile }) {
     } catch (_) {}
   }, [base]);
 
-  useEffect(() => { loadTargets(); loadScheduled(); loadReportInitial(); }, [loadTargets, loadScheduled, loadReportInitial]);
+  useEffect(() => { if (draft.loaded) loadTargets(); return () => targetFence.current.invalidate(); }, [loadTargets, draft.loaded]);
+  useEffect(() => { loadScheduled(); loadReportInitial(); }, [loadScheduled, loadReportInitial]);
+  useEffect(() => () => { mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current); }, []);
 
   // Поллинг без перезагрузки: планировщик — фоновый процесс, отправляет посты сам.
   // Очередь меняется часто → поллим каждые 10 сек; журнал — только инкремент (since).
@@ -3268,6 +3337,7 @@ function PublishView({ profile }) {
   }, [loadScheduled, loadReportDelta]);
 
   function toggle(t) {
+    if (targetState !== "ready") return;
     const k = selKey(t.channel, t.target_id);
     setSelected((prev) => {
       const next = new Set(prev);
@@ -3277,14 +3347,18 @@ function PublishView({ profile }) {
   }
 
   function onMediaFileChange(f) {
-    setMediaFile(f);
+    mediaFence.current.invalidate(); clearTimeout(mediaDebounceRef.current);
+    targetFence.current.invalidate(); setTargetState('loading');
+    setMediaFile(f); setMediaMissing(false);
     if (f) { setMediaUrl(""); setMediaThumb(null); setMediaErr(""); }
     // reload targets with updated video flag
     loadTargets(f ? isVideoFile(f) : false);
   }
 
   function onMediaUrlChange(url) {
-    setMediaUrl(url);
+    const current = mediaFence.current.begin();
+    targetFence.current.invalidate(); setTargetState('loading');
+    setMediaUrl(url); if (url.trim()) setMediaMissing(false);
     setMediaThumb(null);
     setMediaErr("");
     clearTimeout(mediaDebounceRef.current);
@@ -3302,12 +3376,11 @@ function PublishView({ profile }) {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
         const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
-        if (r.ok) { setMediaThumb(await r.json()); }
-        else {
-          const b = await r.json().catch(() => ({ detail: r.statusText }));
-          setMediaErr(b.detail || "Не удалось загрузить изображение");
-        }
-      } catch (ex) { setMediaErr(ex.message); }
+        const b = await r.json().catch(() => null);
+        if (!current()) return;
+        if (r.ok && b) setMediaThumb(b);
+        else setMediaErr("Не удалось загрузить изображение");
+      } catch { if (current()) setMediaErr("Не удалось загрузить изображение"); }
     }, 600);
   }
 
@@ -3331,7 +3404,7 @@ function PublishView({ profile }) {
   const hasContent = contentType === "article"
     ? articleTitle.trim().length > 0 && articleText.trim().length > 0
     : text.trim().length > 0 || mediaFile != null || mediaUrl.trim().length > 0;
-  const canSend = selected.size > 0 && hasContent && !busy;
+  const canSend = selected.size > 0 && hasContent && !busy && !pendingOperation && targetState === 'ready' && draft.canSend && !mediaMissing;
 
   function validateArticle() {
     if (contentType !== "article") return true;
@@ -3340,11 +3413,12 @@ function PublishView({ profile }) {
     return true;
   }
 
-  function postFormWithProgress(url, fd) {
+  function postFormWithProgress(url, fd, headers) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
       xhr.withCredentials = true;
+      Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
       };
@@ -3364,15 +3438,28 @@ function PublishView({ profile }) {
   }
 
   async function publishNow() {
-    if (!validateArticle()) return;
+    if (operationBusy.current || !canSend || !validateArticle()) return;
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
+    operationBusy.current = true;
     setBusy(true); setAlert(null); setOutcomes(null); setUploadProgress(hasVideo ? 0 : null);
     try {
-      const res = await postFormWithProgress(`${base}/publish`, buildForm());
+      const res = await ops.run(opScope, async headers => {
+        const value = await postFormWithProgress(`${base}/publish`, buildForm(), headers);
+        if (!value?.publication_id || !Array.isArray(value.outcomes) || !value.outcomes.length)
+          throw new Error("Результат неизвестен.");
+        return value;
+      }, ops.publicationExpectation([...selected].map(parseSelKey), contentType === "article" && !!articleText.trim()), submittedDraft);
+      draft.markRecorded(submittedDraft);
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
+      if (window.CrosspostDraft.confirmed(res.outcomes)) {
+        if (await draft.clearSubmitted(submittedDraft)) await ops.complete(opScope, res);
+        else setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
+      } else setAlert({type:"error", text:"Не все публикации подтверждены. Черновик сохранён."});
       loadTargets();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); setUploadProgress(null); }
+    finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
   }
 
   async function retry(o) {
@@ -3388,34 +3475,52 @@ function PublishView({ profile }) {
   }
 
   async function doSchedule(whenLocal) {
-    if (!validateArticle()) { setShowSchedule(false); return; }
+    if (operationBusy.current || !canSend || !validateArticle()) { setShowSchedule(false); return; }
+    const submittedDraft = draft.capture();
+    if (!submittedDraft) return;
+    if (contentType === 'post' && mediaUrl.trim()) { setShowSchedule(false); setAlert({type: "error", text: "Для защищённого планирования загрузите файл напрямую."}); return; }
+    operationBusy.current = true;
     setShowSchedule(false); setBusy(true); setAlert(null); setUploadProgress(hasVideo ? 0 : null);
     try {
       // naive-local (без Z): исполнитель сравнивает по локальному времени.
-      await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }));
-      setAlert({ type: "success", text: "Пост запланирован." });
-      setText(""); setArticleTitle(""); setArticleText(""); setLinkPhrase(""); setMediaFile(null); setOutcomes(null); setTitleErr("");
-      setMediaUrl(""); setMediaThumb(null); setMediaErr("");
+      const post = await ops.run(opScope, async headers => {
+        const value = await postFormWithProgress(`${base}/scheduled`, buildForm({ scheduled_at: whenLocal }), {...headers, "X-Schedule-Time-Contract": "utc-v1"});
+        if (!value?.id) throw new Error("Результат неизвестен.");
+        return value;
+      }, {kind:"scheduled"}, submittedDraft);
+      draft.markRecorded(submittedDraft);
+      if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
+      const cleared = await draft.clearSubmitted(submittedDraft);
+      if (cleared) await ops.complete(opScope, post);
+      setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }
-    finally { setBusy(false); setUploadProgress(null); }
+    finally { operationBusy.current = false; setPendingOperation(ops.pending(opScope)); setBusy(false); setUploadProgress(null); }
   }
 
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
 
+  if (!draft.loaded) return h("div", {role:"status"}, draft.label, draft.status !== "loading" && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Повторить"));
   return h("div", null,
     h("h1", { className: "page-title" }, "Публикация"),
+    h("p", {role:"status"}, draft.label, ["conflict","save-error","auth"].includes(draft.status) && h("button", {className:"btn btn-ghost", onClick:draft.retry}, "Проверить сохранение")),
+    draft.status === "rejected" && !pendingOperation && h("button", {className:"btn btn-ghost", onClick:draft.renewRejected}, "Продолжить редактирование"),
+    draft.status === "recorded" && !pendingOperation && h("button", {className:"btn btn-ghost", onClick:draft.startNew}, "Новый пост"),
+    mediaMissing && h("div", {role:"alert", className:"form-hint"}, "Медиа не восстановлено. Выберите файл или ссылку заново. ", h("button", {className:"btn btn-ghost", onClick:() => setMediaMissing(false)}, "Без вложения")),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
+    targetState === "loading" && h("p", {role: "status"}, "Проверяем каналы…"),
+    targetState === "error" && h("div", {role: "alert"}, "Не удалось загрузить каналы. ", h("button", {className:"btn btn-ghost", onClick: () => loadTargets()}, "Повторить")),
+    targetState === "ready" && eligibleCount === 0 && h("p", null, "Нет доступных каналов."),
 
     // Content type switch
     h("div", { className: "ctype-switch" },
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "post" ? "active" : ""}`,
-        onClick: () => { setContentType("post"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "post") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("post"); setTitleErr(""); },
       }, "Пост"),
       h("button", {
         type: "button", className: `ctype-btn ${contentType === "article" ? "active" : ""}`,
-        onClick: () => { setContentType("article"); setSelected(new Set()); setTitleErr(""); },
+        onClick: () => { if (contentType === "article") return; targetFence.current.invalidate(); setTargetState("loading"); setContentType("article"); setTitleErr(""); },
       }, "Статья"),
     ),
 
@@ -3506,7 +3611,7 @@ function PublishView({ profile }) {
 
     // Каналы
     h("p", { className: "section-title" }, "Куда публикуем"),
-    targets === null
+    targetState === "error" ? null : targets === null || targetState === "loading"
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
       : eligibleCount === 0
         ? h("div", { className: "empty-inline" },
@@ -3515,6 +3620,12 @@ function PublishView({ profile }) {
               : "Нет доступных каналов. Подключите канал во вкладке «Каналы» — здесь появятся активные.")
         : h(PlatformTargets, { targets, selected, onToggle: toggle, setSelected }),
 
+    pendingOperation && h("div", {className:"form-panel", role:"status"},
+      h("p", null, "Есть незавершённая операция. Повторная отправка заблокирована."),
+      h("button", {className:"btn btn-ghost", disabled:busy, onClick:checkOperation}, "Проверить результат"),
+      receipt && h("p", null, receipt.message),
+      receipt?.known && h("button", {className:"btn btn-ghost", disabled:busy, onClick:acknowledgeOperation}, "Результат проверен"),
+    ),
     // Действия
     h("div", { className: "publish-actions" },
       h("button", { className: "btn btn-primary", onClick: publishNow, disabled: !canSend },
@@ -3546,7 +3657,7 @@ function PublishView({ profile }) {
     // Журнал планировщика — что он уже отправил (обновляется сам, без перезагрузки)
     h(SchedulerReport, { base, items: report, hasMore: reportMore, onMore: loadReportMore, onRefresh: loadReportInitial }),
 
-    showSchedule && h(ScheduleModal, { onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
+    showSchedule && h(ScheduleModal, { base, onClose: () => setShowSchedule(false), onConfirm: doSchedule }),
   );
 }
 
@@ -3707,7 +3818,16 @@ function _schedStatusNote(status) {
 // и через модальное окно из журнала (ReportRow). post — объект ScheduledOut.
 function SchedEditForm({ base, post, onSaved, onClose }) {
   const [text, setText] = useState(() => post.text);
-  const [when, setWhen] = useState(() => toLocalInput(post.scheduled_at));
+  const [zone, setZone] = useState(null);
+  const [when, setWhen] = useState("");
+  const [timeChanged, setTimeChanged] = useState(false);
+  useEffect(() => {
+    let active = true;
+    window.CrosspostTime.get(base).then(z => {
+      if (active) { setZone(z); setWhen(window.CrosspostTime.wallInput(post.scheduled_at, z)); }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [base, post.scheduled_at]);
   const [selected, setSelected] = useState(() => _channelsToSet(post.channels));
   const [targets, setTargets] = useState(null);
   // Медиа: null = не менялось (шлём без поля image), "" = удалить (не поддержано API),
@@ -3732,7 +3852,7 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     setBusy(true); setFieldErr({});
     const patch = {};
     if (text !== post.text) patch.text = text;
-    if (when !== toLocalInput(post.scheduled_at)) patch.scheduled_at = when;
+    if (timeChanged) patch.scheduled_at = when;
     const origSet = _channelsToSet(post.channels);
     if (!_setsEqual(selected, origSet))
       patch.channels = [...selected].map(parseSelKey)
@@ -3741,10 +3861,11 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     if (showImageInput && imageInput.trim()) patch.image = imageInput.trim();
     if (!Object.keys(patch).length) { onClose?.(); setBusy(false); return; }
     try {
+      if (timeChanged) patch.scheduled_at = await window.CrosspostTime.resolve(base, when, zone);
       // Используем fetch напрямую — нужен статус-код для различения 409/422/404.
       const r = await fetch(`${base}/scheduled/${post.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Schedule-Time-Contract": "utc-v1" },
         body: JSON.stringify(patch),
       });
       if (r.ok) { onSaved?.(); return; }
@@ -3770,9 +3891,10 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
 
   return h("div", { className: "sched-edit-form" },
     h("div", { className: "sched-edit-field" },
-      h("label", { className: "form-label" }, "Время публикации"),
-      h("input", { className: "form-input", type: "datetime-local", value: when,
-        onChange: (e) => setWhen(e.target.value), style: { maxWidth: "220px" } }),
+      h("label", { className: "form-label" }, "Время публикации · " + (zone || "пояс не настроен")),
+      post.time_basis !== "utc" && h("p", {className: "form-hint"}, "Старое время сервера. При изменении выберите время в поясе профиля."),
+      h("input", { className: "form-input", type: "datetime-local", value: when, disabled: !zone,
+        onChange: (e) => { setWhen(e.target.value); setTimeChanged(true); }, style: { maxWidth: "220px" } }),
       fieldErr.scheduled_at && h("div", { className: "outcome-err" }, fieldErr.scheduled_at),
     ),
     h("div", { className: "sched-edit-field" },
@@ -3895,7 +4017,7 @@ function SchedItem({ base, s, onChanged }) {
 
   return h("div", { className: "sched-item" },
     h("div", { className: "sched-main" },
-      !editing && h("div", { className: "sched-when mono" }, new Date(s.scheduled_at).toLocaleString("ru-RU")),
+      !editing && h("div", { className: "sched-when mono" }, window.CrosspostTime.label(s.scheduled_at, window.CrosspostTime.deviceZone())),
       !editing && h("div", { className: "sched-text" },
         s.text || "(без текста)",
         s.has_article && h("span", { className: "sched-badge",
@@ -4093,6 +4215,7 @@ function ImportReportView({ report }) {
   return h("div", null,
     // Сводка.
     h("div", { className: "plan-preview-summary" },
+      report.schedule_zone && h("span", { className: "chip" }, report.schedule_zone),
       h("span", { className: "chip ok" }, `✓ ${report.resolved_count} готово`),
       warnings.length > 0 && h("span", { className: "chip warn" }, `⚠ ${warnings.length} без фото`),
       problems.length > 0 && h("span", { className: "chip err" }, `✕ ${problems.length} пропущено`),
@@ -4119,7 +4242,7 @@ function ImportReportView({ report }) {
             return h("tr", { key: `r${i}`, className: warn ? "row-warn" : "" },
               h("td", { className: "plan-row-status" }, warn ? "⚠" : "✓"),
               h("td", null, h("span", { className: "mono", style: { fontSize: "11px", color: "var(--accent)" } },
-                new Date(r.scheduled_at).toLocaleString("ru-RU", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }))),
+                window.CrosspostTime.label(r.scheduled_at, report.schedule_zone))),
               h("td", null,
                 r.file
                   ? h("span", null,
@@ -4159,6 +4282,12 @@ function ImportReportView({ report }) {
 
 function ImportView({ profile }) {
   const base = `/api/profiles/${profile.id}`;
+  const [zone, setZone] = useState(null);
+  useEffect(() => {
+    let active = true;
+    window.CrosspostTime.get(base).then(z => { if (active) setZone(z); }).catch(() => {});
+    return () => { active = false; };
+  }, [base]);
   const [table, setTable] = useState(null);
   const [sheetUrl, setSheetUrl] = useState("");
   const [images, setImages] = useState([]);
@@ -4211,6 +4340,8 @@ function ImportView({ profile }) {
     setSelected((prev) => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
   }
   function appendRule(fd) {
+    if (!zone) throw new Error("Настройте часовой пояс профиля в редакторе публикаций.");
+    fd.append("schedule_zone", zone);
     if (startDate) fd.append("start_date", startDate);
     if (times.trim()) fd.append("times_csv", times);
     fd.append("interval", interval);
@@ -4246,6 +4377,7 @@ function ImportView({ profile }) {
   function applyMapping(m) { setMapping(m); preview(m); }
 
   async function commit() {
+    if (!zone || report?.schedule_zone !== zone) { setAlert({type:"error", text:"Повторите предпросмотр после настройки часового пояса."}); return; }
     setCommitting(true); setAlert(null); setCommitInfo(null);
     try {
       const fd = new FormData();
@@ -4270,8 +4402,8 @@ function ImportView({ profile }) {
   const eligibleCount = (targets || []).filter((t) => t.eligible).length;
   const needsMapping = !!(report && report.needs_mapping);
   const folderDirty = folder.trim() !== folderSaved;
-  const canPreview = hasTableSource && !busy;
-  const canCommit = hasTableSource && selected.size > 0 && report
+  const canPreview = !!zone && hasTableSource && !busy;
+  const canCommit = !!zone && report?.schedule_zone === zone && hasTableSource && selected.size > 0 && report
     && !needsMapping && report.resolved_count > 0 && !committing;
 
   const [openStep, setOpenStep] = useState(1);
@@ -4286,7 +4418,7 @@ function ImportView({ profile }) {
     monthly: "раз в месяц",
   }[interval];
   const ruleSummary = startDate
-    ? `${intervalLabel} · от ${startDate.split("-").reverse().join(".")} · ${times.trim() || "—"}`
+    ? `${zone || "пояс не задан"} · ${intervalLabel} · от ${startDate.split("-").reverse().join(".")} · ${times.trim() || "—"}`
     : null;
   const targetsSummary = selected.size > 0 ? `${selected.size} выбрано` : null;
 
@@ -4305,6 +4437,7 @@ function ImportView({ profile }) {
 
   return h("div", null,
     h("h1", { className: "page-title" }, "Импорт контент-плана"),
+    h("p", { className: "form-hint" }, zone ? "Часовой пояс импорта: " + zone : "Настройте часовой пояс профиля в редакторе публикаций, затем обновите страницу."),
     h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ${profile.name}`),
 
     h(ImportStep, { num: 1, title: "Таблица плана", summary: tableSummary, done: !!tableSummary },
@@ -4565,7 +4698,7 @@ function ModerationView({ profiles, onApproved, onRejected }) {
           h("div", { key: post.id, className: "mod-card" },
             h("div", { className: "mod-card-meta" },
               h("span", null, profile.name),
-              h("span", null, new Date(post.scheduled_at).toLocaleString("ru")),
+              h("span", null, window.CrosspostTime.label(post.scheduled_at, window.CrosspostTime.deviceZone())),
               h("span", null, (post.channels || []).join(", ")),
             ),
             post.text && h("div", { className: "mod-card-text" }, post.text),
@@ -4747,6 +4880,7 @@ function App() {
   }, [me, profiles.length]);
 
   async function logout() {
+    if (!window.CrosspostDraft.canLeave()) return;
     try { await api.post("/api/auth/logout"); } catch (_) {}
     setMe(null); setProfiles([]); setActive(null);
   }
@@ -4763,6 +4897,7 @@ function App() {
   }
 
   function selectProfile(p) {
+    if (!window.CrosspostDraft.canLeave()) return;
     setConsoleOpen(false);
     setModerationOpen(false);
     setFocusChannel(null);
@@ -4793,9 +4928,9 @@ function App() {
         }))
       : active
       ? h("div", null,
-          h(ViewTabs, { view, onChange: setView }),
+          h(ViewTabs, { view, onChange: v => { if (window.CrosspostDraft.canLeave()) setView(v); } }),
           view === "publish"
-            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${active.id}`, profile: active }))
+            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
             : view === "import"
               ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
               : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),
@@ -4810,9 +4945,9 @@ function App() {
       onSelect: selectProfile,
       onNew: () => setShowNewProfile(true),
       onNewClient: () => setShowNewClient(true),
-      onOpenConsole: () => { setConsoleOpen(true); setModerationOpen(false); },
+      onOpenConsole: () => { if (!window.CrosspostDraft.canLeave()) return; setConsoleOpen(true); setModerationOpen(false); },
       consoleActive: consoleOpen,
-      onModeration: () => { setModerationOpen(true); setConsoleOpen(false); },
+      onModeration: () => { if (!window.CrosspostDraft.canLeave()) return; setModerationOpen(true); setConsoleOpen(false); },
       moderationActive: moderationOpen,
       pendingCount,
     }),
