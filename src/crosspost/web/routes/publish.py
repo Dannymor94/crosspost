@@ -1216,20 +1216,35 @@ def _parse_marker(value: str | None) -> datetime | None:
         raise HTTPException(status_code=422, detail="cursor: ожидается ISO-8601") from exc
 
 
-def _overall_status(outcomes: list[OutcomeOut]) -> str:
-    """Свёртка поканальных статусов в общий вердикт для карточки журнала.
+_OVERALL_FAILURE = frozenset(
+    {PublicationStatus.FAILED.value, PublicationStatus.NEEDS_RELOGIN.value}
+)
+_OVERALL_NONTERMINAL = frozenset(
+    {PublicationStatus.QUEUED.value, PublicationStatus.ATTEMPTING.value}
+)
 
-    done — все каналы успешны (done/submitted); failed — все упали; partial —
-    часть упала. Пусто (нет строк) — unknown (пост помечен published без итогов).
+
+def _overall_status(outcomes: list[OutcomeOut]) -> str:
+    """Truthful journal aggregation: SUBMITTED is not confirmed DONE.
+
+    Unknown status values (including an unexpected NEW in a completed report)
+    fail closed instead of being misrepresented as in-progress or success.
     """
     if not outcomes:
         return "unknown"
-    ok = sum(1 for o in outcomes if o.status in _SUCCESS)
-    if ok == len(outcomes):
-        return "done"
-    if ok == 0:
-        return "failed"
-    return "partial"
+    statuses = [o.status for o in outcomes]
+    n_success = sum(s in _SUCCESS for s in statuses)
+    n_failure = sum(s in _OVERALL_FAILURE for s in statuses)
+    n_nonterminal = sum(s in _OVERALL_NONTERMINAL for s in statuses)
+    n_unknown = len(statuses) - n_success - n_failure - n_nonterminal
+
+    if n_failure + n_unknown:
+        return "failed" if n_success == 0 and n_nonterminal == 0 else "partial"
+    if n_nonterminal:
+        return "partial" if n_success else "in_progress"
+    if PublicationStatus.SUBMITTED.value in statuses:
+        return "submitted"
+    return "done"
 
 
 # ── Модерация клиентских постов (только admin) ────────────────────────────────

@@ -37,6 +37,7 @@ _EXPECTED: list[tuple[str, str]] = [
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
+    ("POST", "/api/auth/recover"),  # T-406: owner-issued token redemption
     # profiles
     ("GET", "/api/profiles"),
     ("POST", "/api/profiles"),
@@ -46,6 +47,7 @@ _EXPECTED: list[tuple[str, str]] = [
     # users
     ("GET", "/api/users"),
     ("POST", "/api/users"),
+    ("POST", "/api/users/{*}/recovery-token"),  # T-406: admin-only issuance
     # channels (per-profile)
     ("GET", "/api/profiles/{*}/channels"),
     ("POST", "/api/profiles/{*}/channels/{*}/validate"),
