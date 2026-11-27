@@ -221,3 +221,7 @@ Shared pure calendar model for explicit profile IANA zone, day/week/month/list p
 ### T-512 calendar UI (draft)
 
 Read-only shared calendar mounted in both actual hosts, with day/week/month/list, profile zone, status filter, explicit unplaced records, retry and links to existing editor/management. Admin mobile calendar is primary; moderation remains in More. No new mutation or date prefill. Existing client schedule management retained separately. CI pending.
+
+## UX-06 T-513 — history read model (draft)
+
+New profile-scoped GET history combines persisted scheduled rows and observed immediate publication groups, stable creation-time/source/key cursor, no raw error/external ID/media path or proof. Existing scheduled lifecycle + observed channel outcomes, never infer complete receipt from observed rows. Immediate text absent in current data; ledger-only admissions deliberately excluded pending profile-incarnation fencing and retention policy. No schema or mutation changes. API tests pending; UI, search, complete durable immediate metadata and final acceptance remain open.

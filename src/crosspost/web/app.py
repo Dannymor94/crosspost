@@ -25,6 +25,7 @@ from crosspost.web.routes import (
     channels,
     drafts,
     errors,
+    history,
     import_plan,
     profiles,
     public_media,
@@ -143,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(tg_login.router)
     app.include_router(publish.router)
     app.include_router(drafts.router)
+    app.include_router(history.router)
     app.include_router(import_plan.router)
     app.include_router(settings.router)
     app.include_router(errors.router)
