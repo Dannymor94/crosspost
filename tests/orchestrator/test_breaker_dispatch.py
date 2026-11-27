@@ -523,7 +523,7 @@ async def test_cb18_deployed_main_upgrade_preserves_data(tmp_path):
             )
             assert (
                 await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                == "t409_owner_mfa"
+                == "t409_mfa_audit"
             )
     finally:
         await upgraded.dispose()

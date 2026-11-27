@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-28 — T-409 fresh MFA step-up and enrollment audit (draft)
+
+- Invitation issue/renew/revoke and recovery issuance recheck password and consume a fresh factor in the business writer transaction; failures roll back factor consumption. Owner enrollment/replacement persists a secret-free event atomically with the generation change.
+- Remaining sensitive settings, external operations and integrated UI retain their own release gates.
+
 ## 2026-11-28 — T-409 local owner MFA enrollment (draft)
 
 - Encrypted TOTP secret and hashed one-use backup codes; local interactive enrollment or replacement revokes prior sessions. Enrolled owners require a factor at login, unenrolled production owners are denied.

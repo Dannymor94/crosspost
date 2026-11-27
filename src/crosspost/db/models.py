@@ -347,6 +347,18 @@ class User(Base):
     profile: Mapped[Profile | None] = relationship("Profile")
 
 
+class OwnerMfaEvent(Base):
+    """Append-only local MFA enrollment/replacement evidence, without secrets."""
+
+    __tablename__ = "owner_mfa_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class AuthAttempt(Base):
     """Bounded, pseudonymous authentication admission events (T-409)."""
 
