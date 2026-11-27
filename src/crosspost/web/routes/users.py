@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
@@ -17,10 +17,12 @@ from crosspost.auth.passwords import verify_password
 from crosspost.auth.sessions import sign_recovery_token
 from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import Role
+from crosspost.web.auth_guard import limit_auth
 from crosspost.web.deps import AdminUser, RepoDep, SessionDep, UserRepoDep
+from crosspost.web.private_routes import PrivateRoute
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/users", tags=["users"])
+router = APIRouter(prefix="/api/users", tags=["users"], route_class=PrivateRoute)
 
 _MIN_PASSWORD = 6
 
@@ -98,8 +100,10 @@ async def issue_recovery_token(
     users: UserRepoDep,
     session: SessionDep,
     response: Response,
+    request: Request,
 ) -> RecoveryTokenOut:
     """Только владелец выдаёт токен клиенту; пароль и сам токен не пишутся в журнал."""
+    await limit_auth(request, session, "owner_step_up", str(admin.id))
     if not await asyncio.to_thread(verify_password, body.admin_password, admin.password_hash):
         raise HTTPException(status_code=403, detail="Повторно подтвердите пароль администратора")
     user = await users.get_by_id(user_id)
