@@ -125,3 +125,11 @@ Reuse existing profile-scoped scheduled GET and timezone GET; do not aggregate h
 ## T-511 — approximate preview contract (draft)
 
 Local presentation derives from current editor values and confirmed eligible targets, never mutates them or claims external rendering parity. Text via textContent, no raw media URL, no additional API or required step before send. Existing R3 guards stay authoritative.
+
+## T-512 — calendar grouping (draft)
+
+Canonical schedule rows grouped by profile-zone calendar day; date-only navigation uses UTC civil-date arithmetic rather than elapsed 24h local time. Legacy wall times and malformed/zone-unavailable rows explicitly separate. Read model preserves server input ordering within each day; no migration, scheduler, or action contract changes.
+
+### T-512 calendar UI (draft)
+
+The shared calendar reads only the existing profile schedule projection. Existing management forms remain authoritative; no new scheduling write or automatic date prefill. Missing zone and legacy rows stay unplaced. All dates in the month/week grid are civil days in the profile zone.

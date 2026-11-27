@@ -10,7 +10,8 @@
     if (new Set(rows.map(r=>r.id)).size !== rows.length) throw Error("Duplicate schedule");
     return {scheduled:rows.filter(r=>r.status==="scheduled").length,
       pending:rows.filter(r=>r.status==="pending_approval").length,
-      rows:rows.map(r=>({id:r.id,status:r.status,text:r.text,when:r.scheduled_at,basis:r.time_basis}))};
+      rows:rows.map(r=>({id:r.id,status:r.status,text:r.text,when:r.scheduled_at,basis:r.time_basis,
+        channels:Array.isArray(r.channels)?r.channels.map(x=>typeof x==="string"?x:x?.channel).filter(x=>typeof x==="string"):[]}))};
   }
   function timeLabel(row,zone) {
     if (row.basis==="legacy_local") return row.when.slice(0,16).replace("T"," ")+" · старое время сервера";

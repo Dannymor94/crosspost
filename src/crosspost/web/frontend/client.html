@@ -335,6 +335,8 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="/static/shared/ux-workspace.js"></script>
 <script src="/static/shared/ux-overview.js"></script>
 <script src="/static/shared/ux-editor-preview.js"></script>
+<script src="/static/shared/ux-calendar.js"></script>
+<script src="/static/shared/ux-calendar-view.js"></script>
 </head>
 <body class="cp-client">
 <div id="root"></div>
@@ -887,6 +889,12 @@ function PostsView({ user }) {
 }
 
 // ── App ────────────────────────────────────────────────────────────────────────
+const CalendarPanel=window.CrosspostCalendarView.create(preact.h,{useState,useEffect});
+function ClientSchedule({user,onNavigate}) {
+  const [manage,setManage]=useState(false);
+  return manage?html`<section class="cp-stack"><button class="cp-button" onClick=${()=>setManage(false)}>К календарю</button><${PostsView} user=${user} /></section>`:
+    html`<${CalendarPanel} pid=${user.profile_id} onCreate=${()=>onNavigate("compose")} onManage=${()=>setManage(true)} />`;
+}
 const CLIENT_ITEMS = Object.freeze([
   {id:"home",label:"Главная",icon:"home"},
   {id:"compose",label:"Новый пост",icon:"posts"},
@@ -978,7 +986,7 @@ function App() {
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} />
       ${tab === 'compose'
         ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} />`
-        : tab === 'posts' ? html`<${PostsView} key=${user.profile_id} user=${user} />`
+        : tab === 'posts' ? html`<${ClientSchedule} key=${user.profile_id} user=${user} onNavigate=${navigate} />`
         : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
         : html`<${ClientMore} user=${user} onLogout=${logout} />`}
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} mobile=${true} />

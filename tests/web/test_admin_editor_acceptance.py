@@ -13,7 +13,8 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
 @pytest.mark.parametrize(
-    "scenario", ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation"]
+    "scenario",
+    ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation", "calendar"],
 )
 def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     assert ASSETS is not None
@@ -126,6 +127,33 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             resolves += 1
             assert request.post_data_json == {"wall": wall_time, "zone": "Europe/Moscow"}
             route.fulfill(json={"instant": instant})
+        elif scenario == "calendar" and path == "/api/profiles/1/scheduled":
+            route.fulfill(
+                json=[
+                    {
+                        "id": 31,
+                        "status": "scheduled",
+                        "text": "Календарный тест UTC",
+                        "scheduled_at": "2099-01-15T22:30:00Z",
+                        "time_basis": "utc",
+                        "content_type": "post",
+                        "title": None,
+                        "channels": ["telegram"],
+                        "media_paths": [],
+                    },
+                    {
+                        "id": 32,
+                        "status": "pending_approval",
+                        "text": "Календарный тест legacy",
+                        "scheduled_at": "2099-01-15T12:30:00",
+                        "time_basis": "legacy_local",
+                        "content_type": "post",
+                        "title": None,
+                        "channels": ["telegram"],
+                        "media_paths": [],
+                    },
+                ]
+            )
         elif path.endswith("/operation-status"):
             recoveries += 1
             assert request.headers.get("idempotency-key")
@@ -214,6 +242,31 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "admin-00-dark-theme.png")
             text = page.get_by_placeholder("Текст поста…")
+            if scenario == "calendar":
+                menu = page.get_by_role("navigation", name="Меню администратора", exact=True)
+                menu.get_by_role("button", name="Календарь", exact=True).click()
+                expect(page.get_by_role("heading", name="Календарь", exact=True)).to_be_visible()
+                expect(page.get_by_text("Календарный тест UTC", exact=True)).to_be_visible()
+                expect(page.get_by_text("Календарный тест legacy", exact=True)).to_be_visible()
+                expect(page.get_by_text("2099-01-16 01:30 · Europe/Moscow")).to_be_visible()
+                expect(page.get_by_text("Записи без точной даты профиля")).to_be_visible()
+                page.get_by_role("button", name="День", exact=True).click()
+                page.get_by_label("Дата календаря").fill("2099-01-16")
+                expect(page.get_by_text("Календарный тест UTC", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Неделя", exact=True).click()
+                expect(page.locator(".cp-calendar-cell")).to_have_count(7)
+                page.get_by_role("button", name="Месяц", exact=True).click()
+                expect(page.locator(".cp-calendar-cell")).to_have_count(31)
+                page.get_by_label("Статус", exact=True).select_option("pending_approval")
+                expect(page.get_by_text("Календарный тест UTC", exact=True)).to_have_count(0)
+                expect(page.get_by_text("Календарный тест legacy", exact=True)).to_be_visible()
+                page.get_by_label("Статус", exact=True).select_option("all")
+                capture(page, "admin-05-calendar.png")
+                page.get_by_role("button", name="Управление расписанием").click()
+                expect(text).to_be_visible()
+                assert sends == 0
+                assert not errors, errors
+                return
             if scenario == "navigation":
                 desktop = page.get_by_role("navigation", name="Меню администратора", exact=True)
                 mobile = page.get_by_role("navigation", name="Мобильное меню администратора")
