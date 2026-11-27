@@ -417,6 +417,8 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(page.get_by_text("Выбрано целей: 0 из 1", exact=True)).to_be_visible()
                 page.get_by_role("button", name="Выбрать все доступные", exact=True).click()
                 expect(page.get_by_text("Выбрано целей: 1 из 1", exact=True)).to_be_visible()
+                expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
+                assert len(draft["data"]["targets"]) == 1
                 page.get_by_role("button", name="Снять выбор", exact=True).click()
                 expect(page.get_by_text("Выбрано целей: 0 из 1", exact=True)).to_be_visible()
                 expect(page.get_by_text("Черновик сохранён", exact=True)).to_be_visible()
