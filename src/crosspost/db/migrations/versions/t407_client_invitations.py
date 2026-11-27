@@ -32,8 +32,7 @@ def upgrade() -> None:
         if (
             set(columns) != set(expected)
             or any(
-                not isinstance(columns[name]["type"], kind)
-                or columns[name]["nullable"] != nullable
+                not isinstance(columns[name]["type"], kind) or columns[name]["nullable"] != nullable
                 for name, (kind, nullable) in expected.items()
             )
             or getattr(columns["profile_name"]["type"], "length", None) != 255
