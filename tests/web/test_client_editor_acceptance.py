@@ -23,6 +23,7 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
         "navigation",
         "calendar",
         "history",
+        "connections",
     ],
 )
 def test_client_draft_reload_media_loss_and_unknown_send(scenario):
@@ -163,6 +164,37 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                     "scope": "scheduled_and_observed_immediate",
                 }
             )
+        elif scenario == "connections" and path == "/api/profiles/1/channels":
+            route.fulfill(
+                json=[
+                    {
+                        "channel": "telegram",
+                        "title": "Telegram",
+                        "kind": "api",
+                        "state": "live",
+                        "has_credential": True,
+                        "needs_target": False,
+                        "guide": {"steps": [{"title": "Подготовьте аккаунт"}]},
+                    },
+                    {
+                        "channel": "vk_wall",
+                        "title": "ВКонтакте",
+                        "kind": "browser",
+                        "state": "banned",
+                        "has_credential": True,
+                        "needs_target": False,
+                        "guide": {"steps": [{"title": "Вход в VK"}]},
+                    },
+                    {
+                        "channel": "instagram",
+                        "title": "Instagram",
+                        "kind": "api",
+                        "state": "unexpected",
+                        "has_credential": True,
+                        "needs_target": False,
+                    },
+                ]
+            )
         elif path.endswith("/operation-status"):
             key = request.headers["idempotency-key"]
             proof = request.headers["idempotency-recovery"]
@@ -223,6 +255,23 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "00-client-dark-theme.png")
             text = page.get_by_placeholder("Напишите текст поста…")
+            if scenario == "connections":
+                menu = page.get_by_role("navigation", name="Мобильное меню клиента")
+                menu.get_by_role("button", name="Ещё", exact=True).click()
+                page.get_by_role("button", name="Подключения", exact=True).click()
+                expect(page.get_by_text("Ограничено площадкой", exact=True)).to_be_visible()
+                expect(page.get_by_text("Состояние неизвестно", exact=True)).to_be_visible()
+                expect(page.get_by_text("Подключено", exact=True)).to_be_visible()
+                page.get_by_text("Этапы подключения", exact=True).first.click()
+                expect(page.get_by_text("Подготовьте аккаунт", exact=True)).to_be_visible()
+                expect(page.locator("input[type=password]")).to_have_count(0)
+                expect(page.get_by_role("button", name="Переподключить")).to_have_count(0)
+                page.get_by_role("button", name="Обновить состояния").click()
+                expect(page.get_by_text("Ограничено площадкой", exact=True)).to_be_visible()
+                capture(page, "07-client-connections.png")
+                assert sends == 0
+                assert not errors, errors
+                return
             if scenario == "history":
                 menu = page.get_by_role("navigation", name="Мобильное меню клиента")
                 menu.get_by_role("button", name="Ещё", exact=True).click()

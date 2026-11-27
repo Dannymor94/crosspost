@@ -141,3 +141,7 @@ Use persisted FK-backed scheduled/publication rows only; no operation ledger-onl
 ### T-513 history UI contract (draft)
 
 Never label observed aggregate DONE as confirmed whole post. Per-target results are persisted observations; unknown status fails closed. Search explicitly limited to loaded pages; no raw diagnostics/links/retry. History fetch aborts on unmount/scope changes; errors never replace a failed read with empty success.
+
+## T-515 status presentation (draft)
+
+No new connection API or authorization. Client projection uses existing scoped GET; text-only guide titles and no tokens/fields/links. Banned and unknown do not offer ordinary admin mutation controls in this UI; explicit operator remediation requires separate policy. No automatic check or retry. Existing wizard remains authoritative for supported states.

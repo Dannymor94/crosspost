@@ -23,6 +23,7 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
         "navigation",
         "calendar",
         "history",
+        "connections",
     ],
 )
 def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
@@ -197,6 +198,37 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                     "scope": "scheduled_and_observed_immediate",
                 }
             )
+        elif scenario == "connections" and path == "/api/profiles/1/channels":
+            route.fulfill(
+                json=[
+                    {
+                        "channel": "telegram",
+                        "title": "Telegram",
+                        "kind": "api",
+                        "state": "live",
+                        "has_credential": True,
+                        "needs_target": False,
+                        "guide": {"steps": [{"title": "Подготовьте аккаунт"}]},
+                    },
+                    {
+                        "channel": "vk_wall",
+                        "title": "ВКонтакте",
+                        "kind": "browser",
+                        "state": "banned",
+                        "has_credential": True,
+                        "needs_target": False,
+                        "guide": {"steps": [{"title": "Вход в VK"}]},
+                    },
+                    {
+                        "channel": "instagram",
+                        "title": "Instagram",
+                        "kind": "api",
+                        "state": "unexpected",
+                        "has_credential": True,
+                        "needs_target": False,
+                    },
+                ]
+            )
         elif path.endswith("/operation-status"):
             recoveries += 1
             assert request.headers.get("idempotency-key")
@@ -285,6 +317,23 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "admin-00-dark-theme.png")
             text = page.get_by_placeholder("Текст поста…")
+            if scenario == "connections":
+                menu = page.get_by_role("navigation", name="Меню администратора", exact=True)
+                menu.get_by_role("button", name="Подключения", exact=True).click()
+                expect(page.get_by_text("Ограничено площадкой", exact=True)).to_be_visible()
+                expect(page.get_by_text("Состояние неизвестно", exact=True)).to_be_visible()
+                expect(page.get_by_text("Подключено", exact=True)).to_be_visible()
+                blocked = page.locator(".channel-card").filter(has_text="ВКонтакте")
+                expect(blocked.get_by_role("button")).to_have_count(0)
+                unknown = page.locator(".channel-card").filter(has_text="Instagram")
+                expect(unknown.get_by_role("button")).to_have_count(0)
+                expect(page.get_by_role("button", name="Проверить", exact=True)).to_have_count(1)
+                page.get_by_role("button", name="Обновить состояния").click()
+                expect(page.get_by_text("Ограничено площадкой", exact=True)).to_be_visible()
+                capture(page, "admin-07-connections.png")
+                assert sends == 0
+                assert not errors, errors
+                return
             if scenario == "history":
                 menu = page.get_by_role("navigation", name="Меню администратора", exact=True)
                 menu.get_by_role("button", name="История", exact=True).click()

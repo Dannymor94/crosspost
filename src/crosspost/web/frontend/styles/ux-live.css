@@ -148,3 +148,6 @@ html.cp-ux {
 
 .cp-ux .cp-history-outcome { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--cp-line); overflow-wrap:anywhere; }
 .cp-ux .cp-history-outcome span { margin-inline-start:auto; }
+
+.cp-ux .cp-connection-steps { padding-inline-start:24px; display:grid; gap:8px; overflow-wrap:anywhere; }
+.cp-ux .cp-stack details summary { cursor:pointer; padding:8px 0; }
