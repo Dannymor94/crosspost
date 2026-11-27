@@ -3454,7 +3454,7 @@ function PublishView({ profile, user }) {
       setPubId(res.publication_id);
       setOutcomes(res.outcomes);
       if (window.CrosspostDraft.confirmed(res.outcomes)) {
-        if (await draft.clearSubmitted(submittedDraft)) await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+        if (await draft.clearSubmitted(submittedDraft)) await ops.complete(opScope, res);
         else setAlert({type:"error", text:"Публикация подтверждена, но черновик не очищен. Проверьте изменения."});
       } else setAlert({type:"error", text:"Не все публикации подтверждены. Черновик сохранён."});
       loadTargets();
@@ -3491,7 +3491,7 @@ function PublishView({ profile, user }) {
       draft.markRecorded(submittedDraft);
       if (!post?.id || !["scheduled","pending_approval"].includes(post.status)) throw new Error("Создание поста не подтверждено. Черновик сохранён.");
       const cleared = await draft.clearSubmitted(submittedDraft);
-      if (cleared) await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+      if (cleared) await ops.complete(opScope, post);
       setAlert({ type: "success", text: cleared ? "Пост запланирован." : "Пост создан, но черновик не очищен. Проверьте изменения." });
       loadScheduled();
     } catch (ex) { setAlert({ type: "error", text: ex.message }); }

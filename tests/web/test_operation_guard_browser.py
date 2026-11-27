@@ -207,3 +207,41 @@ def test_definitive_rejection_recovery_is_distinct_from_unknown():
             assert result == {"known": True, "rejected": True, "pending": False}
         finally:
             browser.close()
+
+
+def test_stale_acknowledgement_cannot_clear_a_different_proof_for_same_revision():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.route("http://localhost/**", lambda route: route.fulfill(body="<html></html>"))
+            page.goto("http://localhost/")
+            page.add_script_tag(path=SCRIPT)
+            page.route(
+                "**/operation-status",
+                lambda route: route.fulfill(
+                    json={
+                        "state": "recorded",
+                        "outcomes": [{"channel": "telegram", "target": "", "status": "submitted"}],
+                    }
+                ),
+            )
+            result = page.evaluate(
+                """async () => {
+                    const ops = window.CrosspostOperations;
+                    const draft = {scope:"a".repeat(64),revision:"b".repeat(32)};
+                    const expected = ops.publicationExpectation(["telegram"]);
+                    const send = async () => ({publication_id:"p",outcomes:[
+                        {channel:"telegram",target:"",status:"submitted"}]});
+                    const first = await ops.run("draft",send,expected,draft);
+                    const receipt = await ops.recover("draft","/api/profiles/1");
+                    await ops.acknowledge("draft",receipt);
+                    await ops.run("draft",send,expected,draft);
+                    await ops.acknowledge("draft",receipt);
+                    await ops.complete("draft",first);
+                    return ops.pending("draft");
+                }"""
+            )
+            assert result is True
+        finally:
+            browser.close()

@@ -12,6 +12,7 @@
       throw new Error("Не удалось прочитать сохранённую операцию. Обратитесь к администратору.");
     return p;
   }
+  const directReceipts = new WeakMap();
   const headers = p => ({"Idempotency-Key": p.id, "Idempotency-Recovery": p.proof,
     ...(p.draftScope ? {"X-Draft-Scope":p.draftScope,"X-Draft-Revision":p.id} : {})});
   function pending(key) {
@@ -59,7 +60,9 @@
       if (!validDirect(result, expected)) throw new Error("Неполная или неизвестная квитанция. Проверьте операцию.");
       // Retain pending on any ambiguous error; only validated success clears.
       // A bound editor retains proof until clearing its exact draft or acknowledging.
-      if (!draft && read(key)?.id === p.id) localStorage.removeItem(key);
+      const current = read(key);
+      if (!draft && current?.id === p.id && current.proof === p.proof) localStorage.removeItem(key);
+      directReceipts.set(result, {known:true,id:p.id,proof:p.proof});
       return result;
     });
   }
@@ -73,33 +76,37 @@
     const data = await r.json();
     const rows = Array.isArray(data.outcomes) ? data.outcomes : [];
     if (p.draftScope && data.state === "not_admitted" && rows.length === 0) {
-      return {known:true, notAdmitted:true, id:p.id,
+      return {known:true, notAdmitted:true, id:p.id, proof:p.proof,
         message:"Эта попытка не была допущена. Загрузите актуальный черновик; предыдущая отправка могла состояться."};
     }
     if (data.state === "rejected" && rows.length === 1 &&
         rows[0]?.status === "rejected_before_effect" && /^[4][0-9]{2}$/.test(rows[0].http_status)) {
-      return {known:true, rejected:true, id:p.id,
+      return {known:true, rejected:true, id:p.id, proof:p.proof,
         message:"Отправка не началась. Исправьте черновик или отправьте его на проверку."};
     }
     if (p.expected?.kind === "scheduled" && data.state === "scheduled_created" && rows.length === 1 &&
         typeof rows[0]?.scheduled_id === "string" && /^[1-9][0-9]*$/.test(rows[0].scheduled_id) &&
         validScheduled(rows[0], Number(rows[0].scheduled_id))) {
-      return {known: true, id: p.id, message: "Пост был создан: " +
+      return {known: true, id: p.id, proof: p.proof, message: "Пост был создан: " +
         (rows[0].status === "pending_approval" ? "на проверке" : "в расписании") + ". Проверьте актуальный статус в публикациях."};
     }
     if (data.state === "recorded" && validOutcomes(rows, p.expected)) {
       const labels = {done:"опубликовано", submitted:"без подтверждения", failed:"ошибка",
         needs_relogin:"нужен вход", deferred:"отложено", banned:"канал заблокирован"};
-      return {known: true, id: p.id, message: rows.map(o =>
+      return {known: true, id: p.id, proof: p.proof, message: rows.map(o =>
         o.channel + (o.target ? " · " + o.target : "") + ": " + (labels[o.status] || "неизвестно")).join("; ")};
     }
-    return {known: false, id: p.id, message: "Результат неизвестен. Проверьте площадки или обратитесь к администратору. Повторная отправка заблокирована."};
+    return {known: false, id: p.id, proof: p.proof, message: "Результат неизвестен. Проверьте площадки или обратитесь к администратору. Повторная отправка заблокирована."};
   }
   async function acknowledge(key, receipt) {
     if (!receipt?.known || !navigator.locks) return;
     await navigator.locks.request(key, {ifAvailable: true}, lock => {
-      if (lock && read(key)?.id === receipt.id) localStorage.removeItem(key);
+      const current = read(key);
+      if (lock && current?.id === receipt.id && current.proof === receipt.proof) localStorage.removeItem(key);
     });
   }
-  window.CrosspostOperations = Object.freeze({scope, pending, run, recover, acknowledge, publicationExpectation});
+  async function complete(key, result) {
+    await acknowledge(key, directReceipts.get(result));
+  }
+  window.CrosspostOperations = Object.freeze({scope, pending, run, recover, acknowledge, complete, publicationExpectation});
 })();

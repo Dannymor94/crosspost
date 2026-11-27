@@ -612,7 +612,7 @@ function ComposeView({ user }) {
         if (feedback.error) { setErr(feedback.error); return; }
         if (window.CrosspostDraft.confirmed(result.outcomes)) {
           if (await draft.clearSubmitted(submittedDraft)) {
-            await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+            await ops.complete(opScope, result);
             setSuccess({...feedback, cleared:true});
           }
           else setErr('Публикация подтверждена. Черновик не очищен: проверьте изменения перед новой отправкой.');
@@ -635,7 +635,7 @@ function ComposeView({ user }) {
           ? { msg: 'Пост отправлен на проверку.', sub: 'Мы опубликуем его, как только проверим.' }
           : { msg: `Пост выйдет ${window.CrosspostTime.label(post.scheduled_at, zone)}.`, sub: '' };
         if (await draft.clearSubmitted(submittedDraft)) {
-          await ops.acknowledge(opScope, {known:true,id:submittedDraft.revision});
+          await ops.complete(opScope, post);
           setSuccess({...feedback, cleared:true});
         }
         else setErr('Пост создан. Черновик не очищен: проверьте изменения перед новой отправкой.');
