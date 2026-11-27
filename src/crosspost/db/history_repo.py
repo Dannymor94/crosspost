@@ -4,21 +4,25 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import String, and_, cast, func, literal, or_, select, union_all
+from sqlalchemy import String, and_, case, cast, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import Publication, ScheduledPost
 
 Source = Literal["scheduled", "immediate"]
+SourceFilter = Literal["all", "scheduled", "immediate"]
 
 
 class HistoryCursor(BaseModel):
     stamp: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$")
     source: Source
     key: str = Field(min_length=1, max_length=64)
+    filter_key: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     def encode(self) -> str:
         return base64.urlsafe_b64encode(self.model_dump_json().encode()).decode()
@@ -75,7 +79,21 @@ class HistoryRepository:
         self.session = session
         self.profile_id = profile_id
 
-    async def page(self, *, limit: int, before: HistoryCursor | None = None) -> HistoryPage:
+    async def page(
+        self,
+        *,
+        limit: int,
+        before: HistoryCursor | None = None,
+        source_filter: SourceFilter = "all",
+        query: str = "",
+    ) -> HistoryPage:
+        # Bind cursor to the authorized scope and exact search. It is not a
+        # credential and contains no plaintext search query.
+        filter_key = hashlib.sha256(
+            json.dumps([self.profile_id, source_filter, query], ensure_ascii=False).encode()
+        ).hexdigest()
+        if before is not None and before.filter_key != filter_key:
+            raise ValueError("cursor does not match search")
         # Normalize SQLite datetime precision so server-default and Python dates
         # compare consistently. Source + key break ties at the millisecond.
         stamp_format = "%Y-%m-%dT%H:%M:%f"
@@ -96,8 +114,31 @@ class HistoryRepository:
             )
             .group_by(Publication.publication_id)
         )
+        if query:
+            # SQLite instr is a literal, case-sensitive substring search.
+            # Do not search raw adapter errors, external IDs or filesystem paths.
+            channel_match = func.instr(Publication.channel, query) > 0
+            scheduled_match = (
+                select(Publication.id)
+                .where(
+                    Publication.profile_id == self.profile_id,
+                    Publication.publication_id
+                    == literal("schedpost-") + cast(ScheduledPost.id, String),
+                    channel_match,
+                )
+                .correlate(ScheduledPost)
+                .exists()
+            )
+            scheduled = scheduled.where(
+                or_(func.instr(ScheduledPost.text, query) > 0, scheduled_match)
+            )
+            # HAVING preserves ALL observed outcomes in the group and the
+            # original first-created timestamp, even if only one channel matches.
+            immediate = immediate.having(func.max(case((channel_match, 1), else_=0)) == 1)
         keys = union_all(scheduled, immediate).subquery()
         stmt = select(keys).where(keys.c.stamp.is_not(None))
+        if source_filter != "all":
+            stmt = stmt.where(keys.c.source == source_filter)
         if before is not None:
             stmt = stmt.where(
                 or_(
@@ -167,6 +208,6 @@ class HistoryRepository:
         if len(rows) > limit:
             last = rows[limit - 1]
             next_cursor = HistoryCursor(
-                stamp=last["stamp"], source=last["source"], key=last["key"]
+                stamp=last["stamp"], source=last["source"], key=last["key"], filter_key=filter_key
             ).encode()
         return HistoryPage(entries=entries, next_cursor=next_cursor)

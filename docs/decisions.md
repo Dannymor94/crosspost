@@ -157,3 +157,7 @@ User explicitly picks civil day and time. Only ephemeral profile-scoped editor s
 ### T-511 selection toolbar (draft)
 
 Bulk select is explicit, never invoked on media/target refresh. Only current ready/eligible list, preserve existing intersection and draft fences. No new send/retry or API. Unavailable count and excluded selections visible. No fabricated capability limits.
+
+### T-513 history search (draft)
+
+Search by saved post text and stored channel code, case-sensitive literal substring via SQLite instr. Filter at query/group level before paging; retain full observed result group. Search body rather than URL, cursor hash binds scope/filter (not authorization). No raw diagnostics, secret fields, backfill, or write. Immediate missing text remains unknown.
