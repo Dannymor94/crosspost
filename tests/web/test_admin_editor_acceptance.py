@@ -14,7 +14,16 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
 @pytest.mark.parametrize(
     "scenario",
-    ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation", "calendar"],
+    [
+        "unknown",
+        "submitted",
+        "incomplete",
+        "rejected",
+        "stale",
+        "navigation",
+        "calendar",
+        "history",
+    ],
 )
 def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     assert ASSETS is not None
@@ -154,6 +163,40 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                     },
                 ]
             )
+        elif scenario == "history" and path == "/api/profiles/1/history":
+            if "before=" in parsed.query:
+                entries = [
+                    {
+                        "source": "scheduled",
+                        "key": "4",
+                        "created_at_utc": "2026-11-27T09:00:00.000Z",
+                        "text": "Отменённый пост",
+                        "status": "cancelled",
+                        "coverage": "observed_only",
+                        "outcomes": [],
+                    }
+                ]
+                cursor = None
+            else:
+                entries = [
+                    {
+                        "source": "immediate",
+                        "key": "immediate-a",
+                        "created_at_utc": "2026-11-27T10:00:00.000Z",
+                        "text": None,
+                        "status": "submitted_observed",
+                        "coverage": "observed_only",
+                        "outcomes": [{"channel": "telegram", "target": "", "status": "submitted"}],
+                    }
+                ]
+                cursor = "next-page"
+            route.fulfill(
+                json={
+                    "entries": entries,
+                    "next_cursor": cursor,
+                    "scope": "scheduled_and_observed_immediate",
+                }
+            )
         elif path.endswith("/operation-status"):
             recoveries += 1
             assert request.headers.get("idempotency-key")
@@ -242,6 +285,27 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "admin-00-dark-theme.png")
             text = page.get_by_placeholder("Текст поста…")
+            if scenario == "history":
+                menu = page.get_by_role("navigation", name="Меню администратора", exact=True)
+                menu.get_by_role("button", name="История", exact=True).click()
+                expect(page.get_by_role("heading", name="История", exact=True)).to_be_visible()
+                expect(page.get_by_text("Текст не был сохранён в истории")).to_be_visible()
+                expect(
+                    page.get_by_text("Отправлено без подтверждения", exact=True).first
+                ).to_be_visible()
+                expect(page.get_by_text("Опубликовано", exact=True)).to_have_count(0)
+                page.get_by_role("button", name="Показать ещё").click()
+                expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
+                page.get_by_label("Тип публикации").select_option("scheduled")
+                expect(page.get_by_text("Текст не был сохранён в истории")).to_have_count(0)
+                page.get_by_label("Тип публикации").select_option("all")
+                page.get_by_label("Поиск по загруженным записям").fill("Отменённый")
+                expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
+                expect(page.get_by_text("Текст не был сохранён в истории")).to_have_count(0)
+                capture(page, "admin-06-history.png")
+                assert sends == 0
+                assert not errors, errors
+                return
             if scenario == "calendar":
                 menu = page.get_by_role("navigation", name="Меню администратора", exact=True)
                 menu.get_by_role("button", name="Календарь", exact=True).click()

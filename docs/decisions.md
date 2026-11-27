@@ -133,3 +133,11 @@ Canonical schedule rows grouped by profile-zone calendar day; date-only navigati
 ### T-512 calendar UI (draft)
 
 The shared calendar reads only the existing profile schedule projection. Existing management forms remain authoritative; no new scheduling write or automatic date prefill. Missing zone and legacy rows stay unplaced. All dates in the month/week grid are civil days in the profile zone.
+
+## T-513 history first slice (draft)
+
+Use persisted FK-backed scheduled/publication rows only; no operation ledger-only history until profile-incarnation fence/retention. Cursor orders creation timestamp (normalized SQLite milliseconds), source and unique source key; stable across equal times, not a snapshot of concurrent inserts. No fabricated immediate text, raw error, external link or media path. Aggregate observed outcomes must not imply a complete receipt. No new retry or write. Full C5 coverage remains open.
+
+### T-513 history UI contract (draft)
+
+Never label observed aggregate DONE as confirmed whole post. Per-target results are persisted observations; unknown status fails closed. Search explicitly limited to loaded pages; no raw diagnostics/links/retry. History fetch aborts on unmount/scope changes; errors never replace a failed read with empty success.
