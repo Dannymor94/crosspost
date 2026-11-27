@@ -233,3 +233,10 @@ Shared read-only History screen for both roles; source filter, explicitly loaded
 ## UX-08 T-515 — status and preparation (draft)
 
 Client can read own profile's channel statuses and declared preparation steps; no new credential/connection mutations or secret collection. Admin distinguishes banned/unknown from not_connected and does not offer normal reconnect/reset/validate for blocked/unknown state. Existing wizard remains for allowed states. Status is a saved snapshot, not live verification; transient health contract stays server-side. Self-service connection, role/security gates, real login and device acceptance remain open. CI pending.
+
+## 2026-11-27 — последовательный цикл, checkpoint
+
+- #62 T-512 exact code HEAD `0f361c4`: CI PASS, mock Chromium 7/7 client + 7/7 admin (46011491333/46011491349). Исправлена доступная подпись фильтра, сетка по дням недели. Direct create/reschedule ещё открыты.
+- #64 T-513 code HEAD `a760e02`: Chromium 8/8 + 8/8 (46012148346), Python 3.13 general CI 1360 passed, 16 skipped, 2 warnings (46012148441); 3.11 на момент записи ещё выполняется. API scope/tie-pagination regression included. История не полная: immediate metadata/ledger-only и server search open.
+- #65 T-515 code HEAD `78b2e2a`: клиентский status/preparation screen и admin blocked/unknown guard, тесты обеих ролей добавлены. Exact-head проверки выполняются (46012482227/46012482268). T-514 не дублировать до согласования #33/#36; self-service flow требует auth/role gates.
+- #63 правило последовательного автономного цикла: CI PASS, ещё не смержено. Ветки stacked draft; независимый QA и delivery gates не отменены. Работа через GitHub connector, полного локального DoD не заявляем.
