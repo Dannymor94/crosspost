@@ -2534,7 +2534,9 @@ function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConso
         className: "btn btn-ghost btn-sm", style: { width: "100%", marginTop: "8px" },
         onClick: onNewClient, disabled: profiles.length === 0,
         title: profiles.length === 0 ? "Сначала создайте профиль" : "",
-      }, "＋ Аккаунт клиента"),
+      }, "＋ Аккаунт клиента (старый способ)"),
+      h("a", { className: "btn btn-ghost btn-sm", href: "/account#owner" },
+        "Приглашения и восстановление"),
     ),
   );
 }
@@ -4454,6 +4456,7 @@ function LoginView({ onSuccess }) {
     h("form", { className: "login-card", onSubmit: submit },
       h("div", { className: "login-logo" }, "⊹ CROSSPOST"),
       h("p", { className: "login-sub" }, "Вход в панель"),
+      h("a", { href: "/account" }, "Приглашение или восстановление доступа"),
       h("div", { className: "form-group" },
         h("label", { className: "form-label", htmlFor: "l-login" }, "Логин"),
         h("input", { id: "l-login", ref, className: "form-input", value: login,

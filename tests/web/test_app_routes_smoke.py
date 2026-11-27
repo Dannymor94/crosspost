@@ -36,6 +36,12 @@ _EXPECTED: list[tuple[str, str]] = [
     ("GET", "/health"),
     ("GET", "/health/live"),
     # auth
+    ("GET", "/account"),
+    ("POST", "/api/auth/register"),
+    ("GET", "/api/users/invitations"),
+    ("POST", "/api/users/invitations"),
+    ("POST", "/api/users/invitations/{*}/renew"),
+    ("POST", "/api/users/invitations/{*}/revoke"),
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),

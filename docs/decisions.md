@@ -4,6 +4,17 @@ Short dated entries. One paragraph each.
 
 ---
 
+## 2026-11-27 — T-407 invitation first delivery candidate
+
+Only a newly created unique profile may be invited; no adoption of existing profiles in this slice.
+A single slot per profile stores a SHA-256 digest of 32 random bytes encoded URL-safe,
+expiry (24h) and consumption; replacement/revocation invalidates the previous capability.
+Issue and redeem use one writer transaction including the audit event. The API binds CLIENT and
+profile server-side. Legacy administrator/CLI account creation remains operator-only; if an account
+already exists for the invitation profile, redemption refuses. No global legacy profile uniqueness
+change. The migration is stacked after T-304; not approved for release. Default-disabled feature flag
+until T-409, independent QA and owner onboarding approval. Links use fragments, never query strings.
+
 ## 2026-11-21 — Восстановление доступа клиента через владельца (T-406)
 
 Публичной саморегистрации и самостоятельного сброса пароля пока нет: клиент обращается
