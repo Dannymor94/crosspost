@@ -302,3 +302,34 @@ async def test_csrf_requires_signed_browser_and_session_bound_proof(registration
         assert (await c.delete("/api/profiles/999999")).status_code == 403
         assert (await c.post("/api/auth/logout", headers=fresh)).status_code == 200
         assert (await c.post("/api/auth/logout", headers=fresh)).status_code == 403
+
+
+async def test_logout_revokes_all_devices_but_not_other_accounts(registration):
+    factory, client = registration
+    async with client() as first, client() as second, client() as owner, client() as stale:
+        account = await _login(first, "existing", "existing-password")
+        await _login(second, "existing", "existing-password")
+        await _login(owner, "owner", "owner-password")
+        old_cookie = first.cookies.get("session")
+        assert old_cookie
+        stale.cookies.set("session", old_cookie)
+        token = await owner.post(
+            f"/api/users/{account['id']}/recovery-token",
+            json={"admin_password": "owner-password"},
+        )
+        assert token.status_code == 200
+        assert (await first.post("/api/auth/logout")).status_code == 200
+        assert (await first.get("/api/auth/me")).status_code == 401
+        assert (await second.get("/api/auth/me")).status_code == 401
+        assert (await owner.get("/api/auth/me")).status_code == 200
+        recovery = await first.post(
+            "/api/auth/recover",
+            json={"token": token.json()["token"], "new_password": "unused-password-123"},
+        )
+        assert recovery.status_code == 400
+        await _login(second, "existing", "existing-password")
+        assert (await stale.post("/api/auth/logout")).status_code == 200
+        assert (await second.get("/api/auth/me")).status_code == 200
+    async with factory() as session:
+        user = await session.get(User, account["id"])
+        assert user is not None and user.session_generation == 1

@@ -355,3 +355,8 @@ exactly-once: повтор возможен, если сообщение при�
 ## T-409 CSRF (draft)
 
 Production requires an explicit canonical `CROSSPOST_AUTH_ORIGIN=https://<domain>` and always checks a signed proof for all unsafe HTTP methods, even anonymous login, recovery, registration and logout. The proof endpoint is same-origin and no-store, tied to an HttpOnly host-only nonce and the exact session cookie. HTTPS uses a `__Host-` nonce; the proof is not persisted by JavaScript. API consumers must fetch the proof with their cookie jar and send `X-CSRF-Token`; never auto-retry a failed mutation. Development opt-in: `CROSSPOST_CSRF_ENABLED=true`. No permissive CORS. Origin/Referer, if present, must equal the configured origin; Sec-Fetch-Site cross-site/same-site is denied. Existing GET handlers with lazy writes or external effects need separate review. Deployment wiring, newer UX stack, real browser acceptance, logout revocation and MFA remain release blockers.
+
+
+### Server-side logout (draft)
+
+Logout revokes all devices for that account using the existing session generation CAS. Previously issued recovery links for that generation become invalid; the owner can issue a fresh link. Stale/invalid cookies are cleared without incrementing a newer generation. A failed logout request must not be presented as confirmed server revocation. Already admitted or in-flight operations are not cancelled by this slice; their admission fences are a separate rollout gate.
