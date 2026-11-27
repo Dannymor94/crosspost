@@ -169,3 +169,7 @@ Explicit submit; server results replace loaded-only local filtering. Filter and 
 ### T-516 text-only reuse preparation (draft)
 
 Reuse existing authorized history text only, not a new saved template store or media library. Intent is profile-scoped in memory, cleared by navigation/context reset, explicit apply only to ready empty draft; no new publication side effect. T-405 still blocks durable library policy.
+
+### T-401 client help (draft)
+
+Complement #49 operator runbook without duplicating it. Show only current available flows and no fabricated contact link, invitation or credential collection. Navigation uses existing dirty-draft guards; public login instructions are static, not an auth feature.

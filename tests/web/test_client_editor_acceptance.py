@@ -24,6 +24,7 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
         "calendar",
         "history",
         "connections",
+        "help",
     ],
 )
 def test_client_draft_reload_media_loss_and_unknown_send(scenario):
@@ -294,6 +295,28 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "00-client-dark-theme.png")
             text = page.get_by_placeholder("Напишите текст поста…")
+            if scenario == "help":
+                menu = page.get_by_role("navigation", name="Мобильное меню клиента")
+                menu.get_by_role("button", name="Главная", exact=True).click()
+                page.get_by_role("button", name="Как пользоваться сервисом").click()
+                expect(
+                    page.get_by_role("heading", name="Как пользоваться Crosspost")
+                ).to_be_visible()
+                expect(page.get_by_text("5. Если потеряли доступ", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Открыть подключения").click()
+                expect(page.get_by_role("heading", name="Подключения", exact=True)).to_be_visible()
+                menu.get_by_role("button", name="Ещё", exact=True).click()
+                page.get_by_role("button", name="Инструкция", exact=True).click()
+                page.get_by_role("button", name="Открыть календарь").click()
+                expect(page.get_by_role("heading", name="Календарь", exact=True)).to_be_visible()
+                menu.get_by_role("button", name="Ещё", exact=True).click()
+                page.get_by_role("button", name="Инструкция", exact=True).click()
+                capture(page, "08-client-help.png")
+                page.get_by_role("button", name="Создать пост", exact=True).click()
+                expect(text).to_be_visible()
+                assert sends == 0
+                assert not errors, errors
+                return
             if scenario == "connections":
                 menu = page.get_by_role("navigation", name="Мобильное меню клиента")
                 menu.get_by_role("button", name="Ещё", exact=True).click()

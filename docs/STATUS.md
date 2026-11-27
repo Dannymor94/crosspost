@@ -264,3 +264,7 @@ Both role history screens now search persisted pages using explicit submit and s
 ## T-516 text reuse preparation (draft)
 
 Existing scoped history text may be offered to an empty editor through an explicit in-memory intent. No automatic application, target/media/date copy, new persistence, overwrite of nonempty draft or publish. Existing draft CAS remains authoritative. Media library and stored templates blocked by T-405 retention/product policy; no deletion. Browser tests for explicit insert, persisted empty targets and refusing overwrite. CI pending.
+
+## T-401 client help UI (draft)
+
+Client-facing complement to the operator runbook #49: in-app step-by-step help with live navigation to connections, editor, calendar and history; explicit moderation, unknown-result and recovery cautions. Login accessible labels and current admin-created account instructions. No registration/recovery endpoint or external notification invented. T-406/T-410 and owner onboarding gate remain open. CI pending.

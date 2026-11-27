@@ -404,12 +404,12 @@ function LoginView({ onLogin }) {
         <div class="login-title">Войти</div>
         <form onSubmit=${submit}>
           <div class="field">
-            <label class="label">Логин</label>
-            <input type="text" value=${login} onInput=${e => setLogin(e.target.value)} autocomplete="username" autocapitalize="none" required />
+            <label class="label" for="client-login">Логин</label>
+            <input id="client-login" type="text" value=${login} onInput=${e => setLogin(e.target.value)} autocomplete="username" autocapitalize="none" required />
           </div>
           <div class="field">
-            <label class="label">Пароль</label>
-            <input type="password" value=${password} onInput=${e => setPassword(e.target.value)} autocomplete="current-password" required />
+            <label class="label" for="client-password">Пароль</label>
+            <input id="client-password" type="password" value=${password} onInput=${e => setPassword(e.target.value)} autocomplete="current-password" required />
           </div>
           ${err && html`<div class="error-msg">${err}</div>`}
           <button type="submit" class="btn btn-primary" disabled=${busy}>
@@ -417,6 +417,7 @@ function LoginView({ onLogin }) {
             Войти
           </button>
         </form>
+        <p class="cp-muted">Аккаунт создаёт администратор. Если не можете войти, обратитесь к нему по согласованному контакту. Не передавайте пароль.</p>
       </div>
     </div>
   `;
@@ -925,9 +926,9 @@ const CLIENT_ITEMS = Object.freeze([
   {id:"posts",label:"Расписание",icon:"calendar"},
   {id:"more",label:"Ещё",icon:"more"},
 ]);
-const CLIENT_ROUTES = Object.freeze([...CLIENT_ITEMS.map(i=>i.id),"history","connections"]);
+const CLIENT_ROUTES = Object.freeze([...CLIENT_ITEMS.map(i=>i.id),"history","connections","help"]);
 function ClientNavigation({tab,onNavigate,mobile=false}) {
-  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},CLIENT_ITEMS,["history","connections"].includes(tab)?"more":tab,onNavigate,
+  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},CLIENT_ITEMS,["history","connections","help"].includes(tab)?"more":tab,onNavigate,
     mobile ? "Мобильное меню клиента" : "Меню клиента",mobile);
   return html`<div ref=${ref} class=${mobile?"cp-client-mobile":"cp-client-menu"}></div>`;
 }
@@ -939,6 +940,7 @@ function ClientHome({user,onNavigate}) {
       <p class="cp-muted">Подготовьте публикацию или откройте расписание.</p>
       <button class="cp-button cp-button--primary" onClick=${()=>onNavigate("compose")}>Создать пост</button>
       <button class="cp-button" onClick=${()=>onNavigate("posts")}>Открыть расписание</button>
+      <button class="cp-button" onClick=${()=>onNavigate("help")}>Как пользоваться сервисом</button>
     </div>
     <div class="cp-panel cp-stack" aria-live="polite">
       <h2>Активное расписание</h2>
@@ -956,12 +958,42 @@ function ClientHome({user,onNavigate}) {
           </div>`)}`:html`<p class="cp-muted">Активных публикаций нет.</p>`}`:null}
     </div></section>`;
 }
+function ClientHelp({onNavigate}) {
+  return html`<section class="cp-stack"><h1 class="cp-title">Как пользоваться Crosspost</h1>
+    <div class="cp-panel cp-stack">
+      <h2>1. Подключите площадки</h2>
+      <p>Откройте подключения. У каждой площадки показано последнее сохранённое состояние и этапы подготовки. Администратор поможет пройти защищённый мастер подключения.</p>
+      <p>Не отправляйте пароли, коды входа и токены в переписке.</p>
+      <button class="cp-button" onClick=${()=>onNavigate("connections")}>Открыть подключения</button>
+    </div>
+    <div class="cp-panel cp-stack">
+      <h2>2. Создайте первый пост</h2>
+      <p>Добавьте текст или файл, выберите доступные площадки, проверьте предпросмотр. Дождитесь сообщения о сохранении черновика.</p>
+      <button class="cp-button cp-button--primary" onClick=${()=>onNavigate("compose")}>Создать пост</button>
+    </div>
+    <div class="cp-panel cp-stack">
+      <h2>3. Выберите время</h2>
+      <p>Публикуйте сразу, если это разрешено, или укажите дату и время в часовом поясе профиля. При включённой модерации пост сначала поступит на проверку.</p>
+      <button class="cp-button" onClick=${()=>onNavigate("posts")}>Открыть календарь</button>
+    </div>
+    <div class="cp-panel cp-stack">
+      <h2>4. Проверьте результат</h2>
+      <p>В истории доступны сохранённые результаты по площадкам. «Отправлено без подтверждения» не означает подтверждённую публикацию. При неизвестном результате проверьте операцию в редакторе и не отправляйте весь пост повторно.</p>
+      <button class="cp-button" onClick=${()=>onNavigate("history")}>Открыть историю</button>
+    </div>
+    <div class="cp-panel cp-stack">
+      <h2>5. Если потеряли доступ</h2>
+      <p>Свяжитесь с владельцем или администратором сервиса по ранее согласованному контакту. Не передавайте свой пароль. Самостоятельная регистрация и восстановление пока не доступны.</p>
+    </div>
+  </section>`;
+}
 function ClientMore({user,onLogout,onNavigate}) {
   return html`<section class="cp-stack"><h1 class="cp-title">Ещё</h1>
     <div class="cp-panel cp-stack"><p>Аккаунт: ${user.login}</p>
       <p class="cp-muted">Для изменения подключений обратитесь к администратору.</p>
       <button class="cp-button" onClick=${()=>onNavigate("history")}>История</button>
       <button class="cp-button" onClick=${()=>onNavigate("connections")}>Подключения</button>
+      <button class="cp-button" onClick=${()=>onNavigate("help")}>Инструкция</button>
       <button class="cp-button" onClick=${onLogout}>Выйти из аккаунта</button>
     </div></section>`;
 }
@@ -1018,6 +1050,7 @@ function App() {
         : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
         : tab === 'history' ? html`<${HistoryPanel} key=${user.profile_id} pid=${user.profile_id} onReuseText=${text=>{if(navigate("compose"))setReuseIntent({pid:user.profile_id,text});}} />`
         : tab === 'connections' ? html`<${ConnectionPanel} key=${user.profile_id} pid=${user.profile_id} />`
+        : tab === 'help' ? html`<${ClientHelp} onNavigate=${navigate} />`
         : html`<${ClientMore} user=${user} onLogout=${logout} onNavigate=${navigate} />`}
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} mobile=${true} />
     </div>
