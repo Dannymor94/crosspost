@@ -177,3 +177,34 @@ async def test_account_page_has_no_external_scripts_or_referrer(registration):
         assert "script-src 'self'" in response.headers["content-security-policy"]
         assert "/static/account.js" in response.text
         assert "https://" not in response.text
+
+
+async def test_support_card_owner_only_and_scoped_audit(registration):
+    factory, client = registration
+    async with client() as owner, client() as anon, client() as existing:
+        admin = await _login(owner, "owner", "owner-password")
+        old = await _login(existing, "existing", "existing-password")
+        invite = await _invite(owner, "support-profile")
+        path = f"/api/users/support/{old['profile_id']}/inspect"
+        assert (await anon.post(path, json={})).status_code == 401
+        assert (await existing.post(path, json={})).status_code == 403
+        response = await owner.post(path, json={})
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        card = response.json()
+        assert card["profile_id"] == old["profile_id"]
+        assert card["accounts"] == [{"id": old["id"], "login": "existing"}]
+        assert "password_hash" not in response.text
+        assert "existing-password" not in response.text
+        second = f"/api/users/support/{invite['profile_id']}/inspect"
+        response = await owner.post(second, json={})
+        assert response.status_code == 200
+        assert response.json()["accounts"] == []
+        assert (await owner.post("/api/users/support/999999/inspect", json={})).status_code == 404
+    async with factory() as session:
+        logs = list(
+            await session.scalars(select(Log).where(Log.message.like("support_inspected%")))
+        )
+        assert len(logs) == 2
+        assert {log.profile_id for log in logs} == {old["profile_id"], invite["profile_id"]}
+        assert all(f"actor_id={admin['id']}" in log.message for log in logs)

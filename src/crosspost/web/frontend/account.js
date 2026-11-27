@@ -81,12 +81,73 @@
     button(panel,"Скрыть ссылку",() => panel.remove());
     content.append(panel);
   }
+  async function supportCard() {
+    const panel = element("section", "");
+    panel.append(element("h2", "Карточка клиента"));
+    panel.append(element("p", "Режим поддержки: просмотр от имени владельца. Настройки здесь не изменяются."));
+    const selection = element("select", "", {"aria-label":"Профиль для поддержки"});
+    selection.append(element("option", "Выберите профиль", {value:""}));
+    const result = element("article", "");
+    panel.append(selection);
+    let epoch = 0;
+    const open = button(panel, "Открыть карточку", async () => {
+      const pid = Number(selection.value);
+      if (!Number.isSafeInteger(pid) || pid <= 0 || open.disabled) return;
+      const current = ++epoch;
+      open.disabled = true;
+      result.replaceChildren(element("p", "Загружаем карточку…"));
+      try {
+        const card = await request("/api/users/support/" + pid + "/inspect", {});
+        if (current !== epoch || Number(selection.value) !== pid) return;
+        if (card.profile_id !== pid) throw Error("Получен другой профиль.");
+        const labels = {live:"Подключено",needs_relogin:"Нужен повторный вход",banned:"Ограничено",
+          done:"Опубликовано",submitted:"Отправлено без подтверждения",failed:"Не опубликовано",
+          new:"Ожидает",queued:"В очереди",attempting:"Выполняется",scheduled:"Запланировано",
+          pending_approval:"На проверке",publishing:"Публикуется",cancelled:"Отменено"};
+        const label = value => Object.hasOwn(labels,value) ? labels[value] : "Неизвестно";
+        result.replaceChildren(element("h3", "Поддержка · " + card.profile_name),
+          element("p", "Профиль №" + pid),
+          element("p", "Аккаунты: " + (card.accounts.map(x=>x.login).join(", ") || "Не созданы")),
+          element("p", "Модерация: " + (card.moderation_enabled ? "Включена" : "Выключена")),
+          element("h3", "Сохранённые подключения"));
+        if (!card.connections.length) result.append(element("p", "Нет сохранённых состояний."));
+        for (const row of card.connections) result.append(element("p", row.channel + " — " + label(row.state)));
+        result.append(element("h3", "Расписание"));
+        if (!Object.keys(card.scheduled_counts).length) result.append(element("p", "Нет записей."));
+        for (const [state,count] of Object.entries(card.scheduled_counts)) {
+          result.append(element("p", label(state) + ": " + count));
+        }
+        result.append(element("h3", "Последние 10 сохранённых результатов по площадкам"));
+        if (!card.recent_outcomes.length) result.append(element("p", "Нет сохранённых результатов."));
+        for (const row of card.recent_outcomes) result.append(element("p", row.channel + " — " + label(row.status)));
+        result.append(element("p", "Это наблюдаемые записи, а не проверка доставки или доступности площадок."));
+        result.append(element("a", "Вернуться к панели управления", {href:"/"}));
+      } catch (err) {
+        if (current === epoch) result.replaceChildren(element("p", err.message || "Не удалось открыть карточку."));
+      } finally {
+        if (current === epoch) open.disabled = !selection.value;
+      }
+    });
+    open.disabled = true;
+    selection.addEventListener("change", () => {
+      ++epoch; result.replaceChildren(); open.disabled = !selection.value;
+    });
+    button(panel,"Закрыть карточку",()=>{
+      ++epoch; selection.value=""; result.replaceChildren(); open.disabled=true;
+    });
+    panel.append(result); content.append(panel);
+    try {
+      const profiles = await request("/api/profiles");
+      for (const p of profiles) selection.append(element("option", p.name, {value:String(p.id)}));
+    } catch (err) { result.replaceChildren(element("p", err.message)); }
+  }
   async function owner() {
     heading.textContent = "Приглашения и восстановление";
     description.textContent = "Только для владельца. Вы не получаете пароль клиента.";
     try {
       const me = await request("/api/auth/me");
       if (me.role !== "admin") throw Error("Доступно только владельцу.");
+      await supportCard();
       const clients = await request("/api/users");
       const recovery = element("form","");
       recovery.append(element("h2","Восстановить доступ"));
