@@ -171,6 +171,22 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             assert request.headers.get("x-schedule-time-contract") == "utc-v1"
             assert instant in (request.post_data or "")
             route.abort("failed")
+        elif scenario == "navigation" and path == "/api/profiles/1/scheduled":
+            route.fulfill(
+                json=[
+                    {
+                        "id": 11,
+                        "status": "scheduled",
+                        "text": "Сводка первого профиля",
+                        "scheduled_at": "2099-01-15T09:30:00Z",
+                        "time_basis": "utc",
+                        "content_type": "post",
+                        "title": None,
+                        "channels": ["telegram"],
+                        "media_paths": [],
+                    }
+                ]
+            )
         elif request.method == "GET" and any(
             path.endswith(suffix)
             for suffix in ("/scheduled", "/scheduled/pending", "/scheduled/report")
@@ -203,6 +219,10 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 mobile = page.get_by_role("navigation", name="Мобильное меню администратора")
                 expect(desktop).to_be_visible()
                 expect(mobile).to_be_hidden()
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.locator(".cp-overview-row")).to_have_count(1)
+                expect(page.get_by_text("Сводка первого профиля", exact=True)).to_be_visible()
+                expect(page.locator(".cp-overview-metrics strong")).to_have_text(["1", "0"])
                 for label in (
                     "Обзор",
                     "Импорт плана",
@@ -249,6 +269,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(text).to_have_value("")
                 desktop.get_by_role("button", name="Обзор", exact=True).click()
                 expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                expect(page.get_by_text("Активных публикаций нет.")).to_be_visible()
+                expect(page.get_by_text("Сводка первого профиля", exact=True)).to_have_count(0)
+                expect(page.locator(".cp-overview-metrics strong")).to_have_text(["0", "0"])
                 for width in (360, 390, 768, 1440):
                     page.set_viewport_size({"width": width, "height": 900})
                     expect(mobile if width <= 640 else desktop).to_be_visible()
