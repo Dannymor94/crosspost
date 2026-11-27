@@ -10,11 +10,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+import asyncio
+
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.auth.passwords import hash_password
-from crosspost.db.models import Role, User
+from crosspost.db.models import Log, Role, User
 
 
 class UserRepository:
@@ -64,3 +66,36 @@ class UserRepository:
         """Сколько всего пользователей (для bootstrap: пусто → нужен первый admin)."""
         result = await self._s.execute(select(func.count()).select_from(User))
         return int(result.scalar_one())
+
+    async def recover_client_password(
+        self, user_id: int, *, generation: int, new_password: str
+    ) -> bool:
+        """CAS: единственный победитель reset; одновременно отзывает прежние сессии."""
+        new_hash = await asyncio.to_thread(hash_password, new_password)
+        result = await self._s.execute(
+            update(User)
+            .where(
+                User.id == user_id,
+                User.role == Role.CLIENT,
+                User.session_generation == generation,
+            )
+            .values(
+                password_hash=new_hash,
+                session_generation=User.session_generation + 1,
+            )
+            .returning(User.profile_id)
+        )
+        profile_id = result.scalar_one_or_none()
+        if profile_id is None:
+            await self._s.rollback()
+            return False
+        self._s.add(
+            Log(
+                profile_id=profile_id,
+                channel="account",
+                level="INFO",
+                message=f"password_recovered user_id={user_id}",
+            )
+        )
+        await self._s.commit()
+        return True

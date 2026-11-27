@@ -135,6 +135,40 @@ async def test_submitted_is_preserved_and_not_retried(session, channel):
     assert adapter.calls == 1
 
 
+@pytest.mark.parametrize(
+    ("raw_reason", "expected"),
+    [
+        ("no_match", "no_match"),
+        (None, None),
+        ("https://example.com/?secret=token123", None),
+        ("arbitrary_unknown_code", None),
+        ("Traceback: VAULT_KEY=secret", None),
+    ],
+)
+async def test_submitted_verification_reason_is_safe_in_db_and_return(
+    session, raw_reason, expected
+):
+    channel = "vk_wall"
+    adapter = _MockAdapter(
+        channel, result=ChannelResult(channel, ResultStatus.SUBMITTED, error=raw_reason)
+    )
+    repo = _repo(session)
+    svc = PublishService(repo, _factory({channel: adapter}))
+    outcome = (await svc.publish(_post(), [channel], publication_id="verify-case"))[0]
+    assert outcome.status == "submitted"
+    assert outcome.error == expected
+    assert (await repo.get_status("verify-case", channel)).error == expected
+
+    initial_attempt = (await repo.get_status("verify-case", channel)).attempt_count
+    # Neither a manual retry nor a normal publish re-entry may resend SUBMITTED.
+    retry = await svc.retry_channel(_post(), channel, publication_id="verify-case")
+    repeated = (await svc.publish(_post(), [channel], publication_id="verify-case"))[0]
+    assert retry.status == repeated.status == "submitted"
+    assert retry.error == repeated.error == expected
+    assert adapter.calls == 1
+    assert (await repo.get_status("verify-case", channel)).attempt_count == initial_attempt
+
+
 # ── Ретрай одного канала ──────────────────────────────────────────────────────
 
 
