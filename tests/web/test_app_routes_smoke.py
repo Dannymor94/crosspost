@@ -33,6 +33,8 @@ def _route_keys():
 # Every (method, path) pair that index.html calls.
 # Path params collapsed to {*} to match FastAPI's registered paths after _norm.
 _EXPECTED: list[tuple[str, str]] = [
+    ("GET", "/health"),
+    ("GET", "/health/live"),
     # auth
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/login"),

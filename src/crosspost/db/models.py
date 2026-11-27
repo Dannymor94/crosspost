@@ -350,6 +350,7 @@ class Log(Base):
     """
 
     __tablename__ = "logs"
+    __table_args__ = (Index("ix_logs_level_created_at", "level", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     profile_id: Mapped[int] = mapped_column(
