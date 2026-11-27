@@ -21,6 +21,7 @@ from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.ops.health import ErrorSpikeCache, SchedulerProgress
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
+from crosspost.web.csrf import CSRFMiddleware
 from crosspost.web.routes import (
     auth,
     channels,
@@ -151,6 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Crosspost Admin", lifespan=lifespan)
+    app.add_middleware(CSRFMiddleware)
     app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(users.router)

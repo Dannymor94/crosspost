@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-27 — T-409 CSRF (draft)
+
+- Same-origin proof endpoint, HttpOnly browser nonce and session-bound HMAC; all unsafe HTTP methods checked before handler. Explicit production HTTPS origin; cross-site and sibling-origin requests refused.
+- Shared browser helper for current admin/client/account pages, including XHR media upload. No automatic replay. New UX stack integration and browser acceptance remain pending.
+
 ## 2026-11-27 — T-409 authentication admission and cookie policy (draft)
 
 - Persistent admission before password verification: IP 5/15 min, subject 20/hour, family 300/15 min; no raw IP/login/token stored. Successful attempts count too. Production mode requires HTTPS and rate limiting; HTTPS always uses Secure cookie.

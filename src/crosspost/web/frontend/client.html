@@ -327,6 +327,7 @@ textarea { resize: vertical; min-height: 110px; }
 .section-title { font-size: 14px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; margin-top: 8px; }
 .video-warn { font-size: 14px; color: var(--text-2); margin-top: 8px; }
 </style>
+  <script src="/static/csrf.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -339,15 +340,15 @@ const html = htm.bind(preact.h);
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 const api = {
-  get: (url) => fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
-  post: (url, body) => fetch(url, {
+  get: (url) => window.CrosspostRequest.fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+  post: (url, body) => window.CrosspostRequest.fetch(url, {
     method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }),
-  postForm: (url, fd) => fetch(url, { method: 'POST', credentials: 'include', body: fd }),
-  del: (url) => fetch(url, { method: 'DELETE', credentials: 'include' }),
-  patch: (url, body) => fetch(url, {
+  postForm: (url, fd) => window.CrosspostRequest.fetch(url, { method: 'POST', credentials: 'include', body: fd }),
+  del: (url) => window.CrosspostRequest.fetch(url, { method: 'DELETE', credentials: 'include' }),
+  patch: (url, body) => window.CrosspostRequest.fetch(url, {
     method: 'PATCH', credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

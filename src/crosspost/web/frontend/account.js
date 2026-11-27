@@ -29,7 +29,7 @@
     const opts = {credentials:"same-origin", cache:"no-store"};
     if (body !== undefined) Object.assign(opts, {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-    const r = await fetch(path, opts);
+    const r = await window.CrosspostRequest.fetch(path, opts);
     if (!r.ok) {
       const messages = {400:"Ссылка недействительна или устарела.",401:"Требуется вход.",
         403:"Доступ запрещён или неверный пароль.",409:"Логин или название недоступны.",

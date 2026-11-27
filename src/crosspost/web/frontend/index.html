@@ -1234,6 +1234,7 @@ body {
 .plat-disconnected-cards { padding: 0 10px 10px; }
 @media (max-width: 600px) { .plat-sections { gap: 10px; } }
 </style>
+  <script src="/static/csrf.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -1247,12 +1248,12 @@ const { createRoot } = await import("https://esm.sh/react-dom@18/client");
 // ── API helpers ────────────────────────────────────────────────────────────
 const api = {
   async get(url) {
-    const r = await fetch(url);
+    const r = await window.CrosspostRequest.fetch(url);
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
   async post(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1261,12 +1262,12 @@ const api = {
     return r.json();
   },
   async postForm(url, formData) {
-    const r = await fetch(url, { method: "POST", body: formData });
+    const r = await window.CrosspostRequest.fetch(url, { method: "POST", body: formData });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
   async put(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1275,7 +1276,7 @@ const api = {
     return r.json();
   },
   async patch(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1284,7 +1285,7 @@ const api = {
     return r.json();
   },
   async del(url) {
-    const r = await fetch(url, { method: "DELETE" });
+    const r = await window.CrosspostRequest.fetch(url, { method: "DELETE" });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
@@ -2050,7 +2051,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
   async function loadDialogs(refresh) {
     setRefreshing(true); setFloodSecs(null);
     try {
-      const r = await fetch(`${base}/dialogs${refresh ? "?refresh=1" : ""}`);
+      const r = await window.CrosspostRequest.fetch(`${base}/dialogs${refresh ? "?refresh=1" : ""}`);
       if (r.status === 429) {
         const b = await r.json(); const d = b.detail || b;
         setFloodSecs(d.retry_after);
@@ -2064,7 +2065,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
 
   useEffect(() => {
     loadDialogs(false);
-    fetch(`${base}/targets`).then(r => r.ok ? r.json() : []).then(setExistingTargets).catch(() => {});
+    window.CrosspostRequest.fetch(`${base}/targets`).then(r => r.ok ? r.json() : []).then(setExistingTargets).catch(() => {});
   }, []);
 
   async function expandForum(tv) {
@@ -2073,7 +2074,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
     if (!willOpen || topicsCache[tv]) return;
     setTopicsCache(prev => ({ ...prev, [tv]: { loading: true, items: null } }));
     try {
-      const r = await fetch(`${base}/dialogs/${encodeURIComponent(tv)}/topics`);
+      const r = await window.CrosspostRequest.fetch(`${base}/dialogs/${encodeURIComponent(tv)}/topics`);
       if (r.ok) {
         const b = await r.json();
         setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: b.items } }));
@@ -3111,7 +3112,7 @@ function BlockPreview({ profileId, text }) {
       try {
         const fd = new FormData();
         fd.append("text", text);
-        const resp = await fetch(
+        const resp = await window.CrosspostRequest.fetch(
           `/api/profiles/${profileId}/publish/preview-blocks`,
           { method: "POST", body: fd, signal: ctrl.signal }
         );
@@ -3303,7 +3304,7 @@ function PublishView({ profile }) {
     mediaDebounceRef.current = setTimeout(async () => {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
-        const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
+        const r = await window.CrosspostRequest.fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
         if (r.ok) { setMediaThumb(await r.json()); }
         else {
           const b = await r.json().catch(() => ({ detail: r.statusText }));
@@ -3342,10 +3343,12 @@ function PublishView({ profile }) {
     return true;
   }
 
-  function postFormWithProgress(url, fd) {
+  async function postFormWithProgress(url, fd) {
+    const proof = await window.CrosspostRequest.proof();
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
+      if (proof) xhr.setRequestHeader("X-CSRF-Token", proof);
       xhr.withCredentials = true;
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
@@ -3744,7 +3747,7 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     if (!Object.keys(patch).length) { onClose?.(); setBusy(false); return; }
     try {
       // Используем fetch напрямую — нужен статус-код для различения 409/422/404.
-      const r = await fetch(`${base}/scheduled/${post.id}`, {
+      const r = await window.CrosspostRequest.fetch(`${base}/scheduled/${post.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
