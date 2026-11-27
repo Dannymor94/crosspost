@@ -334,6 +334,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="/static/shared/ux-navigation.js"></script>
 <script src="/static/shared/ux-workspace.js"></script>
 <script src="/static/shared/ux-overview.js"></script>
+<script src="/static/shared/ux-editor-preview.js"></script>
 </head>
 <body class="cp-client">
 <div id="root"></div>
@@ -570,6 +571,10 @@ function ComposeView({ user }) {
   }
 
   const eligibleTargets = targets.filter(t => t.eligible);
+  const previewRef=window.CrosspostEditorPreview.usePreview({useRef,useEffect},{
+    text,media:mediaMissing?"missing":isVideo?"video":mediaFile?"image":"none",
+    targets:eligibleTargets.filter(t=>checked[targetKey(t)]).map(t=>({title:t.title,channel:t.channel})),targetState
+  });
   const hiddenVideoCount = targets.filter(t => !t.eligible && t.ineligible_kind === 'content' && isVideo).length;
 
   function buildChannelsList() {
@@ -751,6 +756,7 @@ function ComposeView({ user }) {
       </div>`}
       ${policy.enabled === true && html`<p class="video-warn">Пост будет отправлен на проверку администратору. Укажите желаемое время.</p>`}
       ${policy.enabled === null && html`<p class="video-warn">${policy.failed ? "Не удалось получить правила публикации." : "Проверяем правила публикации…"} ${policy.failed && html`<button class="btn btn-ghost" onClick=${policy.reload}>Повторить проверку</button>`}</p>`}
+      <details ref=${previewRef} class="cp-panel cp-editor-preview"></details>
       <button class="btn btn-primary" onClick=${submit} disabled=${busy || pending || policy.enabled === null || (when === 'later' && !zone) || !draft.canSend || mediaMissing || targetState !== 'ready' || !buildChannelsList().length}>
         ${busy ? html`<span class="spinner"></span>` : null}
         ${busy ? 'Отправляем…' : policy.enabled ? 'На проверку' : when === 'later' ? 'Запланировать' : 'Отправить'}

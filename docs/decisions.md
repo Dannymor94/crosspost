@@ -121,3 +121,7 @@ Same-document History API state contains opaque epoch, index and allowlisted scr
 ### T-510 overview read model (draft)
 
 Reuse existing profile-scoped scheduled GET and timezone GET; do not aggregate histories or reorder mixed legacy/canonical rows. Counts describe only active scheduled/pending rows. Shared read-only helper validates results and fences stale responses; no new API.
+
+## T-511 — approximate preview contract (draft)
+
+Local presentation derives from current editor values and confirmed eligible targets, never mutates them or claims external rendering parity. Text via textContent, no raw media URL, no additional API or required step before send. Existing R3 guards stay authoritative.

@@ -1241,6 +1241,7 @@ body {
 <script src="/static/shared/ux-navigation.js"></script>
 <script src="/static/shared/ux-workspace.js"></script>
 <script src="/static/shared/ux-overview.js"></script>
+<script src="/static/shared/ux-editor-preview.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -3230,6 +3231,12 @@ function PublishView({ profile, user }) {
   });
 
   const hasVideo = (mediaFile && isVideoFile(mediaFile)) || isVideoUrl(mediaUrl);
+  const previewRef=window.CrosspostEditorPreview.usePreview({useRef,useEffect},{
+    text,title:articleTitle,article:articleText,articleMode:contentType==="article",
+    media:mediaMissing?"missing":hasVideo?"video":mediaFile?"file":mediaUrl.trim()?"file":"none",
+    targets:(targets||[]).filter(t=>t.eligible&&selected.has(selKey(t.channel,t.target_id)))
+      .map(t=>({title:t.title,platform_title:t.platform_title,channel:t.channel})),targetState
+  });
 
   const loadTargets = useCallback(async (hv) => {
     const current = targetFence.current.begin();
@@ -3601,6 +3608,7 @@ function PublishView({ profile, user }) {
       receipt && h("p", null, receipt.message),
       receipt?.known && h("button", {className:"btn btn-ghost", disabled:busy, onClick:acknowledgeOperation}, "Результат проверен"),
     ),
+    h("details",{ref:previewRef,className:"cp-panel cp-editor-preview"}),
     // Действия
     h("div", { className: "publish-actions" },
       h("button", { className: "btn btn-primary", onClick: publishNow, disabled: !canSend },
