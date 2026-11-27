@@ -338,6 +338,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="/static/shared/ux-calendar.js"></script>
 <script src="/static/shared/ux-calendar-view.js"></script>
 <script src="/static/shared/ux-history-view.js"></script>
+<script src="/static/shared/ux-connections.js"></script>
 </head>
 <body class="cp-client">
 <div id="root"></div>
@@ -892,6 +893,7 @@ function PostsView({ user }) {
 // ── App ────────────────────────────────────────────────────────────────────────
 const CalendarPanel=window.CrosspostCalendarView.create(preact.h,{useState,useEffect});
 const HistoryPanel=window.CrosspostHistoryView.create(preact.h,{useState,useEffect,useRef});
+const ConnectionPanel=window.CrosspostConnections.create(preact.h,{useState,useEffect});
 function ClientSchedule({user,onNavigate}) {
   const [manage,setManage]=useState(false);
   return manage?html`<section class="cp-stack"><button class="cp-button" onClick=${()=>setManage(false)}>К календарю</button><${PostsView} user=${user} /></section>`:
@@ -903,9 +905,9 @@ const CLIENT_ITEMS = Object.freeze([
   {id:"posts",label:"Расписание",icon:"calendar"},
   {id:"more",label:"Ещё",icon:"more"},
 ]);
-const CLIENT_ROUTES = Object.freeze([...CLIENT_ITEMS.map(i=>i.id),"history"]);
+const CLIENT_ROUTES = Object.freeze([...CLIENT_ITEMS.map(i=>i.id),"history","connections"]);
 function ClientNavigation({tab,onNavigate,mobile=false}) {
-  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},CLIENT_ITEMS,tab==="history"?"more":tab,onNavigate,
+  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},CLIENT_ITEMS,["history","connections"].includes(tab)?"more":tab,onNavigate,
     mobile ? "Мобильное меню клиента" : "Меню клиента",mobile);
   return html`<div ref=${ref} class=${mobile?"cp-client-mobile":"cp-client-menu"}></div>`;
 }
@@ -939,6 +941,7 @@ function ClientMore({user,onLogout,onNavigate}) {
     <div class="cp-panel cp-stack"><p>Аккаунт: ${user.login}</p>
       <p class="cp-muted">Для изменения подключений обратитесь к администратору.</p>
       <button class="cp-button" onClick=${()=>onNavigate("history")}>История</button>
+      <button class="cp-button" onClick=${()=>onNavigate("connections")}>Подключения</button>
       <button class="cp-button" onClick=${onLogout}>Выйти из аккаунта</button>
     </div></section>`;
 }
@@ -992,6 +995,7 @@ function App() {
         : tab === 'posts' ? html`<${ClientSchedule} key=${user.profile_id} user=${user} onNavigate=${navigate} />`
         : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
         : tab === 'history' ? html`<${HistoryPanel} key=${user.profile_id} pid=${user.profile_id} />`
+        : tab === 'connections' ? html`<${ConnectionPanel} key=${user.profile_id} pid=${user.profile_id} />`
         : html`<${ClientMore} user=${user} onLogout=${logout} onNavigate=${navigate} />`}
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} mobile=${true} />
     </div>

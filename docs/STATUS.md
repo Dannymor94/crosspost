@@ -229,3 +229,7 @@ New profile-scoped GET history combines persisted scheduled rows and observed im
 ### T-513 history UI (draft)
 
 Shared read-only History screen for both roles; source filter, explicitly loaded-only search, cursor pages, error/retry and per-target observed status. No retry controls. Client via More, admin via sidebar/More. Existing incomplete-history limits shown. CI pending.
+
+## UX-08 T-515 — status and preparation (draft)
+
+Client can read own profile's channel statuses and declared preparation steps; no new credential/connection mutations or secret collection. Admin distinguishes banned/unknown from not_connected and does not offer normal reconnect/reset/validate for blocked/unknown state. Existing wizard remains for allowed states. Status is a saved snapshot, not live verification; transient health contract stays server-side. Self-service connection, role/security gates, real login and device acceptance remain open. CI pending.

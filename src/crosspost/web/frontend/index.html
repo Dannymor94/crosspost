@@ -1245,6 +1245,7 @@ body {
 <script src="/static/shared/ux-calendar.js"></script>
 <script src="/static/shared/ux-calendar-view.js"></script>
 <script src="/static/shared/ux-history-view.js"></script>
+<script src="/static/shared/ux-connections.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -1337,9 +1338,7 @@ function lampClass(state) {
   return "grey";
 }
 function stateLabel(state) {
-  if (state === "live") return "LIVE";
-  if (state === "needs_relogin") return "НУЖЕН РЕ-ЛОГИН";
-  return "НЕ ПОДКЛЮЧЁН";
+  return window.CrosspostConnections.describe(state).label;
 }
 
 // ── Components ─────────────────────────────────────────────────────────────
@@ -2274,6 +2273,7 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
   const cardRef = useRef(null);
 
   const state = ch.state;
+  const canManage = window.CrosspostConnections.canManage(state);
   const dimmed = state !== "live" && !wizard;
   const cardClass = `channel-card ${state === "live" ? "live-card" : state === "needs_relogin" ? "amber-card" : ""}${focus ? " focus" : ""}`;
   const cardStyle = dimmed ? { opacity: 0.75 } : undefined;
@@ -2287,7 +2287,8 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
     setValidating(true); setMsg(null);
     try {
       const res = await api.post(`/api/profiles/${profileId}/channels/${ch.channel}/validate`);
-      setMsg({ type: res.state === "live" ? "success" : "warning", text: res.message });
+      const info=window.CrosspostConnections.describe(res.state);
+      setMsg({ type: res.state === "live" ? "success" : "warning", text: info.label });
       onRefresh();
     } catch (ex) {
       setMsg({ type: "error", text: ex.message });
@@ -2325,7 +2326,8 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
       h(Lamp, { state }),
       h("span", { className: `status-label ${lampClass(state)} mono` }, stateLabel(state)),
     ),
-    ch.expires_soon && h("div", { className: "expires-warning" },
+    !canManage && h("p",{className:"cp-status--warning"},window.CrosspostConnections.describe(state).advice),
+    ch.expires_soon && state !== "banned" && h("div", { className: "expires-warning" },
       ch.expires_at
         ? `⚠ Токен действует примерно до ${ch.expires_at} — переподключите канал заранее`
         : "⚠ Токен скоро истекает (примерно) — переподключите канал заранее"),
@@ -2344,7 +2346,7 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
     msg && h(Alert, { type: msg.type }, msg.text),
     h("div", { className: "card-actions" },
       // Единая кнопка подключения → пошаговый мастер (адаптивен под тир).
-      state !== "live"
+      canManage && state !== "live"
         ? h("button", { className: "btn btn-primary btn-sm", onClick: () => { setMsg(null); setWizard(true); } },
             connectLabel)
         : null,
@@ -2352,14 +2354,14 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
       (() => { const url = channelUrl(ch.channel, ch.target); return url
         ? h("a", { href: url, target: "_blank", rel: "noopener", className: "btn btn-ghost btn-sm" }, "↗ Открыть канал")
         : null; })(),
-      hasSession && !resetConfirm
+      canManage && hasSession && !resetConfirm
         ? h("button", { className: "btn btn-ghost btn-sm", onClick: handleValidate, disabled: validating },
             validating && h(Spinner), validating ? "Проверяю…" : "Проверить")
         : null,
-      hasSession && !resetConfirm
+      canManage && hasSession && !resetConfirm
         ? h("button", { className: "btn btn-danger btn-sm", onClick: () => setResetConfirm(true) }, "Сбросить вход")
         : null,
-      resetConfirm
+      canManage && resetConfirm
         ? h("button", { className: "btn btn-danger btn-sm", onClick: handleDisconnect }, "Подтвердить сброс")
         : null,
       resetConfirm
@@ -2370,7 +2372,7 @@ function ChannelCard({ ch, profileId, isAdmin, onRefresh, focus }) {
       ? h("p", { className: "form-hint", style: { marginTop: "4px" } },
           "ВК-стена и ВК-канал делят один вход — сброс затронет оба.")
       : null,
-    wizard && h(ConnectWizard, {
+    canManage && wizard && h(ConnectWizard, {
       channel: ch.channel,
       profileId,
       guide: ch.guide,
@@ -2414,8 +2416,9 @@ function ChannelsView({ profile, focusChannel, isAdmin }) {
       h("p", { className: "page-subtitle" }, `ПРОФИЛЬ · ID ${profile.id}`),
     ),
     h("p", { className: "section-title" }, "Каналы публикации"),
-    err && h(Alert, { type: "error" }, err),
-    channels === null && !err
+    h("button",{className:"cp-button",onClick:load},"Обновить состояния"),
+    err && h(Alert, { type: "error" }, "Не удалось получить состояния подключений."),
+    err ? null : channels === null
       ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю каналы…"))
       : h("div", { className: "channel-grid" },
           channels?.map(ch => h(ChannelCard, {
@@ -2426,7 +2429,7 @@ function ChannelsView({ profile, focusChannel, isAdmin }) {
             focus: focusChannel === ch.channel,
           }))
         ),
-    channels?.length === 0 && h("div", { className: "empty-state" },
+    !err && channels?.length === 0 && h("div", { className: "empty-state" },
       h("span", { className: "empty-icon" }, "📡"),
       h("h2", { className: "empty-title" }, "Нет доступных каналов"),
       h("p", { className: "empty-body" }, "Добавьте каналы в реестр VALIDATORS — они появятся здесь автоматически."),
