@@ -15,6 +15,7 @@ from crosspost.auth.passwords import hash_password, verify_password
 from crosspost.auth.sessions import sign_session, verify_recovery_token
 from crosspost.db.models import Role
 from crosspost.web.auth_guard import limit_auth, production_mode, require_https
+from crosspost.web.csrf import issue_proof
 from crosspost.web.deps import SESSION_COOKIE, CurrentUser, SessionDep, UserRepoDep
 from crosspost.web.private_routes import PrivateRoute
 
@@ -104,6 +105,11 @@ async def logout(response: Response, request: Request) -> dict[str, bool]:
         samesite="strict" if production_mode() else "lax",
     )
     return {"ok": True}
+
+
+@router.get("/csrf")
+async def csrf(request: Request, response: Response) -> dict[str, str | bool]:
+    return issue_proof(request, response)
 
 
 @router.get("/me", response_model=MeOut)

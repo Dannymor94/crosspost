@@ -258,13 +258,47 @@ async def test_rate_limit_http_spoof_and_secret_validation(registration, monkeyp
 async def test_production_cookie_requires_https(registration, monkeypatch):
     _, client = registration
     monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
+    monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
     async with client() as c:
         r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
         assert r.status_code == 503
         assert "set-cookie" not in r.headers
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
-        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
+        proof = (await c.get("/api/auth/csrf")).json()["token"]
+        r = await c.post(
+            "/api/auth/login",
+            json={"login": "owner", "password": "owner-password"},
+            headers={"X-CSRF-Token": proof, "Origin": "https://test"},
+        )
         assert r.status_code == 200
         cookie = r.headers["set-cookie"].lower()
         assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
         assert (await c.get("/api/auth/me")).status_code == 200
+
+
+async def test_csrf_requires_signed_browser_and_session_bound_proof(registration, monkeypatch):
+    _, client = registration
+    monkeypatch.setenv("CROSSPOST_CSRF_ENABLED", "true")
+    async with client() as c, client() as other:
+        body = {"login": "owner", "password": "owner-password"}
+        assert (await c.post("/api/auth/login", json=body)).status_code == 403
+        proof = await c.get("/api/auth/csrf")
+        assert proof.status_code == 200
+        assert proof.headers["cache-control"] == "no-store"
+        header = {"X-CSRF-Token": proof.json()["token"], "Origin": "http://test"}
+        assert (await other.post("/api/auth/login", json=body, headers=header)).status_code == 403
+        cross = {**header, "Origin": "https://evil.example"}
+        assert (await c.post("/api/auth/login", json=body, headers=cross)).status_code == 403
+        assert (await c.post("/api/auth/login", json=body, headers=header)).status_code == 200
+        assert (await c.post("/api/auth/logout", headers=header)).status_code == 403
+        fresh = {"X-CSRF-Token": (await c.get("/api/auth/csrf")).json()["token"]}
+        assert (await c.post("/api/users/invitations", json={})).status_code == 403
+        r = await c.post(
+            "/api/users/invitations",
+            json={"profile_name": "csrf-profile", "admin_password": "owner-password"},
+            headers=fresh,
+        )
+        assert r.status_code == 201
+        assert (await c.delete("/api/profiles/999999")).status_code == 403
+        assert (await c.post("/api/auth/logout", headers=fresh)).status_code == 200
+        assert (await c.post("/api/auth/logout", headers=fresh)).status_code == 403

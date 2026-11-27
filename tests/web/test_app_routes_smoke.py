@@ -44,6 +44,7 @@ _EXPECTED: list[tuple[str, str]] = [
     ("POST", "/api/users/invitations/{*}/renew"),
     ("POST", "/api/users/invitations/{*}/revoke"),
     ("GET", "/api/auth/me"),
+    ("GET", "/api/auth/csrf"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
     ("POST", "/api/auth/recover"),  # T-406: owner-issued token redemption
