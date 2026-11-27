@@ -315,3 +315,83 @@ SIGTERM и `stop_grace_period: 120s` дают Uvicorn время отменит�
 **Важное ограничение:** `BROWSER_HEADLESS=true` позволяет публикации через Chromium,
 но вход VK/Яндекс в приложении всегда требует **видимого** окна браузера. Для
 удалённого интерактивного входа, Xvfb/VNC и проверки антибота нужна T-303.
+
+## 10. HTTPS и публичные подписанные медиа (T-302, код на ревью)
+
+Этот раздел описывает **будущую** конфигурацию после owner-merge T-301 → T-302,
+не свидетельствует о выполненном VPS deployment. У CI нет реального домена,
+сертификата ACME или внешнего Meta fetch. Production вводит только владелец.
+
+**Предварительные условия:** FQDN под управлением владельца, DNS A на публичный
+IPv4 VPS, AAAA только если публичный IPv6 действительно маршрутизируется к VPS;
+внешние TCP **80 и 443** разрешены firewall/VPS-провайдером и не заняты другим
+nginx/Caddy, наружу **не** открывать 8001, SQLite, Docker API, VNC или отладку.
+В outbound сети серверу нужен доступ к центрам сертификации/ACME и Instagram;
+серверное доменное имя должно реально разрешаться в адрес этого VPS.
+
+Перед запуском установить внешнюю переменную `CROSSPOST_DOMAIN` — только
+DNS-hostname, например `post.example.com`, без `https://`, слеша, порта или
+пробелов. Обязательные `SESSION_SECRET`, `VAULT_KEY`, `MEDIA_URL_SECRET` согласно
+§9 остаются в защищённом окружении, **без** записи в Git или журнал команд.
+Для production Compose сам задаёт
+`INSTAGRAM_PUBLIC_BASE_URL=https://${CROSSPOST_DOMAIN}`, исключая расхождение
+origin между Instagram и Caddy. В обычном CLI/dev разрешён отдельный HTTPS
+туннель `*.lhr.life`; не использовать его вместо production DNS.
+
+В Compose Caddy публикует только 80/443 и перенаправляет HTTP→HTTPS; cert/key
+хранятся в постоянных томах `caddy_data:/data` и `caddy_config:/config`,
+обновляются самим Caddy. FastAPI сохранён на `127.0.0.1:${CROSSPOST_PORT:-8001}`
+для локальной диагностики и доступен Caddy через приватную Docker-сеть.
+Caddy **не монтирует** `runtime`, `backups` и `media`: `/public-media/{token}`
+передаётся в FastAPI без rewrite, где уже действуют HMAC/TTL/path confinement.
+Caddy access logs выключены, Uvicorn raw access logs тоже, поскольку token в URL
+является временным bearer credential. **Глобальный Caddy runtime logger** также
+удаляет `request`/URI/заголовки из proxy-error записей (включая 502), сохраняя
+статус и диагностическую трассу. CI специально останавливает тестовый app,
+проверяет 502 на фиктивном `/public-media/QA_FAKE_BEARER_DO_NOT_LOG` и отсутствие
+этого маркера и фиктивного заголовка в `docker compose logs caddy`.
+Не включать общий access log и не менять runtime log formatter без повторного
+теста отсутствия сырого URL/headers; реальный токен для такого теста не нужен.
+
+**Доверие к прокси:** у Caddy статический IP
+`${CROSSPOST_PROXY_IP:-172.30.92.2}` в отдельном bridge subnet
+`${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}`. Для app закреплён отдельный
+`${CROSSPOST_APP_IP:-172.30.92.3}`, чтобы app не занял адрес Caddy при старте.
+Uvicorn читает
+`FORWARDED_ALLOW_IPS` равный только этому IP, **не `*`**; внешний клиент не может
+подставить `X-Forwarded-For` или `X-Forwarded-Proto`. Если выбранный Docker subnet
+занят, поменять все три значения согласованно и повторить тесты/контроль сетей.
+Сторонний CDN/обратный прокси перед Caddy требует отдельного security-review,
+нельзя молча включать дополнительные `trusted_proxies`. T-409 отдельно
+включит Secure cookie, CSRF и IP rate limit — до этого платных клиентов не пускать.
+
+Проверки владельца после DNS и безопасного server deployment:
+
+```bash
+docker compose config --quiet
+docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose up -d --build
+docker compose ps
+curl -I "http://${CROSSPOST_DOMAIN}/"           # ожидать 308 и Location: https://...
+curl -I "https://${CROSSPOST_DOMAIN}/"          # действующий сертификат; GET /client для UI
+curl -f "https://${CROSSPOST_DOMAIN}/client" -o /dev/null
+docker compose logs --tail=100 caddy
+```
+
+Дополнительно проверить извне (не с самого VPS): валидный TLS chain,
+доступность только 80/443, отказ на прямой TCP 8001, неизвестный Host/SNI,
+отсутствие отдачи `/app/runtime` и медиа-папок, доступность `/health` после
+интеграции T-304. Отдельный приватный одноразовый подписанный URL должен дать
+GET/HEAD 200 для нужного видео из внешней сети и 404 при истечении срока либо
+изменении токена; убедиться, что Instagram действительно может скачать видео.
+**Никогда не вставлять полный подписанный URL в issue, Actions, чат или логи.**
+В Caddy/приложении убедиться, что path не содержит raw `/public-media/{token}`.
+
+**Продление/откат:** cert volume должен переживать `docker compose down`/
+пересоздание контейнера. Проверить автообновление по логам/состоянию сертификата
+до истечения срока, отслеживать внешним мониторингом TLS expiry. Два Caddy-тома
+вместе с `runtime`, `backups`, media и защищённым ключевым материалом включить
+в план *независимых зашифрованных* backup/restore drill. Перед rollback сохранить
+образы и резервную копию данных, откатить T-302 только после согласования домена
+и доступа к старому приложению; остановка Caddy прекратит публичный HTTPS.
+Не выполнять `docker compose down -v` и не удалять сертификатные тома.

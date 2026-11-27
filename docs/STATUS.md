@@ -8,6 +8,8 @@
 
 **T-301 (PR #41, исходный QA PASS):** Docker/Compose для одного FastAPI/SQLite процесса, постоянные runtime/backups, loopback-порт, внешний ввод секретов. Исходные Docker smoke и CI успешны на eb277a0; интеграция с main 29fcc94 требует CI и проверки изменённой границы. VPS/HTTPS/живой браузерный вход и восстановление реальных данных ещё не подтверждены.
 
+**T-302 (PR #45, исходный QA PASS):** Caddy 2.11.9, HTTPS, фиксированная граница доверия proxy headers, безопасный public-media origin и санитизация логов. Исходные Docker/Caddy smoke и CI успешны на 31c372b. Стек актуализирован после T-301, но не объединён с main. DNS/ACME/Meta fetch, Secure-cookie T-409 и live smoke ожидаются.
+
 ---
 
 ## 1. Каналы (веб-реестр `channels/validators.py`)

@@ -1,4 +1,4 @@
-# T-301 only: loopback HTTP for a future TLS reverse proxy (T-302).
+# T-301 + T-302: one FastAPI worker behind a TLS-only public Caddy ingress.
 # Set required secrets in the server environment/secret manager, never in Git.
 name: crosspost
 
@@ -27,7 +27,10 @@ services:
       SCHEDULER_MAX_ATTEMPTS: "${SCHEDULER_MAX_ATTEMPTS:-3}"
       HEALTH_CHECK_ENABLED: "${HEALTH_CHECK_ENABLED:-true}"
       HEALTH_CHECK_POLL_SECONDS: "${HEALTH_CHECK_POLL_SECONDS:-300}"
-      INSTAGRAM_PUBLIC_BASE_URL: "${INSTAGRAM_PUBLIC_BASE_URL:-}"
+      # Derive the only media origin from the same required Caddy host.
+      INSTAGRAM_PUBLIC_BASE_URL: "https://${CROSSPOST_DOMAIN:?Set CROSSPOST_DOMAIN to a DNS hostname}"
+      # Uvicorn trusts forwarded scheme/IP only from the exact Caddy container.
+      FORWARDED_ALLOW_IPS: "${CROSSPOST_PROXY_IP:-172.30.92.2}"
       INSTAGRAM_PROXY_URL: "${INSTAGRAM_PROXY_URL:-}"
       VK_PROXY_URL: "${VK_PROXY_URL:-}"
       YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
@@ -40,7 +43,40 @@ services:
     stop_grace_period: 120s
     security_opt:
       - no-new-privileges:true
+    networks:
+      ingress:
+        # Reserve a separate address so the app never claims Caddy's .2 first.
+        ipv4_address: "${CROSSPOST_APP_IP:-172.30.92.3}"
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CROSSPOST_DOMAIN: "${CROSSPOST_DOMAIN:?Set CROSSPOST_DOMAIN to a DNS hostname}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      ingress:
+        ipv4_address: "${CROSSPOST_PROXY_IP:-172.30.92.2}"
 
 volumes:
   crosspost_runtime: {}
   crosspost_backups: {}
+  caddy_data: {}
+  caddy_config: {}
+
+networks:
+  ingress:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}"

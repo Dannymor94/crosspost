@@ -37,4 +37,6 @@ STOPSIGNAL SIGTERM
 
 # One worker owns both the in-memory browser login flow and the scheduler.
 # Never add --reload or >1 workers without a scheduler ownership redesign.
-CMD ["/app/.venv/bin/uvicorn", "crosspost.web.app:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+# Disable raw request-path access logs: signed public-media URLs carry bearer tokens.
+# Application logs still perform their existing token redaction.
+CMD ["/app/.venv/bin/uvicorn", "crosspost.web.app:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--no-access-log"]
