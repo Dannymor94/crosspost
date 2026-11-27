@@ -3186,7 +3186,7 @@ function BlockPreview({ profileId, text }) {
 }
 
 const TargetToolbar=window.CrosspostEditorTargets.createToolbar(h);
-function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
+function PublishView({ profile, user, scheduleIntent, onIntentDismiss, reuseText, onReuseDismiss }) {
   const [contentType, setContentType] = useState("post"); // "post" | "article"
   const [text, setText] = useState("");
   const [articleTitle, setArticleTitle] = useState("");
@@ -3530,6 +3530,13 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss }) {
       }, "Статья"),
     ),
 
+    reuseText && h("div",{className:"cp-panel cp-stack"},
+      h("h2",null,"Текст из истории"),
+      h("p",{className:"cp-muted"},"Копируется только текст. Площадки, файлы и время не переносятся. Существующий черновик не заменяется."),
+      h("p",{className:"cp-preview-text"},reuseText.slice(0,200)),
+      h("button",{className:"cp-button",disabled:!draft.loaded||draft.dirty||!["ready","saved"].includes(draft.status)||busy||!!pendingOperation||contentType!=="post"||!!text||!!articleTitle||!!articleText||!!linkPhrase||!!mediaFile||!!mediaUrl||mediaMissing||selected.size>0,
+        onClick:()=>{setText(reuseText);onReuseDismiss();}},"Вставить в пустой черновик"),
+      h("button",{className:"cp-button",onClick:onReuseDismiss},"Не использовать текст")),
     // Контент
     h("div", { className: "form-panel", style: { maxWidth: "100%" } },
 
@@ -4856,7 +4863,8 @@ function App() {
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [scheduleIntent,setScheduleIntent]=useState(null);
-  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setScheduleIntent(null);setView(next);});
+  const [reuseIntent,setReuseIntent]=useState(null);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setScheduleIntent(null);setReuseIntent(null);setView(next);});
 
   // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
@@ -4948,11 +4956,11 @@ function App() {
         }))
     : active
       ? view === "history"
-        ? h(HistoryPanel,{key:active.id,pid:active.id})
+        ? h(HistoryPanel,{key:active.id,pid:active.id,onReuseText:text=>{if(navigate("publish"))setReuseIntent({pid:active.id,text});}})
         : view === "calendar"
         ? h(CalendarPanel,{key:active.id,pid:active.id,canMove:true,onCreate:()=>navigate("publish"),onManage:()=>navigate("publish"),onCreateTime:intent=>{if(navigate("publish"))setScheduleIntent({...intent,pid:active.id});}})
         : view === "publish"
-        ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me,scheduleIntent:scheduleIntent?.pid===active.id?scheduleIntent:null,onIntentDismiss:()=>setScheduleIntent(null) }))
+        ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me,scheduleIntent:scheduleIntent?.pid===active.id?scheduleIntent:null,onIntentDismiss:()=>setScheduleIntent(null),reuseText:reuseIntent?.pid===active.id?reuseIntent.text:null,onReuseDismiss:()=>setReuseIntent(null) }))
         : view === "import"
           ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
           : h(TabBoundary, { key: `channels-${active.id}` }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin }))

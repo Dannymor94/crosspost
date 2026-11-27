@@ -260,3 +260,7 @@ Read-only POST search across persisted scheduled text and observed channel names
 ### T-513 server search UI (draft)
 
 Both role history screens now search persisted pages using explicit submit and source filter. Search query stays in POST body, previous result hidden on filter change, stale requests aborted. Exact case-sensitive text/channel search and immediate missing text explained. Existing unfiltered GET and paging preserved. Actual-page tests updated; CI pending.
+
+## T-516 text reuse preparation (draft)
+
+Existing scoped history text may be offered to an empty editor through an explicit in-memory intent. No automatic application, target/media/date copy, new persistence, overwrite of nonempty draft or publish. Existing draft CAS remains authoritative. Media library and stored templates blocked by T-405 retention/product policy; no deletion. Browser tests for explicit insert, persisted empty targets and refusing overwrite. CI pending.
