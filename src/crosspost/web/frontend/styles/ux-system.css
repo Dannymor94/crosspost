@@ -65,13 +65,16 @@
   padding: 10px 14px;
 }
 .cp-ux .cp-button { cursor: pointer; font-weight: 600; transition: background-color 150ms; }
-.cp-ux .cp-button:hover:not(:disabled) { background: var(--cp-soft); }
-.cp-ux .cp-button--primary {
+.cp-ux .cp-button:not(.cp-button--primary):hover:not(:disabled) { background: var(--cp-soft); }
+.cp-ux .cp-button.cp-button--primary {
   background: var(--cp-accent-fill);
   border-color: var(--cp-accent-fill);
   color: var(--cp-on-accent);
 }
-.cp-ux .cp-button--primary:hover:not(:disabled) { background: #4338ca; }
+.cp-ux .cp-button.cp-button--primary:hover:not(:disabled) {
+  background: #4338ca;
+  color: var(--cp-on-accent);
+}
 .cp-ux .cp-button--danger { color: var(--cp-bad); }
 .cp-ux .cp-button:disabled { opacity: .58; cursor: not-allowed; }
 .cp-ux .cp-input { width: 100%; min-width: 0; }

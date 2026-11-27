@@ -24,6 +24,7 @@ def test_design_tokens_and_theme_controller():
             )
             page.add_style_tag(path=FRONTEND / "styles/ux-system.css")
             page.add_script_tag(path=FRONTEND / "shared/ux-theme.js")
+            page.mouse.move(389, 843)
             actual = page.evaluate(
                 """() => {
                     const root = document.querySelector("#ux");
@@ -42,6 +43,8 @@ def test_design_tokens_and_theme_controller():
                       const x = luminance(a), y = luminance(b);
                       return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);
                     };
+                    window.buttonContrast = () => contrast(getComputedStyle(button).color,
+                        getComputedStyle(button).backgroundColor);
                     const css = getComputedStyle(root);
                     return {theme:root.dataset.theme, preference:theme.preference,
                       background:css.backgroundColor, textContrast:contrast(css.color,css.backgroundColor),
@@ -56,10 +59,18 @@ def test_design_tokens_and_theme_controller():
             assert actual["background"] == "rgb(16, 20, 28)"
             assert actual["textContrast"] >= 4.5
             assert actual["buttonContrast"] >= 4.5
+            button = page.get_by_role("button", name="Создать пост")
+            button.hover()
+            page.wait_for_function("window.buttonContrast() >= 4.5")
+            page.mouse.move(389, 843)
             assert actual["buttonHeight"] >= 44
             assert actual["inputHeight"] >= 44
             page.evaluate("window.testTheme.set('light')")
             assert page.locator("#ux").get_attribute("data-theme") == "light"
+            page.wait_for_function("window.buttonContrast() >= 4.5")
+            button.hover()
+            page.wait_for_function("window.buttonContrast() >= 4.5")
+            page.mouse.move(389, 843)
             page.evaluate("window.testTheme.dispose()")
             mount_theme = "window.testTheme = window.CrosspostTheme.mount"
             page.evaluate(f"{mount_theme}(document.querySelector('#ux'))")

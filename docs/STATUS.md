@@ -126,3 +126,6 @@ Initial CI stopped at ruff format for test_ux_design_system.py (45890770470/4589
 
 ### T-501 third preparation slice
 Previous two CI runs (45934227131/45934221590) stopped at formatting test_ux_design_system.py, not a browser assertion. Simplified remaining candidate statements and enabled formatter diff in CI. Added standalone offline component preview generated from actual shared CSS/navigation/theme resources, with synthetic editor/role/theme controls, explicit disabled publication and unimplemented screens marked as such. Dedicated artifact workflow; no new application route, API, credentials, or deployment. Independent QA #57 still has no verdict; UX-01 delivery and live UI integration remain blocked pending review. New CI and preview artifact pending.
+
+### T-501 contrast finding
+99a7fad2: preview artifact workflow passed (45934646873); general CI reached pytest (1294 passed, one failed on primary button contrast). Strengthened primary button selector and excluded primary from generic hover, test checks both themes and hover states. New CI pending. No UX-01 QA verdict yet.
