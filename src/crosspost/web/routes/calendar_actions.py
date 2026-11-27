@@ -76,7 +76,9 @@ async def move(
         .returning(ScheduledPost.id)
     )
     if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=409, detail="Пост или его время изменились. Обновите календарь.")
+        raise HTTPException(
+            status_code=409, detail="Пост или его время изменились. Обновите календарь."
+        )
     await session.commit()
     response.headers["Cache-Control"] = "private, no-store"
     return MoveResult(id=scheduled_id, scheduled_at=instant.isoformat())

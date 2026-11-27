@@ -48,6 +48,8 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     draft = {"scope": "b" * 64, "revision": None, "data": None}
     writes = 0
     sends = 0
+    moves = 0
+    calendar_when = "2099-01-15T22:30:00Z"
     dispatched = 0
     outcome = {"channel": "telegram", "target": "", "status": "submitted"}
     operations = {}
@@ -67,6 +69,7 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
 
     def handle(route):
         nonlocal draft, writes, sends, resolves, recoveries, dispatched
+        nonlocal moves, calendar_when
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
@@ -137,6 +140,18 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             resolves += 1
             assert request.post_data_json == {"wall": wall_time, "zone": "Europe/Moscow"}
             route.fulfill(json={"instant": instant})
+        elif scenario == "calendar" and path == "/api/profiles/1/scheduled/31/move":
+            assert request.method == "POST"
+            moves += 1
+            body = request.post_data_json
+            assert body["expected_at"] == calendar_when
+            assert body["zone"] == "Europe/Moscow"
+            if moves == 1:
+                assert body["wall"] == "2099-01-16T02:30"
+                calendar_when = "2099-01-15T23:30:00Z"
+                route.fulfill(json={"id": 31, "scheduled_at": calendar_when, "status": "scheduled"})
+            else:
+                route.fulfill(status=409, json={"detail": "conflict"})
         elif scenario == "calendar" and path == "/api/profiles/1/scheduled":
             route.fulfill(
                 json=[
@@ -144,7 +159,7 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                         "id": 31,
                         "status": "scheduled",
                         "text": "Календарный тест UTC",
-                        "scheduled_at": "2099-01-15T22:30:00Z",
+                        "scheduled_at": calendar_when,
                         "time_basis": "utc",
                         "content_type": "post",
                         "title": None,
@@ -375,8 +390,30 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(page.get_by_text("Календарный тест legacy", exact=True)).to_be_visible()
                 page.get_by_label("Статус", exact=True).select_option("all")
                 capture(page, "admin-05-calendar.png")
+                expect(page.get_by_role("button", name="Перенести", exact=True)).to_have_count(1)
+                page.get_by_role("button", name="Перенести", exact=True).click()
+                page.get_by_label("Новое время публикации").fill("2099-01-16T02:30")
+                page.get_by_role("button", name="Подтвердить перенос").click()
+                expect(page.get_by_text("Новое время сохранено.", exact=True)).to_be_visible()
+                expect(page.get_by_text("2099-01-16 02:30 · Europe/Moscow")).to_be_visible()
+                page.get_by_role("button", name="Перенести", exact=True).click()
+                page.get_by_label("Новое время публикации").fill("2099-01-16T03:30")
+                page.get_by_role("button", name="Подтвердить перенос").click()
+                expect(page.get_by_text("Перенос не выполнен:", exact=False)).to_be_visible()
+                expect(page.get_by_text("2099-01-16 02:30 · Europe/Moscow")).to_be_visible()
+                assert moves == 2
                 page.get_by_role("button", name="Управление расписанием").click()
                 expect(text).to_be_visible()
+                menu.get_by_role("button", name="Календарь", exact=True).click()
+                page.get_by_role("button", name="День", exact=True).click()
+                page.get_by_label("Дата календаря").fill("2099-01-17")
+                page.get_by_label("Время нового поста").fill("13:45")
+                page.get_by_role("button", name="Создать пост на выбранное время").click()
+                expect(text).to_be_visible()
+                expect(page.get_by_text("Выбрано в календаре:", exact=False)).to_be_visible()
+                expect(
+                    page.get_by_role("button", name="Запланировать на выбранное время")
+                ).to_be_disabled()
                 assert sends == 0
                 assert not errors, errors
                 return
