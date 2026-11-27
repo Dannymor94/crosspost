@@ -119,8 +119,46 @@ async def test_cli_upgrades_ede92c0(tmp_path, monkeypatch):
     assert process.returncode == 0, (stdout, stderr)
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "t218_editor_draft",
+            "t304_ux_auth_merge",
         )
+
+
+async def test_t406_existing_user_kept_and_generation_defaults_to_zero(tmp_path):
+    from sqlalchemy import create_engine
+
+    from alembic import command
+    from crosspost.db.migration_runner import migration_config
+
+    path = tmp_path / "pre-t406.sqlite"
+    sync_engine = create_engine(f"sqlite:///{path}")
+    with sync_engine.begin() as conn:
+        config = migration_config()
+        config.attributes["connection"] = conn
+        command.upgrade(config, "t203_fencing")
+        conn.execute(text("INSERT INTO profiles(name) VALUES ('existing-client')"))
+        conn.execute(
+            text(
+                "INSERT INTO users(login, password_hash, role, profile_id) "
+                "VALUES ('existing-user', 'scrypt$old-test-hash', 'client', 1)"
+            )
+        )
+    sync_engine.dispose()
+
+    for _ in range(2):
+        engine = await create_engine_and_tables(f"sqlite+aiosqlite:///{path}")
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT login, password_hash, role, profile_id, session_generation "
+                            "FROM users WHERE login='existing-user'"
+                        )
+                    )
+                ).one()
+                assert tuple(row) == ("existing-user", "scrypt$old-test-hash", "client", 1, 0)
+        finally:
+            await engine.dispose()
 
 
 async def test_manual_migration_columns_and_nullable_legacy_rows(tmp_path):
@@ -312,6 +350,6 @@ async def test_failure_after_rebuild_rolls_back_and_can_retry(tmp_path):
     await engine.dispose()
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "t218_editor_draft",
+            "t304_ux_auth_merge",
         )
         assert conn.execute("PRAGMA foreign_key_list(publications)").fetchone()[6] == "CASCADE"

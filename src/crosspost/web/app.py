@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from crosspost.config import load_config, parse_bool
 from crosspost.db.engine import create_engine_and_tables, get_db_url
 from crosspost.db.scheduler_repo import SchedulerRepository
+from crosspost.ops.health import ErrorSpikeCache, SchedulerProgress
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
 from crosspost.web.routes import (
@@ -26,6 +27,7 @@ from crosspost.web.routes import (
     channels,
     drafts,
     errors,
+    health,
     history,
     import_plan,
     profiles,
@@ -98,6 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = await create_engine_and_tables(get_db_url())
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     deps.set_session_factory(factory)
+    app.state.health_factory = factory
+    app.state.health_error_cache = ErrorSpikeCache()
 
     # Реконсиляция: посты, застрявшие в PUBLISHING после прошлого падения процесса,
     # вернуть в SCHEDULED (идемпотентность по (publication_id, канал, цель) не даст дублей).
@@ -107,10 +111,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Исполнитель расписания: фоновый демон публикует созревшие посты сам.
     # Выключается флагом SCHEDULER_ENABLED=false (напр. в тестах/CLI).
     scheduler_task: asyncio.Task | None = None
-    if parse_bool(os.environ.get("SCHEDULER_ENABLED", "true")):
-        executor = ScheduledExecutor.from_env(factory)
+    scheduler_enabled = parse_bool(os.environ.get("SCHEDULER_ENABLED", "true"))
+    app.state.scheduler_enabled = scheduler_enabled
+    app.state.scheduler_task = None
+    app.state.scheduler_progress = None
+    if scheduler_enabled:
+        progress = SchedulerProgress()
+        executor = ScheduledExecutor.from_env(factory, progress=progress)
         app.state.executor = executor
+        app.state.scheduler_progress = progress
         scheduler_task = asyncio.create_task(executor.run_forever())
+        app.state.scheduler_task = scheduler_task
 
     # Фоновый health-check сессий: проверяет LIVE-подключения, переводит протухшие
     # в needs_relogin до публикации. Выключается флагом HEALTH_CHECK_ENABLED=false.
@@ -132,12 +143,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await scheduler_task
+        app.state.scheduler_task = None
+        app.state.scheduler_enabled = None
+        app.state.health_factory = None
+        app.state.health_error_cache = None
         await engine.dispose()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Crosspost Admin", lifespan=lifespan)
     app.include_router(auth.router)
+    app.include_router(health.router)
     app.include_router(users.router)
     app.include_router(profiles.router)
     app.include_router(channels.router)

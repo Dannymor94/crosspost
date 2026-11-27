@@ -326,6 +326,10 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 expect(page.get_by_text("Подключено", exact=True)).to_be_visible()
                 page.get_by_text("Этапы подключения", exact=True).first.click()
                 expect(page.get_by_text("Подготовьте аккаунт", exact=True)).to_be_visible()
+                page.get_by_label("Показать площадки").select_option("attention")
+                expect(page.get_by_text("Подключено", exact=True)).to_have_count(0)
+                expect(page.get_by_text("Ограничено площадкой", exact=True)).to_be_visible()
+                page.get_by_label("Показать площадки").select_option("all")
                 expect(page.locator("input[type=password]")).to_have_count(0)
                 expect(page.get_by_role("button", name="Переподключить")).to_have_count(0)
                 page.get_by_role("button", name="Обновить состояния").click()
@@ -336,8 +340,10 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 return
             if scenario == "history":
                 menu = page.get_by_role("navigation", name="Мобильное меню клиента")
-                menu.get_by_role("button", name="Ещё", exact=True).click()
-                page.get_by_role("button", name="История", exact=True).click()
+                menu.get_by_role("button", name="Главная", exact=True).click()
+                expect(page.get_by_text("Записей с предупреждениями: 1")).to_be_visible()
+                expect(page.get_by_text("telegram — Отправлено без подтверждения")).to_be_visible()
+                page.get_by_role("button", name="К истории публикаций").click()
                 expect(page.get_by_role("heading", name="История", exact=True)).to_be_visible()
                 expect(page.get_by_text("Текст не был сохранён в истории")).to_be_visible()
                 expect(

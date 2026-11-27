@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import Cookie, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from crosspost.auth.sessions import verify_session
+from crosspost.auth.sessions import verify_session_claims
 from crosspost.db.models import Role, User
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.user_repo import UserRepository
@@ -63,12 +63,15 @@ async def get_current_user(
     """
     if not session_token:
         raise HTTPException(status_code=401, detail="Требуется вход")
-    user_id = verify_session(session_token)
-    if user_id is None:
+    claims = verify_session_claims(session_token)
+    if claims is None:
         raise HTTPException(status_code=401, detail="Сессия недействительна, войдите заново")
+    user_id, generation = claims
     user = await users.get_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="Пользователь не найден")
+    if user.session_generation != generation:
+        raise HTTPException(status_code=401, detail="Сессия отозвана, войдите заново")
     return user
 
 

@@ -25,6 +25,37 @@
        new Set(data.entries.map(rowKey)).size!==data.entries.length) throw Error("Invalid history");
     return data;
   }
+  // Recent persisted observations only. An absent observation is not success,
+  // and a submitted observation is never a confirmed delivery or retry prompt.
+  const ATTENTION=Object.freeze({
+    failed:"Зафиксирован отказ",needs_relogin:"Нужен повторный вход",
+    submitted:"Отправлено без подтверждения",unknown:"Результат неизвестен",
+    banned:"Ограничено площадкой",deferred:"Отложено площадкой"
+  });
+  function attention(data) {
+    return validate(data).entries.flatMap(e=>{
+      const outcomes=e.outcomes.filter(o=>Object.hasOwn(ATTENTION,o.status));
+      if(!outcomes.length&&e.status!=="rejected"&&e.status!=="unknown") return [];
+      return [{key:rowKey(e),when:e.created_at_utc,text:e.text,
+        rejected:e.status==="rejected",unknown:e.status==="unknown",
+        outcomes:outcomes.map(o=>({channel:o.channel,target:o.target,label:ATTENTION[o.status]}))}];
+    });
+  }
+  function useAttention({useState,useEffect},pid) {
+    const [attempt,setAttempt]=useState(0),[result,setResult]=useState(null);
+    useEffect(()=>{
+      if(!Number.isSafeInteger(pid)||pid<=0)return;
+      const controller=new AbortController();
+      setResult({pid,attempt,kind:"loading"});
+      fetch("/api/profiles/"+pid+"/history?limit=20",{credentials:"same-origin",cache:"no-store",signal:controller.signal})
+        .then(r=>{if(!r.ok)throw Error("Read failed");return r.json();})
+        .then(data=>{if(!controller.signal.aborted)setResult({pid,attempt,kind:"ready",items:attention(data)});})
+        .catch(()=>{if(!controller.signal.aborted)setResult({pid,attempt,kind:"error"});});
+      return ()=>controller.abort();
+    },[pid,attempt]);
+    return {...(!pid?{kind:"no-profile"}:result?.pid===pid&&result.attempt===attempt?result:{kind:"loading"}),
+      retry:()=>setAttempt(x=>x+1)};
+  }
   function create(h,{useState,useEffect,useRef}) {
     return function HistoryPanel({pid,onReuseText}) {
       const [state,setState]=useState(null), [attempt,setAttempt]=useState(0);
@@ -98,5 +129,5 @@
             current.cursor?h("button",{className:"cp-button",disabled:current.kind==="more",onClick:()=>load(current.cursor,entries)},current.kind==="more"?"Загрузка…":"Показать ещё"):null)));
     };
   }
-  window.CrosspostHistoryView=Object.freeze({create,validate,label});
+  window.CrosspostHistoryView=Object.freeze({create,validate,label,attention,useAttention});
 })();
