@@ -207,7 +207,6 @@ async def test_support_card_owner_only_and_scoped_audit(registration):
         assert all(f"actor_id={admin['id']}" in log.message for log in logs)
 
 
-
 async def test_rate_limit_serialized_persistent_and_sliding(registration):
     factory, _ = registration
 
@@ -233,7 +232,7 @@ async def test_rate_limit_http_spoof_and_secret_validation(registration, monkeyp
             r = await c.post(
                 "/api/auth/login",
                 json={"login": f"ghost-{i}", "password": "wrong"},
-                headers={"X-Forwarded-For": f"192.0.2.{i+1}"},
+                headers={"X-Forwarded-For": f"192.0.2.{i + 1}"},
             )
             assert r.status_code == 401
         r = await c.post(
@@ -260,17 +259,11 @@ async def test_production_cookie_requires_https(registration, monkeypatch):
     _, client = registration
     monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
     async with client() as c:
-        r = await c.post(
-            "/api/auth/login", json={"login": "owner", "password": "owner-password"}
-        )
+        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
         assert r.status_code == 503
         assert "set-cookie" not in r.headers
-    async with AsyncClient(
-        transport=ASGITransport(app=create_app()), base_url="https://test"
-    ) as c:
-        r = await c.post(
-            "/api/auth/login", json={"login": "owner", "password": "owner-password"}
-        )
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
+        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
         assert r.status_code == 200
         cookie = r.headers["set-cookie"].lower()
         assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie

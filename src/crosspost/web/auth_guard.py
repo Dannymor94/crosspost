@@ -36,9 +36,7 @@ def _peer(request: Request) -> str:
         return "unknown"
 
 
-async def limit_auth(
-    request: Request, session: AsyncSession, family: str, subject: str
-) -> None:
+async def limit_auth(request: Request, session: AsyncSession, family: str, subject: str) -> None:
     require_https(request)
     enabled = production_mode() or (
         os.environ.get("CROSSPOST_AUTH_RATE_LIMIT", "").strip().lower() == "true"

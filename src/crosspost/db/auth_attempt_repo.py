@@ -45,9 +45,7 @@ async def admit_attempt(
         await session.rollback()
         return False
     session.add(
-        AuthAttempt(
-            family=family, ip_key=ip_key, subject_key=subject_key, occurred_at=timestamp
-        )
+        AuthAttempt(family=family, ip_key=ip_key, subject_key=subject_key, occurred_at=timestamp)
     )
     await session.commit()
     return True
