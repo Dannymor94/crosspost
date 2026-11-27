@@ -29,6 +29,7 @@ from crosspost.db.models import (
     ScheduledPost,
     ScheduledPostStatus,
 )
+from crosspost.db.schedule_order import order_schedules
 
 
 class PublicationRepository:
@@ -240,9 +241,9 @@ class PublicationRepository:
                     (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PENDING_APPROVAL)
                 ),
             )
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def list_pending_approval(self) -> list[ScheduledPost]:
         """Посты, ожидающие одобрения администратора (PENDING_APPROVAL), по времени."""
@@ -252,9 +253,9 @@ class PublicationRepository:
                 ScheduledPost.profile_id == self._pid,
                 ScheduledPost.status == ScheduledPostStatus.PENDING_APPROVAL,
             )
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def approve_pending(self, scheduled_id: int) -> bool:
         """CAS: PENDING_APPROVAL → SCHEDULED. Возвращает True если переход прошёл."""

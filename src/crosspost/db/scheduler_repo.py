@@ -18,6 +18,7 @@ from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.db.models import ScheduledPost, ScheduledPostStatus
+from crosspost.db.schedule_order import order_schedules
 
 
 class SchedulerRepository:
@@ -36,9 +37,9 @@ class SchedulerRepository:
         result = await self._s.execute(
             select(ScheduledPost)
             .where(ScheduledPost.status == ScheduledPostStatus.SCHEDULED)
-            .order_by(ScheduledPost.scheduled_at)
+            .order_by(ScheduledPost.scheduled_at, ScheduledPost.id)
         )
-        return list(result.scalars().all())
+        return order_schedules(list(result.scalars().all()))
 
     async def get(self, scheduled_id: int) -> ScheduledPost | None:
         """Пост по id (любого профиля) — свежий из БД, мимо identity-map."""
