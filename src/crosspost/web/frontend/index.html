@@ -4620,7 +4620,7 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
       h("span", { className: "user-name" }, me.login),
     ),
     pendingCount > 0 && h("span", { className: "pending-count", title: "Постов на модерации" }, pendingCount),
-    h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout }, "Выйти"),
+    h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout, title: "Завершить сеансы на всех устройствах" }, "Выйти"),
   );
 }
 
@@ -4753,8 +4753,12 @@ function App() {
   }, [me, profiles.length]);
 
   async function logout() {
-    try { await api.post("/api/auth/logout"); } catch (_) {}
-    setMe(null); setProfiles([]); setActive(null);
+    try {
+      await api.post("/api/auth/logout");
+      setMe(null); setProfiles([]); setActive(null);
+    } catch (_) {
+      window.alert("Не удалось завершить сеансы. Повторите выход.");
+    }
   }
 
   if (me === undefined) return h("div", { className: "login-wrap" }, h(Spinner));

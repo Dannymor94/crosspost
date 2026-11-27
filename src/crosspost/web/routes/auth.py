@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from crosspost.auth.passwords import hash_password, verify_password
-from crosspost.auth.sessions import sign_session, verify_recovery_token
+from crosspost.auth.sessions import sign_session, verify_recovery_token, verify_session_claims
 from crosspost.db.models import Role
 from crosspost.web.auth_guard import limit_auth, production_mode, require_https
 from crosspost.web.csrf import issue_proof
@@ -96,11 +96,18 @@ async def recover(
 
 
 @router.post("/logout")
-async def logout(response: Response, request: Request) -> dict[str, bool]:
+async def logout(response: Response, request: Request, users: UserRepoDep) -> dict[str, bool]:
+    secure = require_https(request)
+    claims = verify_session_claims(request.cookies.get(SESSION_COOKIE, ""))
+    if claims is not None:
+        user_id, generation = claims
+        # Commit before acknowledging logout; invalid/stale cookies are cleared
+        # without touching a newer generation. Recovery tokens also become stale.
+        await users.revoke_sessions(user_id, generation=generation)
     response.delete_cookie(
         SESSION_COOKIE,
         path="/",
-        secure=require_https(request),
+        secure=secure,
         httponly=True,
         samesite="strict" if production_mode() else "lax",
     )

@@ -297,7 +297,7 @@ ID задачи: `T-<фаза><NN>`. Шаблон и статусы — [`WORKFL
 - **Готово, когда:** любой вход в support-контекст и изменение подключения оставляют запись с actor/target; клиент не может получить admin-доступ.
 
 ### T-409 · Защита входа и браузерных сессий перед публичным запуском
-- **Статус:** in_progress (rate admission, HTTPS cookie and CSRF draft; revocation and MFA pending) · **Исполнитель:** ChatGPT · **Фаза:** 4 · **Приоритет:** P0
+- **Статус:** in_progress (rate admission, HTTPS cookie, CSRF and all-device logout draft; MFA pending) · **Исполнитель:** ChatGPT · **Фаза:** 4 · **Приоритет:** P0
 - **Что сделать:** rate limit входа и выпуска recovery-токенов, усилить требования к паролю, `Secure` cookie в HTTPS, защита от CSRF, MFA для владельца, безопасный серверный logout/отзыв текущей сессии.
 - **Готово, когда:** перебор блокируется без утечки аккаунтов; cross-origin мутирующие запросы отвергаются; владелец защищён MFA; украденная cookie прекращает работать после logout.
 

@@ -2,6 +2,10 @@
 
 Short dated entries. One paragraph each.
 
+## 2026-11-28 — T-409 all-device logout (draft)
+
+MVP logout uses the T-406 generation CAS, not a second revocation ledger. An acknowledged logout invalidates that account's current generation on every device and any outstanding recovery token. Replayed stale logout cannot advance the new generation. This does not cancel already admitted operations. Independent QA and final integration remain required.
+
 ---
 
 ## 2026-11-27 — T-407 invitation first delivery candidate

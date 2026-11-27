@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-28 — T-409 server-side logout (draft)
+
+- Logout advances the authenticated generation atomically before clearing the cookie; stale logout cannot invalidate a newer generation. All devices of that account and outstanding recovery tokens are invalidated; unrelated accounts unaffected.
+- Legacy browser pages retain authenticated state on logout request failure and offer retry. In-flight protected mutation fences, MFA, integrated UX and rollout remain open.
+
 ## 2026-11-27 — T-409 CSRF (draft)
 
 - Same-origin proof endpoint, HttpOnly browser nonce and session-bound HMAC; all unsafe HTTP methods checked before handler. Explicit production HTTPS origin; cross-site and sibling-origin requests refused.

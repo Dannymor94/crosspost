@@ -732,8 +732,13 @@ function App() {
   }, []);
 
   async function logout() {
-    await api.post('/api/auth/logout', {});
-    setUser(null);
+    try {
+      const r = await api.post('/api/auth/logout', {});
+      if (!r.ok) throw Error("logout failed");
+      setUser(null);
+    } catch (_) {
+      window.alert("Не удалось завершить сеансы. Повторите выход.");
+    }
   }
 
   if (checking) return html`
@@ -748,7 +753,7 @@ function App() {
     <div class="app-wrap">
       <div class="app-header">
         <span class="app-header-name">${user.login}</span>
-        <button class="logout-btn" onClick=${logout}>Выйти</button>
+        <button class="logout-btn" title="Завершить сеансы на всех устройствах" onClick=${logout}>Выйти</button>
       </div>
       <div class="tabs">
         <button class=${'tab-btn' + (tab === 'compose' ? ' active' : '')} onClick=${() => setTab('compose')}>
