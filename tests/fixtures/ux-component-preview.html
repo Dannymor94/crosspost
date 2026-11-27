@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Crosspost — проверка новой дизайн-системы</title>
+<style>/* CP_SYSTEM_CSS */</style>
+<style>
+*{box-sizing:border-box}
+body{margin:0}
+.cp-ux{min-height:100dvh}
+.cp-ux [hidden]{display:none!important}
+.cp-ux .preview-note{font-size:13px;margin:0}
+.cp-ux .preview-subtitle{margin:0;font-size:14px;color:var(--cp-muted)}
+.cp-ux .preview-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;align-items:start}
+.cp-ux .preview-grid h2{font-size:18px;margin:0}
+.cp-ux .preview-text{white-space:pre-wrap;overflow-wrap:anywhere;min-height:80px;margin:0}
+.cp-ux .preview-select{width:auto;max-width:100%}
+.cp-ux .preview-target{min-height:44px;display:flex;align-items:center;gap:12px;padding:8px 12px;border:1px solid var(--cp-control-line);border-radius:10px}
+.cp-ux .preview-target input{width:20px;height:20px;accent-color:var(--cp-accent-fill)}
+.cp-ux .preview-bottom{margin-top:auto;font-size:13px}
+.cp-ux .preview-editor-actions{justify-content:flex-end}
+@media(max-width:900px){.cp-ux .preview-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.cp-ux .preview-editor-actions .cp-button{flex:1}.cp-ux .preview-select{width:100%}}
+</style>
+</head>
+<body>
+<div class="cp-ux" id="workspace">
+<div class="cp-shell">
+<aside class="cp-sidebar">
+<div class="cp-brand"><span class="cp-brand-mark" aria-hidden="true">C</span>Crosspost</div>
+<div id="desktop"></div>
+<p class="cp-muted preview-bottom">UX-02 · проверка компонентов</p>
+</aside>
+<div class="cp-main">
+<header class="cp-topbar">
+<div><div class="cp-brand">Crosspost</div><p class="preview-subtitle" id="context">Демо-профиль</p></div>
+<div class="cp-row">
+<label class="cp-label">Роль<select class="cp-input preview-select" id="role"><option value="admin">Администратор</option><option value="client">Клиент</option></select></label>
+<label class="cp-label">Тема<select class="cp-input preview-select" id="theme"><option value="system">Системная</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label>
+</div>
+</header>
+<main class="cp-content">
+<p class="cp-muted preview-note">Изолированная проверка компонентов · синтетические данные · отправка недоступна</p>
+<h1 class="cp-title" id="heading">Публикации</h1>
+<div class="preview-grid" id="editor">
+<section class="cp-panel cp-stack">
+<h2>Новый пост</h2>
+<p class="cp-muted preview-note">Образец состояния: черновик сохранён</p>
+<label class="cp-label">Текст публикации<textarea class="cp-input" id="text">Приглашаем на новое занятие. Подробности и расписание скоро.</textarea></label>
+<h2>Куда опубликовать</h2>
+<label class="preview-target"><input type="checkbox" checked> Telegram</label>
+<label class="preview-target"><input type="checkbox"> ВКонтакте</label>
+<div class="cp-row preview-editor-actions">
+<button class="cp-button" type="button" disabled>Запланировать</button>
+<button class="cp-button cp-button--primary" type="button" disabled>Опубликовать</button>
+</div>
+<p class="cp-muted preview-note">В демонстрации нет API публикации.</p>
+</section>
+<section class="cp-panel cp-stack">
+<h2>Предпросмотр</h2>
+<p class="preview-subtitle">Приблизительное отображение</p>
+<div class="cp-panel"><p class="preview-text" id="preview"></p></div>
+<div class="cp-notice cp-status--warning">Образец предупреждения: требуется проверить результат предыдущей операции.</div>
+</section>
+</div>
+<section class="cp-panel cp-stack" id="other" hidden><h2 id="other-title"></h2><p class="cp-muted">Проверяется только переход между пунктами меню. Рабочий экран этого раздела ещё не подключён.</p></section>
+</main>
+</div>
+</div>
+<div id="mobile"></div>
+</div>
+<script>/* CP_THEME_JS */</script>
+<script>/* CP_NAV_JS */</script>
+<script>
+(() => {
+  "use strict";
+  const el = id => document.getElementById(id);
+  const theme = window.CrosspostTheme.mount(el("workspace"));
+  el("theme").value = theme.preference;
+  el("theme").addEventListener("change", () => theme.set(el("theme").value));
+  const admin = [
+    {id:"home",label:"Обзор"},{id:"calendar",label:"Контент-план"},{id:"posts",label:"Публикации"},
+    {id:"moderation",label:"Модерация"},{id:"clients",label:"Клиенты"},
+    {id:"connections",label:"Подключения"},{id:"more",label:"Ещё"}
+  ];
+  const client = [
+    {id:"home",label:"Главная"},{id:"calendar",label:"Календарь"},
+    {id:"posts",label:"Публикации"},{id:"more",label:"Ещё"}
+  ];
+  let desktop = null, mobile = null, active = "posts";
+  function items() { return el("role").value === "admin" ? admin : client; }
+  function navigate(id) {
+    const item = items().find(x => x.id === id);
+    if (!item) return;
+    active = id;
+    desktop.setActive(id);
+    mobile.setActive(mobileItems().some(x => x.id === id) ? id : null);
+    el("heading").textContent = item.label;
+    el("editor").hidden = id !== "posts";
+    el("other").hidden = id === "posts";
+    el("other-title").textContent = item.label;
+  }
+  function mobileItems() { return items().filter(x => !["clients","connections"].includes(x.id)); }
+  function render() {
+    desktop?.dispose(); mobile?.dispose();
+    if (!items().some(x => x.id === active)) active = "posts";
+    desktop = window.CrosspostNavigation.mount(el("desktop"), {items:items(),onNavigate:navigate,label:"Меню компьютера"});
+    mobile = window.CrosspostNavigation.mount(el("mobile"), {items:mobileItems(),onNavigate:navigate,label:"Меню телефона"});
+    el("mobile").querySelector("nav").classList.add("cp-mobile-nav");
+    navigate(active);
+  }
+  el("role").addEventListener("change", render);
+  el("text").addEventListener("input", () => { el("preview").textContent = el("text").value; });
+  el("preview").textContent = el("text").value;
+  render();
+})();
+</script>
+</body>
+</html>

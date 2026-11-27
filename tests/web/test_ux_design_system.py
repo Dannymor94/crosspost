@@ -11,7 +11,8 @@ def test_design_tokens_and_theme_controller():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            page = browser.new_page(viewport={"width": 390, "height": 844}, color_scheme="dark")
+            viewport = {"width": 390, "height": 844}
+            page = browser.new_page(viewport=viewport, color_scheme="dark")
             page.route("**/*", lambda route: route.fulfill(body="<html></html>"))
             page.goto("http://localhost/")
             page.set_content(
@@ -55,7 +56,8 @@ def test_design_tokens_and_theme_controller():
             assert actual["background"] == "rgb(16, 20, 28)"
             assert actual["textContrast"] >= 4.5
             assert actual["buttonContrast"] >= 4.5
-            assert actual["buttonHeight"] >= 44 and actual["inputHeight"] >= 44
+            assert actual["buttonHeight"] >= 44
+            assert actual["inputHeight"] >= 44
             page.evaluate("window.testTheme.set('light')")
             assert page.locator("#ux").get_attribute("data-theme") == "light"
             page.evaluate("window.testTheme.dispose()")
@@ -78,6 +80,7 @@ def test_design_tokens_and_theme_controller():
             )
             assert page.locator("#ux").get_attribute("data-theme") == "light"
             page.keyboard.press("Tab")
-            assert page.locator("button").evaluate("e => getComputedStyle(e).outlineStyle") == "solid"
+            outline = page.locator("button").evaluate("e => getComputedStyle(e).outlineStyle")
+            assert outline == "solid"
         finally:
             browser.close()
