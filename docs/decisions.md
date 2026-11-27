@@ -149,3 +149,7 @@ No new connection API or authorization. Client projection uses existing scoped G
 ### T-512 safe calendar move (draft)
 
 Separate POST move from existing legacy PATCH/failed rewind. Explicit old canonical instant, wall time and zone; under BEGIN IMMEDIATE read profile policy and configured zone, reject ambiguous/gap/past and CAS scheduled-only row. No automatic retry. Legacy times and pending/failed/executing rows not movable via this endpoint; unchanged existing flows are separate.
+
+### Calendar date intent (draft)
+
+User explicitly picks civil day and time. Only ephemeral profile-scoped editor suggestion, not history/storage or publication. Client applies through existing draft save; admin prefill only in schedule modal after matching configured zone and existing send guards. Existing R3 admission remains authoritative; admin modal persistence limitation remains open.

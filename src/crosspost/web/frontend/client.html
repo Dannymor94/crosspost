@@ -463,7 +463,7 @@ function useScheduleZone(pid) {
 }
 
 // ── Compose ────────────────────────────────────────────────────────────────────
-function ComposeView({ user }) {
+function ComposeView({ user, scheduleIntent, onIntentDismiss }) {
   const pid = user.profile_id;
   const zone = useScheduleZone(pid);
   const policy = useModeration(pid);
@@ -738,6 +738,13 @@ function ComposeView({ user }) {
 
       <div class="field">
         <label class="label">Когда</label>
+        ${scheduleIntent && html`<div class="cp-panel cp-stack">
+          <p>Выбрано в календаре: ${scheduleIntent.wall.replace("T"," ")} · ${scheduleIntent.zone}</p>
+          ${zone!==scheduleIntent.zone&&html`<p class="cp-muted">Часовой пояс не совпадает. Выберите время заново.</p>`}
+          <button class="cp-button" disabled=${busy||pending||!draft.loaded||!["ready","saved"].includes(draft.status)||zone!==scheduleIntent.zone||policy.enabled===null}
+            onClick=${()=>{setWhen("later");setScheduledAt(scheduleIntent.wall);onIntentDismiss();}}>Использовать выбранное время</button>
+          <button class="cp-button" onClick=${onIntentDismiss}>Убрать выбранное время</button>
+        </div>`}
         <div class="when-pills">
           ${policy.enabled === false && html`<button class=${'pill' + (when === 'now' ? ' active' : '')} onClick=${() => setWhen('now')}>Сейчас</button>`}
           <button class=${'pill' + (when === 'later' ? ' active' : '')} onClick=${() => setWhen('later')}>Выбрать дату и время</button>
@@ -891,13 +898,14 @@ function PostsView({ user }) {
 }
 
 // ── App ────────────────────────────────────────────────────────────────────────
-const CalendarPanel=window.CrosspostCalendarView.create(preact.h,{useState,useEffect});
+const CalendarPanel=window.CrosspostCalendarView.create(preact.h,{useState,useEffect,useRef});
 const HistoryPanel=window.CrosspostHistoryView.create(preact.h,{useState,useEffect,useRef});
 const ConnectionPanel=window.CrosspostConnections.create(preact.h,{useState,useEffect});
-function ClientSchedule({user,onNavigate}) {
+function ClientSchedule({user,onNavigate,onCreateTime}) {
   const [manage,setManage]=useState(false);
+  const policy=useModeration(user.profile_id);
   return manage?html`<section class="cp-stack"><button class="cp-button" onClick=${()=>setManage(false)}>К календарю</button><${PostsView} user=${user} /></section>`:
-    html`<${CalendarPanel} pid=${user.profile_id} onCreate=${()=>onNavigate("compose")} onManage=${()=>setManage(true)} />`;
+    html`<${CalendarPanel} pid=${user.profile_id} canMove=${policy.enabled===false} onCreateTime=${onCreateTime} onCreate=${()=>onNavigate("compose")} onManage=${()=>setManage(true)} />`;
 }
 const CLIENT_ITEMS = Object.freeze([
   {id:"home",label:"Главная",icon:"home"},
@@ -949,7 +957,8 @@ function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
   const [tab, setTab] = useState('compose');
-  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},!!user,"compose",CLIENT_ROUTES,setTab);
+  const [scheduleIntent,setScheduleIntent]=useState(null);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},!!user,"compose",CLIENT_ROUTES,next=>{setScheduleIntent(null);setTab(next);});
 
   useEffect(() => {
     api.get('/api/auth/me')
@@ -991,8 +1000,8 @@ function App() {
       </div>
       <${ClientNavigation} tab=${tab} onNavigate=${navigate} />
       ${tab === 'compose'
-        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} />`
-        : tab === 'posts' ? html`<${ClientSchedule} key=${user.profile_id} user=${user} onNavigate=${navigate} />`
+        ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} scheduleIntent=${scheduleIntent?.pid===user.profile_id?scheduleIntent:null} onIntentDismiss=${()=>setScheduleIntent(null)} />`
+        : tab === 'posts' ? html`<${ClientSchedule} key=${user.profile_id} user=${user} onNavigate=${navigate} onCreateTime=${intent=>{if(navigate("compose"))setScheduleIntent({...intent,pid:user.profile_id});}} />`
         : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
         : tab === 'history' ? html`<${HistoryPanel} key=${user.profile_id} pid=${user.profile_id} />`
         : tab === 'connections' ? html`<${ConnectionPanel} key=${user.profile_id} pid=${user.profile_id} />`

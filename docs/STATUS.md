@@ -244,3 +244,7 @@ Client can read own profile's channel statuses and declared preparation steps; n
 ## T-512 calendar actions (draft)
 
 Dedicated canonical-only move endpoint with expected instant and profile-zone validation, status=SCHEDULED only, SQLite immediate transaction fences executor and settings changes. No FAILED rewind, no publication effects or media changes. New tests and browser wiring pending. Stacked isolated candidate on #65.
+
+### T-512 calendar actions UI (draft)
+
+Both role calendars now offer explicit canonical scheduled move (client only when moderation false), no automatic retry; conflict/unknown refresh and notice. Day+time intent transfers to the existing editor as a scoped ephemeral suggestion; client explicitly applies it to draft, admin opens existing scheduling modal with verified zone. Never submit automatically, never overwrite saved draft on navigation. CI pending.

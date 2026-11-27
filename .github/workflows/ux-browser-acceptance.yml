@@ -11,6 +11,7 @@ on:
       - task/T-512-calendar-model
       - task/T-513-history-read-model
       - task/T-515-connection-status
+      - task/T-512-calendar-actions
   workflow_dispatch:
 
 permissions:
