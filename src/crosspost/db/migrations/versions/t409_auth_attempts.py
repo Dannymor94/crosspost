@@ -54,8 +54,8 @@ def upgrade() -> None:
         sa.Column("subject_key", sa.String(64), nullable=False),
         sa.Column("occurred_at", sa.BigInteger(), nullable=False),
     )
-    for name, columns in _INDEXES.items():
-        op.create_index(name, "auth_attempts", columns)
+    for name, index_columns in _INDEXES.items():
+        op.create_index(name, "auth_attempts", index_columns)
 
 
 def downgrade() -> None:
