@@ -333,6 +333,7 @@ textarea { resize: vertical; min-height: 110px; }
 <script src="/static/shared/ux-theme-page.js"></script>
 <script src="/static/shared/ux-navigation.js"></script>
 <script src="/static/shared/ux-workspace.js"></script>
+<script src="/static/shared/ux-overview.js"></script>
 </head>
 <body class="cp-client">
 <div id="root"></div>
@@ -893,11 +894,28 @@ function ClientNavigation({tab,onNavigate,mobile=false}) {
   return html`<div ref=${ref} class=${mobile?"cp-client-mobile":"cp-client-menu"}></div>`;
 }
 function ClientHome({user,onNavigate}) {
+  const overview=window.CrosspostOverview.useOverview({useState,useEffect},user.profile_id);
+  const data=overview.data;
   return html`<section class="cp-stack"><h1 class="cp-title">Главная</h1>
     <div class="cp-panel cp-stack"><h2>${user.login}</h2>
-      <p class="cp-muted">Подготовьте публикацию или откройте ближайшие запланированные посты.</p>
+      <p class="cp-muted">Подготовьте публикацию или откройте расписание.</p>
       <button class="cp-button cp-button--primary" onClick=${()=>onNavigate("compose")}>Создать пост</button>
       <button class="cp-button" onClick=${()=>onNavigate("posts")}>Открыть расписание</button>
+    </div>
+    <div class="cp-panel cp-stack" aria-live="polite">
+      <h2>Активное расписание</h2>
+      ${overview.kind==="loading"?html`<p>Загружаем расписание…</p>`:
+        overview.kind==="error"?html`<p>Не удалось загрузить сводку.</p><button class="cp-button" onClick=${overview.retry}>Повторить загрузку</button>`:
+        data?html`<div class="cp-overview-metrics">
+          <div><strong>${data.scheduled}</strong><span>Запланировано</span></div>
+          <div><strong>${data.pending}</strong><span>На проверке</span></div>
+        </div>
+        ${data.rows.length?html`<h3>Первые записи расписания</h3>${data.rows.slice(0,3).map(row=>html`
+          <div class="cp-overview-row" key=${row.id}>
+            <small>${window.CrosspostOverview.timeLabel(row,data.zone)}</small>
+            <strong>${row.text.slice(0,120)||"Пост без текста"}</strong>
+            <span class="cp-muted">${row.status==="scheduled"?"Запланировано":"На проверке"}</span>
+          </div>`)}`:html`<p class="cp-muted">Активных публикаций нет.</p>`}`:null}
     </div></section>`;
 }
 function ClientMore({user,onLogout}) {

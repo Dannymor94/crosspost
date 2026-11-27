@@ -205,3 +205,7 @@ UX-02 visual CI at `5c84a4e` passed. Shared navigation mounted for actual admin/
 ### T-510 navigation history (draft)
 
 Browser scenario 45979009846 passed 6/6 for each role at `59edbce`. Shared history now uses per-mount/context epoch and screen ID only; back/forward runs draft guard, rejected pop restores original entry, old profile/account entries do not restore context. Admin profile selector resets on refusal and profile-list responses fenced on auth lifecycle. New mocked checks cover history and profile refusal/acceptance; CI pending. No changes to backend auth revocation, draft admission, or deployment gates.
+
+### T-510 overview data (draft)
+
+Both role home screens now read scoped active schedule + timezone, display actual scheduled/pending counts and first three server-ordered rows. Explicit loading, empty and error/retry; scope/attempt fencing and abort prevent stale profile data. Legacy wall time labelled, not reinterpreted. No history or global metric invented. Existing default editor and API unchanged. CI pending.

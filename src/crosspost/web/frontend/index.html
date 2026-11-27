@@ -1240,6 +1240,7 @@ body {
 <script src="/static/shared/ux-theme-page.js"></script>
 <script src="/static/shared/ux-navigation.js"></script>
 <script src="/static/shared/ux-workspace.js"></script>
+<script src="/static/shared/ux-overview.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -2472,14 +2473,34 @@ function Sidebar({view,onNavigate}) {
     h(AdminNavigation,{view,onNavigate}));
 }
 function AdminOverview({active,onNavigate}) {
+  const overview=window.CrosspostOverview.useOverview({useState,useEffect},active?.id);
+  const data=overview.data;
   return h("section",{className:"cp-stack"},
     h("h1",{className:"cp-title"},"Обзор"),
     h("div",{className:"cp-panel cp-stack"},
       h("h2",null,active ? active.name : "Выберите профиль"),
-      h("p",{className:"cp-muted"},"Создавайте публикации, проверяйте расписание и результаты по выбранному профилю."),
+      h("p",{className:"cp-muted"},"Расписание и публикации выбранного профиля."),
       h("button",{className:"cp-button cp-button--primary",disabled:!active,onClick:()=>onNavigate("publish")},"Создать пост"),
-      h("button",{className:"cp-button",onClick:()=>onNavigate("moderation")},"На проверке"),
-      h("button",{className:"cp-button",onClick:()=>onNavigate("channels"),disabled:!active},"Подключения")));
+      h("div",{className:"cp-row"},
+        h("button",{className:"cp-button",onClick:()=>onNavigate("moderation")},"На проверке"),
+        h("button",{className:"cp-button",onClick:()=>onNavigate("channels"),disabled:!active},"Подключения"))),
+    active && h("div",{className:"cp-panel cp-stack","aria-live":"polite"},
+      h("h2",null,"Активное расписание"),
+      overview.kind==="loading" ? h("p",null,"Загружаем расписание…") :
+      overview.kind==="error" ? h("div",{className:"cp-stack"},h("p",null,"Не удалось загрузить расписание."),
+        h("button",{className:"cp-button",onClick:overview.retry},"Повторить загрузку")) :
+      data && h(React.Fragment,null,
+        h("div",{className:"cp-overview-metrics"},
+          h("div",null,h("strong",null,data.scheduled),h("span",null,"Запланировано")),
+          h("div",null,h("strong",null,data.pending),h("span",null,"На проверке"))),
+        data.rows.length ? h("div",{className:"cp-stack"},
+          h("h3",null,"Первые записи расписания"),
+          ...data.rows.slice(0,3).map(row=>h("div",{className:"cp-overview-row",key:row.id},
+            h("small",null,window.CrosspostOverview.timeLabel(row,data.zone)),
+            h("strong",null,row.text.slice(0,120)||"Пост без текста"),
+            h("span",{className:"cp-muted"},row.status==="scheduled"?"Запланировано":"На проверке"))))
+          : h("p",{className:"cp-muted"},"Активных публикаций нет."),
+        h("button",{className:"cp-button",onClick:()=>onNavigate("publish")},"Открыть расписание"))));
 }
 function AdminClients({profiles,active,onSelect,onNew,onNewClient}) {
   return h("section",{className:"cp-stack"},

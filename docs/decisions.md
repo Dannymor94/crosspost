@@ -117,3 +117,7 @@ Role-specific menus use existing views and a single draft leave guard. Mobile ad
 ### T-510 history contract (draft)
 
 Same-document History API state contains opaque epoch, index and allowlisted screen only, no profile/account or content. Profile changes and logout invalidate prior history scope. Rejected back/forward restores previous entry without unmounting editor; external-document leave remains browser beforeunload. Reload defaults to existing editor for recovery. Not a substitute for server auth revocation T-406.
+
+### T-510 overview read model (draft)
+
+Reuse existing profile-scoped scheduled GET and timezone GET; do not aggregate histories or reorder mixed legacy/canonical rows. Counts describe only active scheduled/pending rows. Shared read-only helper validates results and fences stale responses; no new API.
