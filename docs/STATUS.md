@@ -117,3 +117,15 @@ production-ready не заявляется. Подробности: [OPERATIONS.
 ## UX 2.0 — планирование (2026-11-24)
 
 Аудит исходников на main 58dedfcb выявил задачи по модерации, request idempotency, timezone, черновикам, состояниям ошибок и истории. Владелец согласовал направление, включая будущего Telegram Companion. [UX_ROADMAP.md](UX_ROADMAP.md), [UX_CONTRACTS.md](UX_CONTRACTS.md), [UX_DESIGN_SYSTEM.md](UX_DESIGN_SYSTEM.md), [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md). Это только план; код, интерактивный прототип, browser/device smoke и production readiness не подтверждены. Статусы исполнения — BACKLOG. Незавершённые PR и исходные production gates сохраняются.
+
+## UX-02 / T-501 — изолированные общие ресурсы
+После CI PASS и mocked browser PASS UX-01 на 226547c1 (45886766017, 45886766078) независимый QA запрошен в issue #57, вердикта пока нет. В отдельной ветке T-501 начата подготовка design tokens из согласованного UX-00 (#52), scoped CSS-компонентов, светлой/тёмной/системной темы и тестов упаковки/Chromium. Ресурсы ещё не подключены к / или /client: редакторы, авторизация, публикации, данные и рабочая система не меняются. Перенос в живой интерфейс после QA и согласования графа доставки. CI/QA T-501 pending.
+
+### T-501 second preparation slice
+Initial CI stopped at ruff format for test_ux_design_system.py (45890770470/45890761640); simplified statement and made theme change assertions wait for browser events. Added shared responsive shell and presentation-only navigation controller (desktop 208px sidebar, mobile bottom menu). Navigation destinations and accepted transition are supplied by the host, not an authorization/routing decision; no live routes or placeholder feature implementations. Chromium regression covers 360/390/768/1440, selection/focus targets, host rejection and mobile subset. UX-01 independent issue #57 still has no verdict. Changes remain additive; actual / and /client unchanged, no deployment. New CI pending.
+
+### T-501 third preparation slice
+Previous two CI runs (45934227131/45934221590) stopped at formatting test_ux_design_system.py, not a browser assertion. Simplified remaining candidate statements and enabled formatter diff in CI. Added standalone offline component preview generated from actual shared CSS/navigation/theme resources, with synthetic editor/role/theme controls, explicit disabled publication and unimplemented screens marked as such. Dedicated artifact workflow; no new application route, API, credentials, or deployment. Independent QA #57 still has no verdict; UX-01 delivery and live UI integration remain blocked pending review. New CI and preview artifact pending.
+
+### T-501 contrast finding
+99a7fad2: preview artifact workflow passed (45934646873); general CI reached pytest (1294 passed, one failed on primary button contrast). Strengthened primary button selector and excluded primary from generic hover, test checks both themes and hover states. New CI pending. No UX-01 QA verdict yet.
