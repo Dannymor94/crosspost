@@ -12,7 +12,8 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 
 
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
-def test_admin_draft_reload_and_unknown_utc_schedule():
+@pytest.mark.parametrize("scenario", ["unknown", "submitted", "incomplete", "rejected", "stale"])
+def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     assert ASSETS is not None
     assets = Path(ASSETS)
     react = assets / "react/umd/react.production.min.js"
@@ -34,6 +35,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
     draft = {"scope": "b" * 64, "revision": None, "data": None}
     writes = 0
     sends = 0
+    dispatched = 0
+    outcome = {"channel": "telegram", "target": "", "status": "submitted"}
+    operations = {}
     resolves = 0
     recoveries = 0
     errors = []
@@ -49,7 +53,7 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             page.screenshot(path=directory / name, full_page=True)
 
     def handle(route):
-        nonlocal draft, writes, sends, resolves, recoveries
+        nonlocal draft, writes, sends, resolves, recoveries, dispatched
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
@@ -83,7 +87,14 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
                 "platform_title": "Telegram",
                 "state": "live",
             }
-            route.fulfill(json=[target])
+            vk = {
+                **target,
+                "channel": "vk_wall",
+                "title": "VK",
+                "platform": "vk",
+                "platform_title": "VK",
+            }
+            route.fulfill(json=[target, vk] if scenario == "incomplete" else [target])
         elif path.endswith("/editor-draft"):
             assert request.headers.get("x-draft-actor") == "2"
             if request.method == "GET":
@@ -92,6 +103,11 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
                 body = request.post_data_json
                 if body["scope"] != draft["scope"] or body["revision"] != draft["revision"]:
                     route.fulfill(status=409, json={"detail": "conflict"})
+                    return
+                if draft.get("operation_state") == "used" or (
+                    draft.get("operation_state") == "recorded" and body["data"] is not None
+                ):
+                    route.fulfill(status=409, json={"detail": "consumed"})
                     return
                 writes += 1
                 revision = f"{writes:032x}"
@@ -105,7 +121,40 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
             recoveries += 1
             assert request.headers.get("idempotency-key")
             assert request.headers.get("idempotency-recovery")
-            route.fulfill(json={"state": "unknown", "outcomes": []})
+            if scenario == "unknown":
+                route.fulfill(json={"state": "unknown", "outcomes": []})
+            else:
+                key = request.headers["idempotency-key"]
+                proof = request.headers["idempotency-recovery"]
+                operation = operations.get(key)
+                if operation is None or operation[0] != proof:
+                    route.fulfill(json={"state": "not_admitted", "outcomes": []})
+                else:
+                    route.fulfill(json=operation[1])
+        elif path.endswith("/publish") and request.method == "POST":
+            sends += 1
+            key = request.headers["idempotency-key"]
+            proof = request.headers["idempotency-recovery"]
+            assert request.headers["x-draft-revision"] == key
+            assert request.headers["x-draft-scope"] == draft["scope"]
+            if key != draft["revision"] or key in operations:
+                route.fulfill(status=409, json={"detail": "stale revision"})
+                return
+            if scenario == "rejected" and not operations:
+                receipt = {
+                    "state": "rejected",
+                    "outcomes": [{"status": "rejected_before_effect", "http_status": "422"}],
+                }
+                operations[key] = (proof, receipt)
+                draft["operation_state"] = "rejected"
+                route.fulfill(status=422, json={"detail": "validation rejected"})
+                return
+            dispatched += 1
+            status = "done" if scenario in ("stale", "rejected", "incomplete") else "submitted"
+            rows = [{**outcome, "status": status}]
+            operations[key] = (proof, {"state": "recorded", "outcomes": rows})
+            draft["operation_state"] = "used" if scenario == "incomplete" else "recorded"
+            route.fulfill(json={"publication_id": "p1", "outcomes": rows})
         elif path.endswith("/scheduled") and request.method == "POST":
             sends += 1
             assert request.headers.get("idempotency-key")
@@ -124,15 +173,74 @@ def test_admin_draft_reload_and_unknown_utc_schedule():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            context = browser.new_context(viewport={"width": 1440, "height": 1000})
+            page = context.new_page()
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.route("**/*", handle)
+            context.route("**/*", handle)
             page.goto("http://localhost/")
             text = page.get_by_placeholder("Текст поста…")
             text.fill(draft_text)
             target = page.locator("button.target").filter(has_text="Telegram")
             expect(target).to_have_attribute("aria-pressed", "false")
             target.click()
+            if scenario != "unknown":
+                if scenario == "incomplete":
+                    page.locator("button.target").filter(has_text="VK").click()
+                send = page.get_by_role("button", name="Опубликовать сейчас", exact=True)
+                expect(send).to_be_enabled(timeout=10000)
+                original_revision = draft["revision"]
+                if scenario == "stale":
+                    second = context.new_page()
+                    second.on("pageerror", lambda error: errors.append(str(error)))
+                    second.goto("http://localhost/")
+                    expect(second.get_by_placeholder("Текст поста…")).to_have_value(draft_text)
+                    second_send = second.get_by_role("button", name="Опубликовать сейчас", exact=True)
+                    expect(second_send).to_be_enabled(timeout=10000)
+                    send.click()
+                    expect(text).to_have_value("")
+                    assert draft["data"] is None
+                    assert draft["revision"] != original_revision
+                    second_send.click()
+                    expect(second_send).to_be_disabled()
+                    second.get_by_role("button", name="Проверить результат").click()
+                    expect(second.get_by_text("Эта попытка не была допущена.", exact=False)).to_be_visible()
+                    second.get_by_role("button", name="Результат проверен").click()
+                    expect(second.get_by_placeholder("Текст поста…")).to_have_value("")
+                    assert sends == 2 and dispatched == 1
+                else:
+                    send.click()
+                    expect(send).to_be_disabled()
+                    expect(page.get_by_role("button", name="Проверить результат")).to_be_visible()
+                    page.reload()
+                    expect(text).to_have_value(draft_text)
+                    expect(send).to_be_disabled()
+                    page.get_by_role("button", name="Проверить результат").click()
+                    acknowledge = page.get_by_role("button", name="Результат проверен")
+                    if scenario == "incomplete":
+                        expect(page.get_by_text("Результат неизвестен.", exact=False)).to_be_visible()
+                        expect(acknowledge).to_have_count(0)
+                        assert draft["revision"] == original_revision
+                        assert sends == dispatched == 1
+                    else:
+                        expect(acknowledge).to_be_visible()
+                        acknowledge.click()
+                        if scenario == "submitted":
+                            expect(send).to_be_disabled()
+                            expect(page.get_by_role("button", name="Новый пост", exact=True)).to_be_visible()
+                            assert draft["revision"] == original_revision
+                            assert sends == dispatched == 1
+                        else:
+                            page.get_by_role("button", name="Продолжить редактирование").click()
+                            expect(send).to_be_enabled(timeout=10000)
+                            assert draft["revision"] != original_revision
+                            assert draft["data"]["text"] == draft_text
+                            assert sends == 1 and dispatched == 0
+                            send.click()
+                            expect(text).to_have_value("")
+                            assert sends == 2 and dispatched == 1
+
+                assert not errors, errors
+                return
             schedule = page.get_by_role("button", name="Запланировать", exact=True)
             expect(schedule).to_be_enabled(timeout=10000)
             assert draft["data"]["targets"] == ["telegram␟"]
