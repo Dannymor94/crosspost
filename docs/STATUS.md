@@ -213,3 +213,7 @@ Both role home screens now read scoped active schedule + timezone, display actua
 ## UX-04 T-511 — shared approximate preview (draft)
 
 First presentation-only slice on T-510 candidate `79bcd63`. Both editors use the same local preview of text/title/selected targets and attachment state. No URL fetch, no HTML injection, no permission or submission logic changes; preview is optional and approximate. Full common editor, upload and target UX are open. Stacked draft; no merge/deploy. CI pending.
+
+## UX-05 T-512 — calendar read model (draft)
+
+Shared pure calendar model for explicit profile IANA zone, day/week/month/list periods and scheduled/pending filter. Canonical times require an explicit offset and valid zone; legacy rows remain separate, not placed on a guessed calendar day. No reschedule/write, UI route or API changes yet. Stacked on first T-511 candidate, CI pending.
