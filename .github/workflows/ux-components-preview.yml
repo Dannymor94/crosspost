@@ -1,0 +1,30 @@
+name: UX-02 component preview
+
+on:
+  push:
+    branches:
+      - task/T-501-ux-design-system
+      - integration/ux02-r3-preview
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build offline preview from shared assets
+        run: python scripts/build_ux_component_preview.py
+      - name: Upload interactive HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosspost-ux-components
+          path: build/ux-preview/crosspost-ux-components.html
+          if-no-files-found: error
+          retention-days: 14

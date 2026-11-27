@@ -82,3 +82,4 @@ check_untyped_defs = true
 
 [tool.setuptools.package-data]
 "crosspost.db" = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
+"crosspost.web" = ["frontend/*.html", "frontend/*.js", "frontend/*.css", "frontend/styles/*.css", "frontend/shared/*.js"]
