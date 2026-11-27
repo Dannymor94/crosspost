@@ -13,6 +13,7 @@ from crosspost.db.models import Role, User
 from crosspost.db.profile_repo import ProfileRepository
 from crosspost.db.user_repo import UserRepository
 from crosspost.db.vault import get_vault
+from crosspost.web.auth_guard import production_mode
 
 SESSION_COOKIE = "session"
 
@@ -72,6 +73,8 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Пользователь не найден")
     if user.session_generation != generation:
         raise HTTPException(status_code=401, detail="Сессия отозвана, войдите заново")
+    if user.role == Role.ADMIN and production_mode() and user.mfa_secret is None:
+        raise HTTPException(401, "Требуется настройка двухфакторного входа")
     return user
 
 

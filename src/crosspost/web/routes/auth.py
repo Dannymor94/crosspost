@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from crosspost.auth.passwords import hash_password, verify_password
 from crosspost.auth.sessions import sign_session, verify_recovery_token, verify_session_claims
 from crosspost.db.models import Role
+from crosspost.db.owner_mfa import consume_owner_factor
 from crosspost.web.auth_guard import limit_auth, production_mode, require_https
 from crosspost.web.csrf import issue_proof
 from crosspost.web.deps import SESSION_COOKIE, CurrentUser, SessionDep, UserRepoDep
@@ -31,6 +32,7 @@ _DUMMY_HASH = hash_password("crosspost-dummy-constant")
 class LoginBody(BaseModel):
     login: str = Field(max_length=1024)
     password: str = Field(max_length=4096)
+    mfa_code: str = Field(default="", max_length=64)
 
 
 class RecoverBody(BaseModel):
@@ -60,6 +62,15 @@ async def login(
     ok = await asyncio.to_thread(verify_password, body.password, reference)
     if user is None or not ok:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    if user.role == Role.ADMIN:
+        if user.mfa_secret is None:
+            if production_mode():
+                raise HTTPException(403, "Владелец должен настроить двухфакторный вход")
+        elif not await consume_owner_factor(
+            session, user.id, user.session_generation, user.password_hash, body.mfa_code
+        ):
+            raise HTTPException(401, "Неверный логин, пароль или код входа")
 
     response.set_cookie(
         SESSION_COOKIE,
