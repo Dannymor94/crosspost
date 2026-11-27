@@ -38,6 +38,7 @@ _EXPECTED: list[tuple[str, str]] = [
     # auth
     ("GET", "/account"),
     ("POST", "/api/auth/register"),
+    ("POST", "/api/users/support/{*}/inspect"),
     ("GET", "/api/users/invitations"),
     ("POST", "/api/users/invitations"),
     ("POST", "/api/users/invitations/{*}/renew"),
