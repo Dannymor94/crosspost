@@ -26,10 +26,8 @@ def upgrade() -> None:
             "expires_at": (sa.BigInteger, False),
             "consumed_at": (sa.BigInteger, True),
         }
-        unique = {
-            tuple(c["column_names"] or ())
-            for c in inspector.get_unique_constraints("client_invitations")
-        }
+        constraints = inspector.get_unique_constraints("client_invitations")
+        unique = {tuple(c["column_names"] or ()) for c in constraints}
         foreign = inspector.get_foreign_keys("client_invitations")
         if (
             set(columns) != set(expected)

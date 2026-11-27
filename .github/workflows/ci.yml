@@ -26,4 +26,6 @@ jobs:
         run: uv run playwright install chromium --with-deps
 
       - name: Check (ruff + mypy + pytest)
-        run: make check
+        run: |
+          uv run ruff format --diff src tests
+          make check
