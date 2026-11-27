@@ -108,3 +108,24 @@ html.cp-ux {
 /* Theme changes must not interpolate incompatible text/fill colors. */
 .cp-ux :is(.btn,.tab-btn,.target,.profile-item,.weekday-btn) { transition: none; }
 .cp-ux .weekday-btn.on { background: var(--cp-accent-fill); color: var(--cp-on-accent); border-color: var(--cp-accent-fill); }
+
+/* UX-03: shared role-specific navigation; existing editor remains unchanged. */
+.cp-ux .cp-workspace-sidebar { width: 208px; min-width: 208px; }
+.cp-ux .cp-admin-menu { padding: 12px 8px; }
+.cp-ux .cp-client-menu { margin: 12px 0 20px; }
+.cp-ux .cp-client-menu .cp-nav { grid-template-columns: repeat(4,minmax(0,1fr)); }
+.cp-ux .cp-client-menu .cp-nav-item { justify-content:center; flex-wrap:wrap; }
+.cp-ux .cp-admin-mobile,.cp-ux .cp-client-mobile { display:none; }
+@media (max-width:640px) {
+  .cp-ux .cp-admin .cp-workspace-sidebar,.cp-ux .cp-client-menu { display:none; }
+  .cp-ux .cp-admin-mobile,.cp-ux .cp-client-mobile { display:block; }
+  .cp-ux .cp-admin .cp-workspace-main { padding-bottom:calc(96px + env(safe-area-inset-bottom)); }
+}
+
+/* Shared overview: live active-schedule counts, not history totals. */
+.cp-ux .cp-overview-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.cp-ux .cp-overview-metrics > div { background:var(--cp-bg); padding:12px; border-radius:10px; min-width:0; }
+.cp-ux .cp-overview-metrics strong { display:block; font-size:28px; line-height:1.2; }
+.cp-ux .cp-overview-metrics span { display:block; color:var(--cp-muted); font-size:14px; overflow-wrap:anywhere; }
+.cp-ux .cp-overview-row { display:grid; gap:4px; padding:12px 0; border-top:1px solid var(--cp-line); overflow-wrap:anywhere; }
+.cp-ux .cp-overview-row small { color:var(--cp-muted); }

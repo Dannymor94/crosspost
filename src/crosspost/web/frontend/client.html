@@ -331,6 +331,9 @@ textarea { resize: vertical; min-height: 110px; }
 <link rel="stylesheet" href="/static/styles/ux-live.css">
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
+<script src="/static/shared/ux-navigation.js"></script>
+<script src="/static/shared/ux-workspace.js"></script>
+<script src="/static/shared/ux-overview.js"></script>
 </head>
 <body class="cp-client">
 <div id="root"></div>
@@ -844,13 +847,14 @@ function PostsView({ user }) {
   const policy = useModeration(pid);
   const [posts, setPosts] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   async function load() {
-    setLoading(true);
+    setLoading(true); setError(false);
     try {
       const data = await api.get(`/api/profiles/${pid}/scheduled`);
       setPosts(data.map(p => ({ ...p, _pid: pid })));
-    } catch { setPosts([]); }
+    } catch { setError(true); }
     finally { setLoading(false); }
   }
 
@@ -865,6 +869,7 @@ function PostsView({ user }) {
   }
 
   if (loading) return html`<div class="empty-state"><span class="spinner" style="margin:0 auto; display:block"></span></div>`;
+  if (error) return html`<div class="cp-panel cp-stack"><p>Не удалось загрузить расписание.</p><button class="cp-button" onClick=${load}>Повторить загрузку</button></div>`;
   if (!posts || posts.length === 0) return html`<div class="empty-state">Запланированных публикаций пока нет</div>`;
 
   return html`
@@ -876,10 +881,55 @@ function PostsView({ user }) {
 }
 
 // ── App ────────────────────────────────────────────────────────────────────────
+const CLIENT_ITEMS = Object.freeze([
+  {id:"home",label:"Главная",icon:"home"},
+  {id:"compose",label:"Новый пост",icon:"posts"},
+  {id:"posts",label:"Расписание",icon:"calendar"},
+  {id:"more",label:"Ещё",icon:"more"},
+]);
+const CLIENT_ROUTES = Object.freeze(CLIENT_ITEMS.map(i=>i.id));
+function ClientNavigation({tab,onNavigate,mobile=false}) {
+  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},CLIENT_ITEMS,tab,onNavigate,
+    mobile ? "Мобильное меню клиента" : "Меню клиента",mobile);
+  return html`<div ref=${ref} class=${mobile?"cp-client-mobile":"cp-client-menu"}></div>`;
+}
+function ClientHome({user,onNavigate}) {
+  const overview=window.CrosspostOverview.useOverview({useState,useEffect},user.profile_id);
+  const data=overview.data;
+  return html`<section class="cp-stack"><h1 class="cp-title">Главная</h1>
+    <div class="cp-panel cp-stack"><h2>${user.login}</h2>
+      <p class="cp-muted">Подготовьте публикацию или откройте расписание.</p>
+      <button class="cp-button cp-button--primary" onClick=${()=>onNavigate("compose")}>Создать пост</button>
+      <button class="cp-button" onClick=${()=>onNavigate("posts")}>Открыть расписание</button>
+    </div>
+    <div class="cp-panel cp-stack" aria-live="polite">
+      <h2>Активное расписание</h2>
+      ${overview.kind==="loading"?html`<p>Загружаем расписание…</p>`:
+        overview.kind==="error"?html`<p>Не удалось загрузить сводку.</p><button class="cp-button" onClick=${overview.retry}>Повторить загрузку</button>`:
+        data?html`<div class="cp-overview-metrics">
+          <div><strong>${data.scheduled}</strong><span>Запланировано</span></div>
+          <div><strong>${data.pending}</strong><span>На проверке</span></div>
+        </div>
+        ${data.rows.length?html`<h3>Первые записи расписания</h3>${data.rows.slice(0,3).map(row=>html`
+          <div class="cp-overview-row" key=${row.id}>
+            <small>${window.CrosspostOverview.timeLabel(row,data.zone)}</small>
+            <strong>${row.text.slice(0,120)||"Пост без текста"}</strong>
+            <span class="cp-muted">${row.status==="scheduled"?"Запланировано":"На проверке"}</span>
+          </div>`)}`:html`<p class="cp-muted">Активных публикаций нет.</p>`}`:null}
+    </div></section>`;
+}
+function ClientMore({user,onLogout}) {
+  return html`<section class="cp-stack"><h1 class="cp-title">Ещё</h1>
+    <div class="cp-panel cp-stack"><p>Аккаунт: ${user.login}</p>
+      <p class="cp-muted">Для изменения подключений обратитесь к администратору.</p>
+      <button class="cp-button" onClick=${onLogout}>Выйти из аккаунта</button>
+    </div></section>`;
+}
 function App() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
   const [tab, setTab] = useState('compose');
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},!!user,"compose",CLIENT_ROUTES,setTab);
 
   useEffect(() => {
     api.get('/api/auth/me')
@@ -894,8 +944,11 @@ function App() {
   async function logout() {
     if (!window.CrosspostDraft.canLeave()) return;
     await api.post('/api/auth/logout', {});
+    navigation.replaceContext("compose");
     setUser(null);
   }
+
+  const navigate = navigation.navigate;
 
   if (checking) return html`
     <div style="display:flex; align-items:center; justify-content:center; min-height:100dvh">
@@ -916,18 +969,13 @@ function App() {
           <button class="logout-btn" onClick=${logout}>Выйти</button>
         </div>
       </div>
-      <div class="tabs">
-        <button class=${'tab-btn' + (tab === 'compose' ? ' active' : '')} aria-current=${tab === 'compose' ? 'page' : undefined} onClick=${() => setTab('compose')}>
-          Новый пост
-        </button>
-        <button class=${'tab-btn' + (tab === 'posts' ? ' active' : '')} aria-current=${tab === 'posts' ? 'page' : undefined} onClick=${() => { if (window.CrosspostDraft.canLeave()) setTab('posts'); }}>
-          Мои публикации
-        </button>
-      </div>
+      <${ClientNavigation} tab=${tab} onNavigate=${navigate} />
       ${tab === 'compose'
         ? html`<${ComposeView} key=${`${user.id}:${user.profile_id}`} user=${user} />`
-        : html`<${PostsView} user=${user} />`
-      }
+        : tab === 'posts' ? html`<${PostsView} key=${user.profile_id} user=${user} />`
+        : tab === 'home' ? html`<${ClientHome} user=${user} onNavigate=${navigate} />`
+        : html`<${ClientMore} user=${user} onLogout=${logout} />`}
+      <${ClientNavigation} tab=${tab} onNavigate=${navigate} mobile=${true} />
     </div>
   `;
 }

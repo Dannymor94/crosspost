@@ -1238,6 +1238,9 @@ body {
 <link rel="stylesheet" href="/static/styles/ux-live.css">
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
+<script src="/static/shared/ux-navigation.js"></script>
+<script src="/static/shared/ux-workspace.js"></script>
+<script src="/static/shared/ux-overview.js"></script>
 </head>
 <body class="cp-admin">
 <div id="root"></div>
@@ -2435,116 +2438,84 @@ function NoProfileView() {
     h("h2", { className: "empty-title" }, "Выберите профиль"),
     h("p", { className: "empty-body" },
       "Каждый клиент — отдельный профиль с изолированными каналами. "
-      + "Выберите существующий или создайте новый — кнопка внизу слева."
+      + "Выберите существующий профиль вверху или создайте новый в разделе «Клиенты»."
     ),
   );
 }
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
-const SIDEBAR_DEFAULT_W = 260;
-const SIDEBAR_LS_KEY = "sidebar_w";
-
-function Sidebar({ profiles, activeId, onSelect, onNew, onNewClient, onOpenConsole, consoleActive, onModeration, moderationActive, pendingCount }) {
-  const navRef = useRef(null);
-  const dragging = useRef(false);
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  // Restore saved width
-  useEffect(() => {
-    const saved = parseInt(localStorage.getItem(SIDEBAR_LS_KEY), 10);
-    if (saved >= 180 && saved <= 480) setW(saved);
-  }, []);
-
-  function setW(w) {
-    const clamped = Math.min(480, Math.max(180, w));
-    document.documentElement.style.setProperty("--sidebar-w", clamped + "px");
-    if (navRef.current) navRef.current.style.width = clamped + "px";
-  }
-
-  function onHandleMouseDown(e) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    dragging.current = true;
-    const handle = e.currentTarget;
-    handle.classList.add("dragging");
-    const startX = e.clientX;
-    const startW = navRef.current.getBoundingClientRect().width;
-
-    function onMove(ev) {
-      if (!dragging.current) return;
-      setW(startW + ev.clientX - startX);
-    }
-    function onUp(ev) {
-      dragging.current = false;
-      handle.classList.remove("dragging");
-      const w = Math.min(480, Math.max(180, startW + ev.clientX - startX));
-      localStorage.setItem(SIDEBAR_LS_KEY, w);
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }
-
-  function onHandleDblClick() {
-    setW(SIDEBAR_DEFAULT_W);
-    localStorage.removeItem(SIDEBAR_LS_KEY);
-  }
-
-  return h("nav", { className: "sidebar", "aria-label": "Профили", ref: navRef },
-    h("div", {
-      className: "sidebar-resize-handle",
-      onMouseDown: onHandleMouseDown,
-      onDoubleClick: onHandleDblClick,
-      title: "Перетащите для изменения ширины; двойной клик — сброс",
-    }),
-    h("div", { className: "sidebar-header" },
-      h("div", { className: "cp-brand" }, h("span", { className: "cp-brand-mark", "aria-hidden": true }, "C"), "Crosspost"),
-    ),
-    h("button", {
-      className: `profile-item ${consoleActive ? "active" : ""}`,
-      onClick: onOpenConsole,
-      "aria-current": consoleActive ? "page" : undefined,
-    },
-      h("span", { className: "profile-avatar" }, "⚠"),
-      h("span", null, "Консоль ошибок"),
-    ),
-    h("button", {
-      className: `profile-item ${moderationActive ? "active" : ""}`,
-      onClick: onModeration,
-      "aria-current": moderationActive ? "page" : undefined,
-    },
-      h("span", { className: "profile-avatar" }, "✓"),
-      h("span", null, "На проверке",
-        pendingCount > 0 && h("span", { className: "pending-count" }, pendingCount),
-      ),
-    ),
-    h("p", { className: "sidebar-section-label" }, "Клиенты"),
-    profiles.length === 0
-      ? h("p", { style: { padding: "12px 20px", fontSize: "13px", color: "var(--text-3)" } },
-          "Нет профилей. Добавьте первый.")
-      : profiles.map(p => h("button", {
-          key: p.id,
-          className: `profile-item ${p.id === activeId ? "active" : ""}`,
-          onClick: () => onSelect(p),
-          "aria-current": p.id === activeId ? "page" : undefined,
-        },
-          h("span", { className: "profile-avatar" }, p.name[0].toUpperCase()),
-          h("span", null, p.name),
-        )),
-    h("div", { className: "sidebar-footer" },
-      h("button", { className: "btn-new-profile", onClick: onNew },
-        h("span", { "aria-hidden": true }, "+"),
-        "Новый профиль",
-      ),
-      h("button", {
-        className: "btn btn-ghost btn-sm", style: { width: "100%", marginTop: "8px" },
-        onClick: onNewClient, disabled: profiles.length === 0,
-        title: profiles.length === 0 ? "Сначала создайте профиль" : "",
-      }, "＋ Аккаунт клиента"),
-    ),
-  );
+const ADMIN_ITEMS = Object.freeze([
+  {id:"home",label:"Обзор",icon:"home"},
+  {id:"publish",label:"Публикации",icon:"posts"},
+  {id:"import",label:"Импорт плана",icon:"calendar"},
+  {id:"moderation",label:"Модерация",icon:"moderation"},
+  {id:"clients",label:"Клиенты",icon:"clients"},
+  {id:"channels",label:"Подключения",icon:"connections"},
+  {id:"console",label:"Диагностика",icon:"more"},
+]);
+const ADMIN_ROUTES = Object.freeze([...ADMIN_ITEMS.map(i=>i.id),"more"]);
+const ADMIN_MOBILE = Object.freeze([
+  ...ADMIN_ITEMS.filter(i => ["home","publish","moderation"].includes(i.id)),
+  {id:"more",label:"Ещё",icon:"more"},
+]);
+function AdminNavigation({view,onNavigate,mobile=false}) {
+  const items = mobile ? ADMIN_MOBILE : ADMIN_ITEMS;
+  const active = items.some(i => i.id === view) ? view : mobile ? "more" : null;
+  const ref = window.CrosspostWorkspace.useMenu({useRef,useEffect},items,active,onNavigate,
+    mobile ? "Мобильное меню администратора" : "Меню администратора",mobile);
+  return h("div",{ref,className:mobile?"cp-admin-mobile":"cp-admin-menu"});
+}
+function Sidebar({view,onNavigate}) {
+  return h("aside",{className:"sidebar cp-workspace-sidebar"},
+    h("div",{className:"sidebar-header"},h("div",{className:"cp-brand"},
+      h("span",{className:"cp-brand-mark","aria-hidden":true},"C"),"Crosspost")),
+    h(AdminNavigation,{view,onNavigate}));
+}
+function AdminOverview({active,onNavigate}) {
+  const overview=window.CrosspostOverview.useOverview({useState,useEffect},active?.id);
+  const data=overview.data;
+  return h("section",{className:"cp-stack"},
+    h("h1",{className:"cp-title"},"Обзор"),
+    h("div",{className:"cp-panel cp-stack"},
+      h("h2",null,active ? active.name : "Выберите профиль"),
+      h("p",{className:"cp-muted"},"Расписание и публикации выбранного профиля."),
+      h("button",{className:"cp-button cp-button--primary",disabled:!active,onClick:()=>onNavigate("publish")},"Создать пост"),
+      h("div",{className:"cp-row"},
+        h("button",{className:"cp-button",onClick:()=>onNavigate("moderation")},"На проверке"),
+        h("button",{className:"cp-button",onClick:()=>onNavigate("channels"),disabled:!active},"Подключения"))),
+    active && h("div",{className:"cp-panel cp-stack","aria-live":"polite"},
+      h("h2",null,"Активное расписание"),
+      overview.kind==="loading" ? h("p",null,"Загружаем расписание…") :
+      overview.kind==="error" ? h("div",{className:"cp-stack"},h("p",null,"Не удалось загрузить расписание."),
+        h("button",{className:"cp-button",onClick:overview.retry},"Повторить загрузку")) :
+      data && h(React.Fragment,null,
+        h("div",{className:"cp-overview-metrics"},
+          h("div",null,h("strong",null,data.scheduled),h("span",null,"Запланировано")),
+          h("div",null,h("strong",null,data.pending),h("span",null,"На проверке"))),
+        data.rows.length ? h("div",{className:"cp-stack"},
+          h("h3",null,"Первые записи расписания"),
+          ...data.rows.slice(0,3).map(row=>h("div",{className:"cp-overview-row",key:row.id},
+            h("small",null,window.CrosspostOverview.timeLabel(row,data.zone)),
+            h("strong",null,row.text.slice(0,120)||"Пост без текста"),
+            h("span",{className:"cp-muted"},row.status==="scheduled"?"Запланировано":"На проверке"))))
+          : h("p",{className:"cp-muted"},"Активных публикаций нет."),
+        h("button",{className:"cp-button",onClick:()=>onNavigate("publish")},"Открыть расписание"))));
+}
+function AdminClients({profiles,active,onSelect,onNew,onNewClient}) {
+  return h("section",{className:"cp-stack"},
+    h("h1",{className:"cp-title"},"Клиенты"),
+    h("div",{className:"cp-panel cp-stack"},
+      profiles.length ? profiles.map(p=>h("button",{key:p.id,className:"cp-button",
+        "aria-current":p.id===active?.id?"true":undefined,onClick:()=>onSelect(p)},p.name))
+        : h("p",{className:"cp-muted"},"Нет профилей."),
+      h("button",{className:"cp-button cp-button--primary",onClick:onNew},"Новый профиль"),
+      h("button",{className:"cp-button",disabled:!profiles.length,onClick:onNewClient},"Аккаунт клиента")));
+}
+function AdminMore({onNavigate}) {
+  return h("section",{className:"cp-stack"},h("h1",{className:"cp-title"},"Ещё"),
+    ...ADMIN_ITEMS.filter(i=>!ADMIN_MOBILE.some(m=>m.id===i.id)).map(i=>
+      h("button",{key:i.id,className:"cp-button",onClick:()=>onNavigate(i.id)},i.label)));
 }
 
 // ── Admin error console (Трек C) ─────────────────────────────────────────────
@@ -4738,9 +4709,10 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
       className: "topbar-profile-select",
       value: activeProfileId ?? "",
       title: "Переключить профиль",
+      "aria-label": "Активный профиль",
       onChange: e => {
         const p = profiles.find(x => x.id === Number(e.target.value));
-        if (p) onSelectProfile(p);
+        if (!p || !onSelectProfile(p)) e.target.value = String(activeProfileId ?? "");
       },
     },
       profiles.map(p => h("option", { key: p.id, value: p.id }, p.name)),
@@ -4840,35 +4812,37 @@ function App() {
   const [profiles, setProfiles] = useState([]);
   const [active, setActive] = useState(null);
   const [view, setView] = useState("publish");
-  const [consoleOpen, setConsoleOpen] = useState(false);  // admin: консоль ошибок поверх профилей
   const [focusChannel, setFocusChannel] = useState(null); // подсветить канал после перехода из консоли
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
-  const [moderationOpen, setModerationOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setView(next);});
 
   // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
     api.get("/api/auth/me").then(setMe).catch(() => setMe(null));
   }, []);
 
-  const loadProfiles = useCallback(() => {
+  useEffect(() => {
+    if (!me || me.role !== "admin") return;
+    let cancelled = false;
     setLoadingProfiles(true);
     api.get("/api/profiles")
       .then(data => {
+        if (cancelled) return;
         setProfiles(data);
         setActive(prev => {
           if (prev && data.find(p => p.id === prev.id)) return prev;
-          const savedId = Number(localStorage.getItem("crosspost_active_profile"));
+          let savedId = null;
+          try { savedId = Number(localStorage.getItem("crosspost_active_profile")); } catch (_) {}
           return data.find(p => p.id === savedId) || data[0] || null;
         });
       })
       .catch(() => {})
-      .finally(() => setLoadingProfiles(false));
-  }, []);
-
-  useEffect(() => { if (me) loadProfiles(); }, [me, loadProfiles]);
+      .finally(() => { if (!cancelled) setLoadingProfiles(false); });
+    return () => { cancelled = true; };
+  }, [me]);
 
   useEffect(() => {
     if (!me || me.role !== "admin" || profiles.length === 0) return;
@@ -4884,12 +4858,14 @@ function App() {
     fetchCount();
     const t = setInterval(fetchCount, 30000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [me, profiles.length]);
+  }, [me, profiles]);
 
   async function logout() {
     if (!window.CrosspostDraft.canLeave()) return;
     try { await api.post("/api/auth/logout"); } catch (_) {}
-    setMe(null); setProfiles([]); setActive(null);
+    navigation.replaceContext("publish");
+    setMe(null); setProfiles([]); setActive(null); setPendingCount(0);
+    setShowNewProfile(false); setShowNewClient(false);
   }
 
   if (me === undefined) return h("div", { className: "login-wrap" }, h(Spinner));
@@ -4900,65 +4876,48 @@ function App() {
 
   function onProfileCreated(p) {
     setProfiles(prev => [...prev, p]);
-    setActive(p);
+    setActive(p); navigation.replaceContext("publish");
   }
 
+  const navigate = navigation.navigate;
   function selectProfile(p) {
-    if (!window.CrosspostDraft.canLeave()) return;
-    setConsoleOpen(false);
-    setModerationOpen(false);
-    setFocusChannel(null);
-    setActive(p);
-    localStorage.setItem("crosspost_active_profile", String(p.id));
+    if (p.id === active?.id && view === "publish") return true;
+    if (!window.CrosspostDraft.canLeave()) return false;
+    setActive(p); navigation.replaceContext("publish");
+    try { localStorage.setItem("crosspost_active_profile", String(p.id)); } catch (_) {}
+    return true;
   }
-
-  // Переход из строки консоли: открыть профиль клиента на вкладке «Каналы», подсветить канал.
   function goToProfile(pid, channel) {
     const p = profiles.find(x => x.id === pid);
-    if (!p) return;
-    setConsoleOpen(false);
-    setModerationOpen(false);
-    setActive(p);
-    setView("channels");
-    setFocusChannel(channel || null);
+    if (!p || !window.CrosspostDraft.canLeave()) return;
+    setActive(p); navigation.replaceContext("channels"); setFocusChannel(channel || null);
   }
 
   const mainBody = loadingProfiles
     ? h("div", { className: "flex-gap" }, h(Spinner), h("span", { className: "text-3" }, "Загружаю…"))
-    : (isAdmin && consoleOpen)
+    : view === "home" ? h(AdminOverview,{active,onNavigate:navigate})
+    : view === "more" ? h(AdminMore,{onNavigate:navigate})
+    : view === "clients" ? h(AdminClients,{profiles,active,onSelect:selectProfile,
+        onNew:()=>setShowNewProfile(true),onNewClient:()=>setShowNewClient(true)})
+    : view === "console"
       ? h(TabBoundary, { key: "console" }, h(ErrorConsole, { key: "console", profiles, onGoToProfile: goToProfile }))
-      : (isAdmin && moderationOpen)
+    : view === "moderation"
       ? h(TabBoundary, { key: "moderation" }, h(ModerationView, {
           profiles,
           onApproved: () => setPendingCount(c => Math.max(0, c - 1)),
           onRejected: () => setPendingCount(c => Math.max(0, c - 1)),
         }))
-      : active
-      ? h("div", null,
-          h(ViewTabs, { view, onChange: v => { if (window.CrosspostDraft.canLeave()) setView(v); } }),
-          view === "publish"
-            ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
-            : view === "import"
-              ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
-              : h(TabBoundary, { key: active.id }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin })),
-        )
+    : active
+      ? view === "publish"
+        ? h(TabBoundary, { key: `pub-${active.id}` }, h(PublishView, { key: `pub-${me.id}-${active.id}`, profile: active, user: me }))
+        : view === "import"
+          ? h(TabBoundary, { key: `imp-${active.id}` }, h(ImportView, { key: `imp-${active.id}`, profile: active }))
+          : h(TabBoundary, { key: `channels-${active.id}` }, h(ChannelsView, { key: active.id, profile: active, focusChannel, isAdmin }))
       : (isAdmin ? h(NoProfileView) : h(NoAccessView));
 
   return h("div", { id: "root-inner", style: { display: "contents" } },
-    // Список клиентов слева — ТОЛЬКО у админа. Клиент идёт сразу в свой профиль.
-    isAdmin && h(Sidebar, {
-      profiles,
-      activeId: (consoleOpen || moderationOpen) ? null : active?.id,
-      onSelect: selectProfile,
-      onNew: () => setShowNewProfile(true),
-      onNewClient: () => setShowNewClient(true),
-      onOpenConsole: () => { if (!window.CrosspostDraft.canLeave()) return; setConsoleOpen(true); setModerationOpen(false); },
-      consoleActive: consoleOpen,
-      onModeration: () => { if (!window.CrosspostDraft.canLeave()) return; setModerationOpen(true); setConsoleOpen(false); },
-      moderationActive: moderationOpen,
-      pendingCount,
-    }),
-    h("main", { className: "main" },
+    isAdmin && h(Sidebar, {view,onNavigate:navigate}),
+    h("main", { className: "main cp-workspace-main" },
       h(TopBar, {
         me, onLogout: logout,
         profiles, activeProfileId: active?.id, onSelectProfile: selectProfile, isAdmin,
@@ -4966,6 +4925,7 @@ function App() {
       }),
       mainBody,
     ),
+    isAdmin && h(AdminNavigation,{view,onNavigate:navigate,mobile:true}),
     showNewProfile && h(NewProfileModal, {
       onClose: () => setShowNewProfile(false),
       onCreated: onProfileCreated,

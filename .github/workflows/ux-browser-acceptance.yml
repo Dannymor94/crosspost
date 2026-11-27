@@ -6,6 +6,7 @@ on:
       - integration/ux01-t215-t218
       - delivery/ux01-t215-t218
       - integration/ux02-r3-preview
+      - task/T-510-workspace-navigation
   workflow_dispatch:
 
 permissions:

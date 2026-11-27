@@ -12,7 +12,9 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 
 
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
-@pytest.mark.parametrize("scenario", ["unknown", "submitted", "incomplete", "rejected", "stale"])
+@pytest.mark.parametrize(
+    "scenario", ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation"]
+)
 def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
     assert ASSETS is not None
     assets = Path(ASSETS)
@@ -73,7 +75,10 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             actor = {"id": 2, "login": "test-admin", "role": "admin", "profile_id": None}
             route.fulfill(json=actor)
         elif path == "/api/profiles":
-            route.fulfill(json=[{"id": 1, "name": "Демо-профиль"}])
+            profiles = [{"id": 1, "name": "Демо-профиль"}]
+            if scenario == "navigation":
+                profiles.append({"id": 2, "name": "Второй профиль"})
+            route.fulfill(json=profiles)
         elif path == "/api/settings/browser":
             route.fulfill(json={"headless": True})
         elif path.endswith("/settings/timezone"):
@@ -101,6 +106,9 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             if request.method == "GET":
                 route.fulfill(json=draft)
             else:
+                if scenario == "navigation":
+                    route.fulfill(status=503, json={"detail": "synthetic save failure"})
+                    return
                 body = request.post_data_json
                 if body["scope"] != draft["scope"] or body["revision"] != draft["revision"]:
                     route.fulfill(status=409, json={"detail": "conflict"})
@@ -163,6 +171,22 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             assert request.headers.get("x-schedule-time-contract") == "utc-v1"
             assert instant in (request.post_data or "")
             route.abort("failed")
+        elif scenario == "navigation" and path == "/api/profiles/1/scheduled":
+            route.fulfill(
+                json=[
+                    {
+                        "id": 11,
+                        "status": "scheduled",
+                        "text": "Сводка первого профиля",
+                        "scheduled_at": "2099-01-15T09:30:00Z",
+                        "time_basis": "utc",
+                        "content_type": "post",
+                        "title": None,
+                        "channels": ["telegram"],
+                        "media_paths": [],
+                    }
+                ]
+            )
         elif request.method == "GET" and any(
             path.endswith(suffix)
             for suffix in ("/scheduled", "/scheduled/pending", "/scheduled/report")
@@ -190,6 +214,82 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 capture(page, "admin-00-dark-theme.png")
             text = page.get_by_placeholder("Текст поста…")
+            if scenario == "navigation":
+                desktop = page.get_by_role("navigation", name="Меню администратора", exact=True)
+                mobile = page.get_by_role("navigation", name="Мобильное меню администратора")
+                expect(desktop).to_be_visible()
+                expect(mobile).to_be_hidden()
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.locator(".cp-overview-row")).to_have_count(1)
+                expect(page.get_by_text("Сводка первого профиля", exact=True)).to_be_visible()
+                expect(page.locator(".cp-overview-metrics strong")).to_have_text(["1", "0"])
+                for label in (
+                    "Обзор",
+                    "Импорт плана",
+                    "Модерация",
+                    "Клиенты",
+                    "Подключения",
+                    "Диагностика",
+                ):
+                    item = desktop.get_by_role("button", name=label, exact=True)
+                    item.click()
+                    expect(item).to_have_attribute("aria-current", "page")
+                desktop.get_by_role("button", name="Публикации", exact=True).click()
+                expect(text).to_be_visible()
+                expect(page.get_by_text("Нет сохранённого черновика", exact=True)).to_be_visible()
+                text.fill(draft_text)
+                expect(page.get_by_text("Не удалось сохранить черновик.")).to_be_visible()
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(text).to_have_value(draft_text)
+                expect(desktop.get_by_role("button", name="Публикации")).to_have_attribute(
+                    "aria-current", "page"
+                )
+                profile = page.get_by_role("combobox", name="Активный профиль")
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                profile.select_option("2")
+                expect(profile).to_have_value("1")
+                expect(text).to_have_value(draft_text)
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                page.evaluate("history.back()")
+                expect(text).to_have_value(draft_text)
+                page.wait_for_function("history.state.crosspostWorkspace.view === 'publish'")
+                page.once("dialog", lambda dialog: dialog.accept())
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                page.evaluate("history.back()")
+                expect(text).to_have_value("")
+                page.evaluate("history.forward()")
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                profile.select_option("2")
+                expect(profile).to_have_value("2")
+                expect(text).to_have_value("")
+                page.evaluate("history.back()")
+                expect(profile).to_have_value("2")
+                expect(text).to_have_value("")
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                expect(page.get_by_text("Активных публикаций нет.")).to_be_visible()
+                expect(page.get_by_text("Сводка первого профиля", exact=True)).to_have_count(0)
+                expect(page.locator(".cp-overview-metrics strong")).to_have_text(["0", "0"])
+                for width in (360, 390, 768, 1440):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    expect(mobile if width <= 640 else desktop).to_be_visible()
+                    expect(desktop if width <= 640 else mobile).to_be_hidden()
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.set_viewport_size({"width": 390, "height": 844})
+                mobile.get_by_role("button", name="Ещё", exact=True).click()
+                expect(page.get_by_role("heading", name="Ещё", exact=True)).to_be_visible()
+                page.get_by_role("button", name="Клиенты", exact=True).click()
+                expect(page.get_by_role("button", name="Новый профиль")).to_be_visible()
+                expect(page.get_by_role("button", name="Аккаунт клиента")).to_be_visible()
+                expect(mobile.get_by_role("button", name="Ещё")).to_have_attribute(
+                    "aria-current", "page"
+                )
+                capture(page, "admin-04-mobile-clients.png")
+                assert sends == 0
+                assert not errors, errors
+                return
             text.fill(draft_text)
             target = page.locator("button.target").filter(has_text="Telegram")
             expect(target).to_have_attribute("aria-pressed", "false")

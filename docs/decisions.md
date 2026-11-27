@@ -109,3 +109,15 @@ UI показывает нейтральное состояние, без зел
 ## UX-02 — совместимость с UX-01 R3 (visual rehearsal)
 
 Не возвращаем устаревший frontend из старого visual preview. Переносим только scoped CSS/theme и оформление хостов на текущую delivery основу. До согласования delivery и полного допуска UX-02 это изолированная репетиция; без новых маршрутов или операций. UX-03 будет использовать существующие функции и явные роли, не выдумывать показатели или экраны.
+
+## T-510 — host-controlled navigation (draft)
+
+Role-specific menus use existing views and a single draft leave guard. Mobile admin overflow goes through «Ещё»; client exposes real schedule, not unfinished unified history. No new backend permission or synthetic counters. Keep current editor entry and prior guards; browser history and complete gate remain separate.
+
+### T-510 history contract (draft)
+
+Same-document History API state contains opaque epoch, index and allowlisted screen only, no profile/account or content. Profile changes and logout invalidate prior history scope. Rejected back/forward restores previous entry without unmounting editor; external-document leave remains browser beforeunload. Reload defaults to existing editor for recovery. Not a substitute for server auth revocation T-406.
+
+### T-510 overview read model (draft)
+
+Reuse existing profile-scoped scheduled GET and timezone GET; do not aggregate histories or reorder mixed legacy/canonical rows. Counts describe only active scheduled/pending rows. Shared read-only helper validates results and fences stale responses; no new API.
