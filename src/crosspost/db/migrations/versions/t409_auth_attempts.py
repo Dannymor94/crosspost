@@ -28,11 +28,8 @@ def upgrade() -> None:
             "subject_key": sa.String,
             "occurred_at": sa.BigInteger,
         }
-        indexes = {
-            i["name"]: i["column_names"]
-            for i in inspector.get_indexes("auth_attempts")
-            if not i["unique"]
-        }
+        existing_indexes = inspector.get_indexes("auth_attempts")
+        indexes = {i["name"]: i["column_names"] for i in existing_indexes if not i["unique"]}
         if (
             set(columns) != set(expected)
             or any(
