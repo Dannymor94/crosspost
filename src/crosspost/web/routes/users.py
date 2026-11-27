@@ -6,14 +6,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
+from crosspost.auth.passwords import verify_password
+from crosspost.auth.sessions import sign_recovery_token
+from crosspost.db.log_repo import LogRepository
 from crosspost.db.models import Role
-from crosspost.web.deps import AdminUser, RepoDep, UserRepoDep
+from crosspost.web.deps import AdminUser, RepoDep, SessionDep, UserRepoDep
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -51,6 +55,15 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RecoveryTokenOut(BaseModel):
+    token: str
+    expires_in_seconds: int
+
+
+class RecoveryIssueBody(BaseModel):
+    admin_password: str = Field(min_length=1, max_length=256)
+
+
 @router.get("", response_model=list[UserOut])
 async def list_clients(_: AdminUser, users: UserRepoDep) -> list[UserOut]:
     return [UserOut.model_validate(u) for u in await users.list_clients()]
@@ -75,3 +88,28 @@ async def create_client(
     except IntegrityError as exc:  # гонка по unique(login)
         raise HTTPException(status_code=409, detail="Логин уже занят") from exc
     return UserOut.model_validate(user)
+
+
+@router.post("/{user_id}/recovery-token", response_model=RecoveryTokenOut)
+async def issue_recovery_token(
+    user_id: int,
+    body: RecoveryIssueBody,
+    admin: AdminUser,
+    users: UserRepoDep,
+    session: SessionDep,
+    response: Response,
+) -> RecoveryTokenOut:
+    """Только владелец выдаёт токен клиенту; пароль и сам токен не пишутся в журнал."""
+    if not await asyncio.to_thread(verify_password, body.admin_password, admin.password_hash):
+        raise HTTPException(status_code=403, detail="Повторно подтвердите пароль администратора")
+    user = await users.get_by_id(user_id)
+    if user is None or user.role != Role.CLIENT or user.profile_id is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    token = sign_recovery_token(user.id, generation=user.session_generation)
+    await LogRepository(session).add(
+        user.profile_id,
+        channel="account",
+        message=f"recovery_token_issued actor_id={admin.id} user_id={user.id}",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return RecoveryTokenOut(token=token, expires_in_seconds=900)

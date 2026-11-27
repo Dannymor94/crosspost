@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -269,3 +270,122 @@ async def test_admin_create_client_bad_profile_and_dup(app, seed):
         assert r.status_code == 409
     finally:
         await admin.aclose()
+
+
+async def test_t406_owner_recovery_revokes_old_sessions_and_is_one_time(app, seed, factory):
+    admin = await _login(app, "admin", "adminpass")
+    alice = await _login(app, "alice", "alicepass")
+    anon = _anon(app)
+    try:
+        issued = await admin.post(
+            f"/api/users/{seed['alice']}/recovery-token", json={"admin_password": "adminpass"}
+        )
+        assert issued.status_code == 200, issued.text
+        token = issued.json()["token"]
+        assert issued.json()["expires_in_seconds"] == 900
+        assert "alicepass" not in issued.text
+
+        recovered = await anon.post(
+            "/api/auth/recover", json={"token": token, "new_password": "new-strong-passphrase"}
+        )
+        assert recovered.status_code == 200, recovered.text
+        assert (await alice.get("/api/auth/me")).status_code == 401
+        assert (
+            await anon.post("/api/auth/login", json={"login": "alice", "password": "alicepass"})
+        ).status_code == 401
+        assert (
+            await anon.post(
+                "/api/auth/recover", json={"token": token, "new_password": "other-password"}
+            )
+        ).status_code == 400
+
+        fresh = await _login(app, "alice", "new-strong-passphrase")
+        try:
+            assert (await fresh.get(f"/api/profiles/{seed['a']}")).status_code == 200
+            assert (await fresh.get(f"/api/profiles/{seed['b']}")).status_code == 403
+        finally:
+            await fresh.aclose()
+        assert (await admin.get(f"/api/profiles/{seed['a']}")).status_code == 200
+
+        from sqlalchemy import select
+
+        from crosspost.db.models import Log
+
+        async with factory() as session:
+            messages = list((await session.scalars(select(Log.message))).all())
+        assert any("recovery_token_issued" in msg for msg in messages)
+        assert any("password_recovered" in msg for msg in messages)
+        assert all(token not in msg for msg in messages)
+    finally:
+        await admin.aclose()
+        await alice.aclose()
+        await anon.aclose()
+
+
+async def test_t406_recovery_issuance_is_admin_only_and_cannot_reset_admin(app, seed):
+    alice = await _login(app, "alice", "alicepass")
+    admin = await _login(app, "admin", "adminpass")
+    anon = _anon(app)
+    try:
+        issue_body = {"admin_password": "adminpass"}
+        assert (
+            await anon.post(f"/api/users/{seed['alice']}/recovery-token", json=issue_body)
+        ).status_code == 401
+        assert (
+            await alice.post(f"/api/users/{seed['alice']}/recovery-token", json=issue_body)
+        ).status_code == 403
+        assert (
+            await admin.post(f"/api/users/{seed['admin']}/recovery-token", json=issue_body)
+        ).status_code == 404
+        assert (
+            await admin.post("/api/users/999999/recovery-token", json=issue_body)
+        ).status_code == 404
+        assert (
+            await admin.post(
+                f"/api/users/{seed['alice']}/recovery-token", json={"admin_password": "wrongpass"}
+            )
+        ).status_code == 403
+        assert (
+            await anon.post(
+                "/api/auth/recover", json={"token": "not-a-token", "new_password": "good-password"}
+            )
+        ).status_code == 400
+    finally:
+        await alice.aclose()
+        await admin.aclose()
+        await anon.aclose()
+
+
+async def test_t406_concurrent_redeem_one_wins_and_unrelated_user_stays_logged_in(app, seed):
+    admin = await _login(app, "admin", "adminpass")
+    alice = await _login(app, "alice", "alicepass")
+    anon = _anon(app)
+    try:
+        issued = await admin.post(
+            f"/api/users/{seed['alice']}/recovery-token", json={"admin_password": "adminpass"}
+        )
+        assert issued.status_code == 200
+        token = issued.json()["token"]
+
+        async def redeem(password: str) -> int:
+            result = await anon.post(
+                "/api/auth/recover", json={"token": token, "new_password": password}
+            )
+            return result.status_code
+
+        codes = await asyncio.gather(redeem("new-passphrase-one"), redeem("new-passphrase-two"))
+        assert sorted(codes) == [200, 400]
+        assert (await alice.get("/api/auth/me")).status_code == 401
+        assert (await admin.get("/api/auth/me")).status_code == 200
+
+        login_codes = []
+        for password in ("new-passphrase-one", "new-passphrase-two"):
+            result = await anon.post(
+                "/api/auth/login", json={"login": "alice", "password": password}
+            )
+            login_codes.append(result.status_code)
+        assert sorted(login_codes) == [200, 401]
+    finally:
+        await admin.aclose()
+        await alice.aclose()
+        await anon.aclose()
