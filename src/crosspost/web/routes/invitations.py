@@ -8,32 +8,15 @@ import re
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from crosspost.auth.passwords import verify_password
 from crosspost.db.invitation_repo import InvitationRepository
 from crosspost.db.models import ClientInvitation, User
+from crosspost.web.auth_guard import limit_auth
 from crosspost.web.deps import AdminUser, SessionDep
-
-
-class PrivateRoute(APIRoute):
-    def get_route_handler(self):
-        handler = super().get_route_handler()
-
-        async def private_handler(request: Request):
-            try:
-                response = await handler(request)
-            except RequestValidationError:
-                response = JSONResponse({"detail": "Проверьте поля формы"}, status_code=422)
-            response.headers["Cache-Control"] = "no-store"
-            return response
-
-        return private_handler
-
+from crosspost.web.private_routes import PrivateRoute
 
 router = APIRouter(tags=["invitations"], route_class=PrivateRoute)
 _PRIVATE = {"Cache-Control": "no-store"}
@@ -103,8 +86,11 @@ async def list_invitations(_: AdminUser, session: SessionDep) -> list[SlotOut]:
 
 
 @router.post("/api/users/invitations", response_model=TokenOut, status_code=201)
-async def issue(body: IssueBody, admin: AdminUser, session: SessionDep) -> TokenOut:
+async def issue(
+    body: IssueBody, admin: AdminUser, session: SessionDep, request: Request
+) -> TokenOut:
     _enabled()
+    await limit_auth(request, session, "owner_step_up", str(admin.id))
     await _step_up(admin, body.admin_password)
     name = body.profile_name.strip()
     if not name:
@@ -119,9 +105,10 @@ async def issue(body: IssueBody, admin: AdminUser, session: SessionDep) -> Token
 
 @router.post("/api/users/invitations/{invite_id}/renew", response_model=TokenOut)
 async def renew(
-    invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep
+    invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep, request: Request
 ) -> TokenOut:
     _enabled()
+    await limit_auth(request, session, "owner_step_up", str(admin.id))
     await _step_up(admin, body.admin_password)
     result = await InvitationRepository(session).rotate(invite_id, admin.id)
     if result is None:
@@ -132,9 +119,10 @@ async def renew(
 
 @router.post("/api/users/invitations/{invite_id}/revoke")
 async def revoke(
-    invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep
+    invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep, request: Request
 ) -> dict[str, bool]:
     _enabled()
+    await limit_auth(request, session, "owner_step_up", str(admin.id))
     await _step_up(admin, body.admin_password)
     if await InvitationRepository(session).rotate(invite_id, admin.id, revoke=True) is None:
         raise _invalid()
@@ -142,8 +130,11 @@ async def revoke(
 
 
 @router.post("/api/auth/register", status_code=201)
-async def redeem(body: RedeemBody, session: SessionDep, response: Response) -> dict[str, bool]:
+async def redeem(
+    body: RedeemBody, session: SessionDep, response: Response, request: Request
+) -> dict[str, bool]:
     _enabled()
+    await limit_auth(request, session, "register", body.token)
     response.headers["Cache-Control"] = "no-store"
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", body.token):
         raise _invalid()

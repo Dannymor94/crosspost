@@ -10,8 +10,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from crosspost.db.auth_attempt_repo import admit_attempt
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.models import ClientInvitation, Log, Profile, Role, User
+from crosspost.db.models import AuthAttempt, ClientInvitation, Log, Profile, Role, User
 from crosspost.db.user_repo import UserRepository
 from crosspost.web import deps
 from crosspost.web.app import create_app
@@ -204,3 +205,66 @@ async def test_support_card_owner_only_and_scoped_audit(registration):
         assert len(logs) == 2
         assert {log.profile_id for log in logs} == {old["profile_id"], invite["profile_id"]}
         assert all(f"actor_id={admin['id']}" in log.message for log in logs)
+
+
+async def test_rate_limit_serialized_persistent_and_sliding(registration):
+    factory, _ = registration
+
+    async def attempt():
+        async with factory() as session:
+            return await admit_attempt(session, "login", "ip-key", "subject-key", now=10000)
+
+    results = await asyncio.gather(*(attempt() for _ in range(8)))
+    assert results.count(True) == 5
+    async with factory() as session:
+        assert not await admit_attempt(session, "login", "ip-key", "other", now=10899)
+        assert await admit_attempt(session, "login", "ip-key", "other", now=10900)
+        assert await admit_attempt(session, "login", "ip-key", "other", now=13600)
+        rows = list(await session.scalars(select(AuthAttempt)))
+        assert all(row.occurred_at > 10000 for row in rows)
+
+
+async def test_rate_limit_http_spoof_and_secret_validation(registration, monkeypatch):
+    factory, client = registration
+    monkeypatch.setenv("CROSSPOST_AUTH_RATE_LIMIT", "true")
+    async with client() as c:
+        for i in range(5):
+            r = await c.post(
+                "/api/auth/login",
+                json={"login": f"ghost-{i}", "password": "wrong"},
+                headers={"X-Forwarded-For": f"192.0.2.{i + 1}"},
+            )
+            assert r.status_code == 401
+        r = await c.post(
+            "/api/auth/login",
+            json={"login": "owner", "password": "owner-password"},
+            headers={"X-Forwarded-For": "192.0.2.100"},
+        )
+        assert r.status_code == 429
+        assert r.headers["cache-control"] == "no-store"
+        assert r.headers["retry-after"] == "3600"
+        invalid = await c.post(
+            "/api/auth/login", json={"login": {"secret": "do-not-echo"}, "password": "wrong"}
+        )
+        assert invalid.status_code == 422
+        assert "do-not-echo" not in invalid.text
+    async with factory() as session:
+        rows = list(await session.scalars(select(AuthAttempt)))
+        assert len(rows) == 5
+        assert len({row.ip_key for row in rows}) == 1
+        assert all(len(row.subject_key) == 64 for row in rows)
+
+
+async def test_production_cookie_requires_https(registration, monkeypatch):
+    _, client = registration
+    monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
+    async with client() as c:
+        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
+        assert r.status_code == 503
+        assert "set-cookie" not in r.headers
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
+        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
+        assert r.status_code == 200
+        cookie = r.headers["set-cookie"].lower()
+        assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
+        assert (await c.get("/api/auth/me")).status_code == 200

@@ -343,6 +343,24 @@ class User(Base):
     profile: Mapped[Profile | None] = relationship("Profile")
 
 
+class AuthAttempt(Base):
+    """Bounded, pseudonymous authentication admission events (T-409)."""
+
+    __tablename__ = "auth_attempts"
+    __table_args__ = (
+        Index("ix_auth_attempts_family_time", "family", "occurred_at"),
+        Index("ix_auth_attempts_ip_time", "family", "ip_key", "occurred_at"),
+        Index("ix_auth_attempts_subject_time", "family", "subject_key", "occurred_at"),
+        Index("ix_auth_attempts_time", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    family: Mapped[str] = mapped_column(String(32), nullable=False)
+    ip_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class ClientInvitation(Base):
     """Single invitation slot for a newly created client profile (T-407)."""
 

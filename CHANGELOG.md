@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-27 — T-409 authentication admission and cookie policy (draft)
+
+- Persistent admission before password verification: IP 5/15 min, subject 20/hour, family 300/15 min; no raw IP/login/token stored. Successful attempts count too. Production mode requires HTTPS and rate limiting; HTTPS always uses Secure cookie.
+- Credential route validation returns generic errors without input echo. CSRF, server-side logout and MFA are still release blockers.
+
 ## 2026-11-27 — T-408 owner support card (draft)
 
 - Явный выбор профиля, серверная admin-only карточка, запись просмотра с actor/profile до ответа.

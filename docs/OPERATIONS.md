@@ -345,3 +345,8 @@ exactly-once: повтор возможен, если сообщение при�
 логи или групповые чаты. Восстановление существующего клиента — через отдельную
 форму владельца с 15-минутным токеном T-406. Не открывать регистрацию публично
 до T-409, независимого QA, фактического main CI и разрешения владельца.
+
+
+## T-409 authentication admission (draft)
+
+`CROSSPOST_AUTH_MODE=production` requires trusted HTTPS for login and sensitive account routes and enables persistent admission unconditionally. Only Uvicorn's explicitly trusted Caddy proxy may resolve client IP; never trust raw forwarded headers. Production Compose wiring and end-to-end TLS are pending. Development defaults to HTTP compatibility; set `CROSSPOST_AUTH_RATE_LIMIT=true` to exercise admission on isolated tests. Separate budgets per login, register, recover, and shared owner step-up family: 5 requests/15 min per peer, 20/hour per normalized subject, 300/15 min per family. All admitted attempts (including successful ones) count to prevent concurrent reservation bypass; this is intentionally conservative and may throttle shared NAT or a targeted login. A blocked request does not invoke password verification; retry-after is conservative. Old rows are pruned on admission; keys are purpose-separated HMAC digests, no raw IP, password, login or token. SQLite write failure denies the operation. Do not enable public onboarding until CSRF, logout revocation, MFA, independent review and actual-main CI pass.
