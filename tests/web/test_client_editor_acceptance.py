@@ -145,6 +145,30 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                     },
                 ]
             )
+        elif scenario == "history" and path == "/api/profiles/1/history/search":
+            assert request.method == "POST"
+            assert parsed.query == ""
+            body = request.post_data_json
+            assert body["before"] is None
+            assert body["source"] in ("scheduled", "all")
+            assert body["query"] in ("", "Отменённый")
+            route.fulfill(
+                json={
+                    "entries": [
+                        {
+                            "source": "scheduled",
+                            "key": "4",
+                            "created_at_utc": "2026-11-27T09:00:00.000Z",
+                            "text": "Отменённый пост",
+                            "status": "cancelled",
+                            "coverage": "observed_only",
+                            "outcomes": [],
+                        }
+                    ],
+                    "next_cursor": None,
+                    "scope": "scheduled_and_observed_immediate",
+                }
+            )
         elif scenario == "history" and path == "/api/profiles/1/history":
             if "before=" in parsed.query:
                 entries = [
@@ -300,9 +324,16 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 page.get_by_role("button", name="Показать ещё").click()
                 expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
                 page.get_by_label("Тип публикации").select_option("scheduled")
+                expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
                 expect(page.get_by_text("Текст не был сохранён в истории")).to_have_count(0)
                 page.get_by_label("Тип публикации").select_option("all")
-                page.get_by_label("Поиск по загруженным записям").fill("Отменённый")
+                expect(page.get_by_text("Текст не был сохранён в истории")).to_be_visible()
+                page.get_by_label("Поиск по сохранённым записям").fill("Отменённый")
+                with page.expect_response(
+                    lambda response: response.url.endswith("/history/search")
+                ) as search:
+                    page.get_by_role("button", name="Найти", exact=True).click()
+                assert search.value.request.post_data_json["query"] == "Отменённый"
                 expect(page.get_by_text("Отменённый пост", exact=True)).to_be_visible()
                 expect(page.get_by_text("Текст не был сохранён в истории")).to_have_count(0)
                 capture(page, "06-client-history.png")

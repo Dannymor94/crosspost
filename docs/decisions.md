@@ -161,3 +161,7 @@ Bulk select is explicit, never invoked on media/target refresh. Only current rea
 ### T-513 history search (draft)
 
 Search by saved post text and stored channel code, case-sensitive literal substring via SQLite instr. Filter at query/group level before paging; retain full observed result group. Search body rather than URL, cursor hash binds scope/filter (not authorization). No raw diagnostics, secret fields, backfill, or write. Immediate missing text remains unknown.
+
+### History search UI (draft)
+
+Explicit submit; server results replace loaded-only local filtering. Filter and query changes invalidate prior cursor and render state. Search is literal and case-sensitive, no attempt to infer absent immediate text.

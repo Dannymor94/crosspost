@@ -13,6 +13,7 @@ on:
       - task/T-515-connection-status
       - task/T-512-calendar-actions
       - task/T-511-editor-controls
+      - task/T-513-history-search
   workflow_dispatch:
 
 permissions:
