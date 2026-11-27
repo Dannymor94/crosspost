@@ -90,7 +90,8 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
             "SELECT publication_id, external_id, attempt_count FROM publications"
         ).fetchall() == [("prior", "receipt", 2)]
         expected_drafts = [("fixture", "rev", "{}")] if start == "t218_editor_draft" else []
-        assert conn.execute(
-            "SELECT scope, revision, data FROM editor_drafts"
-        ).fetchall() == expected_drafts
+        assert (
+            conn.execute("SELECT scope, revision, data FROM editor_drafts").fetchall()
+            == expected_drafts
+        )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
