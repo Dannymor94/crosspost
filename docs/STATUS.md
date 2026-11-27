@@ -189,3 +189,7 @@ Client browser run 45881474479 passed and artifact 15147880520 was reviewed by o
 
 ### Desktop browser finding (UX-01)
 General CI 45884359516 passed at 05600b97. Client browser passed, but desktop scenario 45884359462 failed because target loading never transitioned to ready: merged loadTargets retained the legacy success/error handler. Restore current-request fencing, eligibility intersection and ready/error transitions. Correct test expectation to actual admin selection key telegram plus separator (U+241F). Failure screenshots enabled. New CI and browser run pending; independent QA remains required; no main or deployment changes.
+
+## UX-01 R3 — технический допуск исправлений, 2026-11-27
+
+На validation-only HEAD `83912d1` exact-head CI зелёный, 1353 теста на каждой версии Python; synthetic Chromium client/admin 5/5 каждый; независимый targeted APPROVE и 3 adversarial API probes. Пять находок закрыты, а не весь UX-01. Подготовлен draft delivery-кандидат с сохранением проверенного кода; исходные PR не закрыты. [Матрица поставки и открытые gates](UX01_DELIVERY.md). Main не менялся, production deploy запрещён до отдельных допусков.

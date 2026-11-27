@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-27 — UX-01 R3 (draft delivery candidate)
+
+- Ревизия черновика связывается с durable operation reservation до отправки; повтор той же ревизии блокируется, включая stale tabs.
+- Доказанный pre-effect отказ отличается от неизвестного результата; полный набор квитанций и proof проверяются перед снятием защиты, неполный итог сохраняет черновик.
+- Canonical UTC строки сортируются по instant/ID, legacy wall-time slots сохраняются без угадывания зоны; route-smoke расширен.
+- Независимая проверка пяти находок пройдена на validation SHA `83912d1`; не production release. Открытые критерии: [docs/UX01_DELIVERY.md](docs/UX01_DELIVERY.md).
+
 ## 2026-11-25 — T-215 (draft, первый серверный guard)
 
 - Прямые клиентские действия (publish, retry, publish-now, PATCH, import commit) отклоняются при включённой модерации; создание поста на проверку остаётся доступным.
