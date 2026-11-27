@@ -1,0 +1,110 @@
+/* Transitional mapping of verified editors to UX-02 tokens.
+   Existing handlers, roles and routes remain untouched. */
+html.cp-ux {
+  --bg: var(--cp-bg);
+  --bg-panel: var(--cp-panel);
+  --bg-card: var(--cp-panel);
+  --bg-card-h: var(--cp-soft);
+  --bg-input: var(--cp-panel);
+  --border: var(--cp-line);
+  --border-f: var(--cp-control-line);
+  --text-1: var(--cp-ink);
+  --text-2: var(--cp-muted);
+  --text-3: var(--cp-muted);
+  --accent: var(--cp-accent);
+  --accent-h: #4338ca;
+  --accent-dim: var(--cp-soft);
+  --live: var(--cp-good);
+  --success: var(--cp-good);
+  --amber: var(--cp-warn);
+  --warn: var(--cp-warn);
+  --error: var(--cp-bad);
+  --grey: var(--cp-muted);
+  --radius: 10px;
+  --radius-lg: 12px;
+  --shadow: var(--cp-shadow);
+  --font-ui: system-ui, -apple-system, sans-serif;
+  --sidebar-w: 208px;
+}
+.cp-ux body { font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+.cp-ux .btn.btn-primary, .cp-ux .target-check.on {
+  background: var(--cp-accent-fill);
+  border-color: var(--cp-accent-fill);
+  color: var(--cp-on-accent);
+}
+.cp-ux .btn.btn-primary:hover:not(:disabled) {
+  background: #4338ca;
+  border-color: #4338ca;
+  color: var(--cp-on-accent);
+}
+.cp-ux .btn, .cp-ux .form-input, .cp-ux .topbar-profile-select,
+.cp-ux .cp-theme-select { min-height: 44px; }
+.cp-ux .cp-theme-select {
+  background: var(--cp-panel);
+  color: var(--cp-ink);
+  border: 1px solid var(--cp-control-line);
+  border-radius: 10px;
+  font: 14px/1.3 system-ui, sans-serif;
+  padding: 8px;
+  max-width: 100%;
+}
+.cp-ux :is(button,input,textarea,select,a):focus-visible {
+  outline: 3px solid var(--cp-accent);
+  outline-offset: 2px;
+}
+.cp-ux .cp-admin .main { max-width: 1440px; min-width: 0; padding: 24px; }
+.cp-ux .cp-admin .sidebar-header { padding: 16px 12px; }
+.cp-ux .cp-admin .topbar { flex-wrap: wrap; gap: 8px; }
+.cp-ux .cp-admin .page-title { font-size: 30px; letter-spacing: -.03em; }
+.cp-ux .cp-admin :is(.page-subtitle,.section-title,.form-label) {
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 14px;
+}
+.cp-ux .cp-admin .form-input { font: 16px/1.5 var(--font-ui); border-color: var(--cp-control-line); }
+.cp-ux .cp-admin .form-hint { font-size: 13px; }
+.cp-ux .cp-admin :is(.profile-item,.view-tab,.target) { min-height: 44px; }
+.cp-ux .cp-admin .view-tabs { flex-wrap: wrap; }
+.cp-ux .cp-client #root { max-width: 760px; }
+.cp-ux .cp-client .app-header { gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+.cp-ux .cp-client .cp-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cp-ux .cp-client .app-header-name { font-size: 13px; }
+.cp-ux .cp-client .label, .cp-ux .cp-client .section-title {
+  color: var(--cp-ink); font-size: 14px; text-transform: none; letter-spacing: 0;
+}
+.cp-ux .cp-client textarea { font-size: 16px; }
+.cp-ux .cp-client .media-area { background: var(--cp-panel); min-height: 90px; padding: 16px 12px; }
+.cp-ux .cp-client .channel-item {
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-control-line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.cp-ux .cp-client .pill.active, .cp-ux .cp-client .tab-btn.active {
+  background: var(--cp-soft); color: var(--cp-accent); font-weight: 650;
+}
+.cp-ux .cp-client .app-wrap { min-width: 0; }
+@media (max-width: 640px) {
+  .cp-ux .cp-client .app-wrap { padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .cp-ux .cp-client .tabs {
+    position: fixed; inset: auto 0 0; margin: 0; z-index: 10;
+    background: var(--cp-panel); border-top: 1px solid var(--cp-line);
+    padding: 6px 12px calc(6px + env(safe-area-inset-bottom)); gap: 8px;
+  }
+  .cp-ux .cp-admin #root { flex-direction: column; }
+  .cp-ux .cp-admin .sidebar {
+    width: 100% !important; min-width: 0; max-width: none; max-height: 280px;
+  }
+  .cp-ux .cp-admin .sidebar-resize-handle { display: none; }
+  .cp-ux .cp-admin .main { padding: 16px; }
+  .cp-ux .cp-admin .target-grid { grid-template-columns: minmax(0,1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cp-ux :is(.btn,.tab-btn,.target,.profile-item) { transition: none; }
+}
+
+/* Theme changes must not interpolate incompatible text/fill colors. */
+.cp-ux :is(.btn,.tab-btn,.target,.profile-item,.weekday-btn) { transition: none; }
+.cp-ux .weekday-btn.on { background: var(--cp-accent-fill); color: var(--cp-on-accent); border-color: var(--cp-accent-fill); }

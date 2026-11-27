@@ -49,9 +49,10 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
             route.abort()
         elif path == "/client":
             route.fulfill(path=FRONTEND / "client.html", content_type="text/html")
-        elif path.startswith("/static/") and path.endswith(".js"):
-            script_path = FRONTEND / Path(path).name
-            route.fulfill(path=script_path, content_type="application/javascript")
+        elif path.startswith("/static/") and path.endswith((".js", ".css")):
+            asset = FRONTEND / path.removeprefix("/static/")
+            mime = "text/css" if asset.suffix == ".css" else "application/javascript"
+            route.fulfill(path=asset, content_type=mime)
         elif path == "/api/auth/me":
             actor = {"id": 1, "login": "test-client", "role": "client", "profile_id": 1}
             route.fulfill(json=actor)
@@ -135,6 +136,16 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
             page.on("pageerror", lambda error: errors.append(str(error)))
             context.route("**/*", handle)
             page.goto("http://localhost/client")
+            if scenario == "unknown":
+                theme = page.get_by_role("combobox", name="Тема оформления")
+                theme.select_option("light")
+                expect(page.locator("html")).to_have_attribute("data-theme", "light")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                capture(page, "00-client-light-theme.png")
+                theme.select_option("dark")
+                expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                capture(page, "00-client-dark-theme.png")
             text = page.get_by_placeholder("Напишите текст поста…")
             text.fill(draft_text)
             telegram = page.get_by_role("checkbox", name="Telegram")
