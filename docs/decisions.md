@@ -113,3 +113,7 @@ UI показывает нейтральное состояние, без зел
 ## T-510 — host-controlled navigation (draft)
 
 Role-specific menus use existing views and a single draft leave guard. Mobile admin overflow goes through «Ещё»; client exposes real schedule, not unfinished unified history. No new backend permission or synthetic counters. Keep current editor entry and prior guards; browser history and complete gate remain separate.
+
+### T-510 history contract (draft)
+
+Same-document History API state contains opaque epoch, index and allowlisted screen only, no profile/account or content. Profile changes and logout invalidate prior history scope. Rejected back/forward restores previous entry without unmounting editor; external-document leave remains browser beforeunload. Reload defaults to existing editor for recovery. Not a substitute for server auth revocation T-406.

@@ -2453,6 +2453,7 @@ const ADMIN_ITEMS = Object.freeze([
   {id:"channels",label:"Подключения",icon:"connections"},
   {id:"console",label:"Диагностика",icon:"more"},
 ]);
+const ADMIN_ROUTES = Object.freeze([...ADMIN_ITEMS.map(i=>i.id),"more"]);
 const ADMIN_MOBILE = Object.freeze([
   ...ADMIN_ITEMS.filter(i => ["home","publish","moderation"].includes(i.id)),
   {id:"more",label:"Ещё",icon:"more"},
@@ -4687,9 +4688,10 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
       className: "topbar-profile-select",
       value: activeProfileId ?? "",
       title: "Переключить профиль",
+      "aria-label": "Активный профиль",
       onChange: e => {
         const p = profiles.find(x => x.id === Number(e.target.value));
-        if (p) onSelectProfile(p);
+        if (!p || !onSelectProfile(p)) e.target.value = String(activeProfileId ?? "");
       },
     },
       profiles.map(p => h("option", { key: p.id, value: p.id }, p.name)),
@@ -4794,28 +4796,32 @@ function App() {
   const [showNewClient, setShowNewClient] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const navigation = window.CrosspostWorkspace.useHistory({useRef,useEffect},me?.role==="admin","publish",ADMIN_ROUTES,next=>{setFocusChannel(null);setView(next);});
 
   // Проверка сессии при загрузке: 401 → показать вход.
   useEffect(() => {
     api.get("/api/auth/me").then(setMe).catch(() => setMe(null));
   }, []);
 
-  const loadProfiles = useCallback(() => {
+  useEffect(() => {
+    if (!me || me.role !== "admin") return;
+    let cancelled = false;
     setLoadingProfiles(true);
     api.get("/api/profiles")
       .then(data => {
+        if (cancelled) return;
         setProfiles(data);
         setActive(prev => {
           if (prev && data.find(p => p.id === prev.id)) return prev;
-          const savedId = Number(localStorage.getItem("crosspost_active_profile"));
+          let savedId = null;
+          try { savedId = Number(localStorage.getItem("crosspost_active_profile")); } catch (_) {}
           return data.find(p => p.id === savedId) || data[0] || null;
         });
       })
       .catch(() => {})
-      .finally(() => setLoadingProfiles(false));
-  }, []);
-
-  useEffect(() => { if (me) loadProfiles(); }, [me, loadProfiles]);
+      .finally(() => { if (!cancelled) setLoadingProfiles(false); });
+    return () => { cancelled = true; };
+  }, [me]);
 
   useEffect(() => {
     if (!me || me.role !== "admin" || profiles.length === 0) return;
@@ -4831,12 +4837,14 @@ function App() {
     fetchCount();
     const t = setInterval(fetchCount, 30000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [me, profiles.length]);
+  }, [me, profiles]);
 
   async function logout() {
     if (!window.CrosspostDraft.canLeave()) return;
     try { await api.post("/api/auth/logout"); } catch (_) {}
-    setMe(null); setProfiles([]); setActive(null); setView("publish");
+    navigation.replaceContext("publish");
+    setMe(null); setProfiles([]); setActive(null); setPendingCount(0);
+    setShowNewProfile(false); setShowNewClient(false);
   }
 
   if (me === undefined) return h("div", { className: "login-wrap" }, h(Spinner));
@@ -4847,27 +4855,21 @@ function App() {
 
   function onProfileCreated(p) {
     setProfiles(prev => [...prev, p]);
-    setActive(p); setView("publish");
+    setActive(p); navigation.replaceContext("publish");
   }
 
-  function navigate(next) {
-    if (next === view) return true;
-    if (![...ADMIN_ITEMS.map(i=>i.id),"more"].includes(next)) return false;
-    if (!window.CrosspostDraft.canLeave()) return false;
-    setFocusChannel(null);
-    setView(next);
-    return true;
-  }
+  const navigate = navigation.navigate;
   function selectProfile(p) {
-    if (p.id === active?.id && view === "publish") return;
-    if (!window.CrosspostDraft.canLeave()) return;
-    setFocusChannel(null); setActive(p); setView("publish");
-    localStorage.setItem("crosspost_active_profile", String(p.id));
+    if (p.id === active?.id && view === "publish") return true;
+    if (!window.CrosspostDraft.canLeave()) return false;
+    setActive(p); navigation.replaceContext("publish");
+    try { localStorage.setItem("crosspost_active_profile", String(p.id)); } catch (_) {}
+    return true;
   }
   function goToProfile(pid, channel) {
     const p = profiles.find(x => x.id === pid);
     if (!p || !window.CrosspostDraft.canLeave()) return;
-    setActive(p); setView("channels"); setFocusChannel(channel || null);
+    setActive(p); navigation.replaceContext("channels"); setFocusChannel(channel || null);
   }
 
   const mainBody = loadingProfiles

@@ -201,3 +201,7 @@ Delivery UX-01 #59 HEAD `97358b6`: general and mocked editor CI PASS. На от�
 ## UX-03 T-510 — первый пакет навигации (validation only)
 
 UX-02 visual CI at `5c84a4e` passed. Shared navigation mounted for actual admin/client, desktop/mobile; profile/client creation, moderation, import, channel and diagnostic views remain reachable. Overview and client home only show real available actions; no fictitious counters or complete history/calendar. Default editor kept for compatibility; full browser history, navigation/device acceptance and rollout remain open. No publish handlers, backend, schema or production changes.
+
+### T-510 navigation history (draft)
+
+Browser scenario 45979009846 passed 6/6 for each role at `59edbce`. Shared history now uses per-mount/context epoch and screen ID only; back/forward runs draft guard, rejected pop restores original entry, old profile/account entries do not restore context. Admin profile selector resets on refusal and profile-list responses fenced on auth lifecycle. New mocked checks cover history and profile refusal/acceptance; CI pending. No changes to backend auth revocation, draft admission, or deployment gates.

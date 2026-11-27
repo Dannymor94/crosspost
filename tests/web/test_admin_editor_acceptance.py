@@ -75,7 +75,10 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             actor = {"id": 2, "login": "test-admin", "role": "admin", "profile_id": None}
             route.fulfill(json=actor)
         elif path == "/api/profiles":
-            route.fulfill(json=[{"id": 1, "name": "Демо-профиль"}])
+            profiles = [{"id": 1, "name": "Демо-профиль"}]
+            if scenario == "navigation":
+                profiles.append({"id": 2, "name": "Второй профиль"})
+            route.fulfill(json=profiles)
         elif path == "/api/settings/browser":
             route.fulfill(json={"headless": True})
         elif path.endswith("/settings/timezone"):
@@ -222,7 +225,28 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
                 expect(desktop.get_by_role("button", name="Публикации")).to_have_attribute(
                     "aria-current", "page"
                 )
+                profile = page.get_by_role("combobox", name="Активный профиль")
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                profile.select_option("2")
+                expect(profile).to_have_value("1")
+                expect(text).to_have_value(draft_text)
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                page.evaluate("history.back()")
+                expect(text).to_have_value(draft_text)
+                page.wait_for_function("history.state.crosspostWorkspace.view === 'publish'")
                 page.once("dialog", lambda dialog: dialog.accept())
+                desktop.get_by_role("button", name="Обзор", exact=True).click()
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                page.evaluate("history.back()")
+                expect(text).to_have_value("")
+                page.evaluate("history.forward()")
+                expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
+                profile.select_option("2")
+                expect(profile).to_have_value("2")
+                expect(text).to_have_value("")
+                page.evaluate("history.back()")
+                expect(profile).to_have_value("2")
+                expect(text).to_have_value("")
                 desktop.get_by_role("button", name="Обзор", exact=True).click()
                 expect(page.get_by_role("heading", name="Обзор", exact=True)).to_be_visible()
                 for width in (360, 390, 768, 1440):

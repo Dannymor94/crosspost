@@ -170,6 +170,10 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                 mobile.get_by_role("button", name="Главная", exact=True).click()
                 expect(page.get_by_role("heading", name="Главная", exact=True)).to_be_visible()
                 capture(page, "04-client-home.png")
+                page.evaluate("history.back()")
+                expect(text).to_have_value("")
+                page.evaluate("history.forward()")
+                expect(page.get_by_role("heading", name="Главная", exact=True)).to_be_visible()
                 page.get_by_role("button", name="Открыть расписание").click()
                 expect(page.get_by_text("Не удалось загрузить расписание.")).to_be_visible()
                 mobile.get_by_role("button", name="Ещё", exact=True).click()
@@ -181,6 +185,16 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 desktop.get_by_role("button", name="Новый пост", exact=True).click()
                 expect(text).to_have_value("")
+                expect(page.get_by_text("Нет сохранённого черновика", exact=True)).to_be_visible()
+                text.fill(draft_text)
+                expect(page.get_by_text("Не удалось сохранить черновик.")).to_be_visible()
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                page.evaluate("history.back()")
+                expect(text).to_have_value(draft_text)
+                page.wait_for_function("history.state.crosspostWorkspace.view === 'compose'")
+                expect(desktop.get_by_role("button", name="Новый пост")).to_have_attribute(
+                    "aria-current", "page"
+                )
                 assert sends == 0
                 assert not errors, errors
                 return
