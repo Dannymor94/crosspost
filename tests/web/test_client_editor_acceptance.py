@@ -14,7 +14,16 @@ ASSETS = os.environ.get("UX_BROWSER_ASSETS")
 @pytest.mark.skipif(not ASSETS, reason="Run dedicated UX browser acceptance workflow")
 @pytest.mark.parametrize(
     "scenario",
-    ["unknown", "submitted", "incomplete", "rejected", "stale", "navigation", "calendar", "history"],
+    [
+        "unknown",
+        "submitted",
+        "incomplete",
+        "rejected",
+        "stale",
+        "navigation",
+        "calendar",
+        "history",
+    ],
 )
 def test_client_draft_reload_media_loss_and_unknown_send(scenario):
     assert ASSETS is not None
