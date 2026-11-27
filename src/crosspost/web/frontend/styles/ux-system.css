@@ -64,7 +64,9 @@
   font: inherit;
   padding: 10px 14px;
 }
-.cp-ux .cp-button { cursor: pointer; font-weight: 600; transition: background-color 150ms; }
+/* Change foreground and background atomically: interpolating from the UA or
+   previous theme can temporarily put light text on a light background. */
+.cp-ux .cp-button { cursor: pointer; font-weight: 600; transition: none; }
 .cp-ux .cp-button:not(.cp-button--primary):hover:not(:disabled) { background: var(--cp-soft); }
 .cp-ux .cp-button.cp-button--primary {
   background: var(--cp-accent-fill);
@@ -97,9 +99,6 @@
 .cp-ux .cp-status--warning { color: var(--cp-warn); }
 .cp-ux .cp-status--error { color: var(--cp-bad); }
 .cp-ux .cp-status--info { color: var(--cp-accent); }
-@media (prefers-reduced-motion: reduce) {
-  .cp-ux .cp-button { transition: none; }
-}
 
 /* Shared responsive workspace, not a router or authorization boundary. */
 .cp-ux .cp-shell {
