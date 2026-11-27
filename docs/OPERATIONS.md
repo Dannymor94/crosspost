@@ -360,3 +360,8 @@ Production requires an explicit canonical `CROSSPOST_AUTH_ORIGIN=https://<domain
 ### Server-side logout (draft)
 
 Logout revokes all devices for that account using the existing session generation CAS. Previously issued recovery links for that generation become invalid; the owner can issue a fresh link. Stale/invalid cookies are cleared without incrementing a newer generation. A failed logout request must not be presented as confirmed server revocation. Already admitted or in-flight operations are not cancelled by this slice; their admission fences are a separate rollout gate.
+
+
+### Owner MFA bootstrap (draft)
+
+Before enabling production mode, the owner uses a private, unrecorded interactive server terminal: `python -m crosspost user-mfa-enroll --login <owner-login>`. Never run this in GitHub Actions, a shared screen, a captured shell, or an agent log. Confirm ENROLL, enter the current password, manually add the generated TOTP key to an authenticator (SHA1, six digits, 30 seconds), and confirm its code. Save eight backup codes offline; they are shown once. Enrollment/replacement revokes all old sessions. An owner with a lost device may use a backup code; authorized host access plus the current password permits re-enrollment, replacing all codes. Production will not allow an unenrolled owner normal login or access using an older cookie. This is a draft operator path, not approval to enable production. Fresh MFA step-up, durable replacement event history, recovery drill, integrated UI and independent QA remain mandatory.

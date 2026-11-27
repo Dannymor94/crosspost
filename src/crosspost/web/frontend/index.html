@@ -4439,6 +4439,7 @@ function ViewTabs({ view, onChange }) {
 function LoginView({ onSuccess }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const ref = useRef(null);
@@ -4449,7 +4450,7 @@ function LoginView({ onSuccess }) {
     if (!login.trim() || !password) return;
     setLoading(true); setErr(null);
     try {
-      const me = await api.post("/api/auth/login", { login: login.trim(), password });
+      const me = await api.post("/api/auth/login", { login: login.trim(), password, mfa_code: mfaCode.trim() });
       onSuccess(me);
     } catch (ex) { setErr(ex.message); }
     finally { setLoading(false); }
@@ -4469,6 +4470,11 @@ function LoginView({ onSuccess }) {
         h("label", { className: "form-label", htmlFor: "l-pass" }, "Пароль"),
         h("input", { id: "l-pass", className: "form-input", type: "password", value: password,
           autoComplete: "current-password", onChange: (e) => setPassword(e.target.value) }),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "l-mfa" }, "Код владельца (если настроен)"),
+        h("input", { id: "l-mfa", className: "form-input", type: "password", value: mfaCode,
+          autoComplete: "one-time-code", onChange: (e) => setMfaCode(e.target.value) }),
       ),
       err && h(Alert, { type: "error" }, err),
       h("button", { type: "submit", className: "btn btn-primary", style: { width: "100%", marginTop: "8px" },

@@ -332,6 +332,10 @@ class User(Base):
     session_generation: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )  # повышается при recovery, отзывает все старые HMAC-cookie
+    mfa_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mfa_backup_hashes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_changed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     role: Mapped[Role] = mapped_column(String(16), default=Role.CLIENT, nullable=False)
     profile_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True

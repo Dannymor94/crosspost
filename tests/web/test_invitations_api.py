@@ -10,9 +10,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from crosspost.auth.totp import generate_secret, hotp
 from crosspost.db.auth_attempt_repo import admit_attempt
 from crosspost.db.engine import create_engine_and_tables
 from crosspost.db.models import AuthAttempt, ClientInvitation, Log, Profile, Role, User
+from crosspost.db.owner_mfa import enroll_owner
 from crosspost.db.user_repo import UserRepository
 from crosspost.web import deps
 from crosspost.web.app import create_app
@@ -260,14 +262,14 @@ async def test_production_cookie_requires_https(registration, monkeypatch):
     monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
     monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
     async with client() as c:
-        r = await c.post("/api/auth/login", json={"login": "owner", "password": "owner-password"})
+        r = await c.post("/api/auth/login", json={"login": "existing", "password": "existing-password"})
         assert r.status_code == 503
         assert "set-cookie" not in r.headers
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
         proof = (await c.get("/api/auth/csrf")).json()["token"]
         r = await c.post(
             "/api/auth/login",
-            json={"login": "owner", "password": "owner-password"},
+            json={"login": "existing", "password": "existing-password"},
             headers={"X-CSRF-Token": proof, "Origin": "https://test"},
         )
         assert r.status_code == 200
@@ -333,3 +335,55 @@ async def test_logout_revokes_all_devices_but_not_other_accounts(registration):
     async with factory() as session:
         user = await session.get(User, account["id"])
         assert user is not None and user.session_generation == 1
+
+
+async def test_owner_mfa_enrollment_and_concurrent_factor_replay(registration):
+    factory, client = registration
+    secret = generate_secret()
+    timestamp = int(time.time()) - 30
+    code = hotp(secret, timestamp // 30)
+    async with client() as old, client() as first, client() as second:
+        account = await _login(old, "owner", "owner-password")
+        async with factory() as session:
+            assert await enroll_owner(session, "owner", "wrong", secret, code) is None
+            codes = await enroll_owner(
+                session, "owner", "owner-password", secret, code, now=timestamp
+            )
+            assert codes is not None
+        assert (await old.get("/api/auth/me")).status_code == 401
+        body = {"login": "owner", "password": "owner-password"}
+        assert (await first.post("/api/auth/login", json=body)).status_code == 401
+        current = hotp(secret, int(time.time()) // 30)
+        otp_body = {**body, "mfa_code": current}
+        results = await asyncio.gather(
+            first.post("/api/auth/login", json=otp_body),
+            second.post("/api/auth/login", json=otp_body),
+        )
+        assert sorted(r.status_code for r in results) == [200, 401]
+        backup_body = {**body, "mfa_code": codes[0]}
+        results = await asyncio.gather(
+            first.post("/api/auth/login", json=backup_body),
+            second.post("/api/auth/login", json=backup_body),
+        )
+        assert sorted(r.status_code for r in results) == [200, 401]
+        async with factory() as session:
+            user = await session.get(User, account["id"])
+            assert user is not None
+            assert user.mfa_secret and secret not in user.mfa_secret
+            assert user.mfa_backup_hashes and all(c not in user.mfa_backup_hashes for c in codes)
+            assert user.session_generation == 1
+
+
+async def test_unenrolled_owner_cannot_use_production_session(registration, monkeypatch):
+    _, client = registration
+    async with client() as c:
+        await _login(c, "owner", "owner-password")
+        monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
+        assert (await c.get("/api/auth/me")).status_code == 401
+    monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
+        proof = (await c.get("/api/auth/csrf")).json()["token"]
+        body = {"login": "owner", "password": "owner-password"}
+        r = await c.post("/api/auth/login", json=body, headers={"X-CSRF-Token": proof})
+        assert r.status_code == 403
+        assert "set-cookie" not in r.headers

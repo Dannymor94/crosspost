@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-28 — T-409 local owner MFA enrollment (draft)
+
+- Encrypted TOTP secret and hashed one-use backup codes; local interactive enrollment or replacement revokes prior sessions. Enrolled owners require a factor at login, unenrolled production owners are denied.
+- Serialized TOTP/backup consumption; legacy login UI accepts a code. Fresh MFA step-up for sensitive actions, durable full operator audit and new UX integration remain release blockers.
+
 ## 2026-11-28 — T-409 server-side logout (draft)
 
 - Logout advances the authenticated generation atomically before clearing the cookie; stale logout cannot invalidate a newer generation. All devices of that account and outstanding recovery tokens are invalidated; unrelated accounts unaffected.

@@ -365,6 +365,7 @@ function fmtDate(iso) {
 function LoginView({ onLogin }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -373,8 +374,8 @@ function LoginView({ onLogin }) {
     if (busy) return;
     setBusy(true); setErr('');
     try {
-      const r = await api.post('/api/auth/login', { login, password });
-      if (r.status === 401) { setErr('Неверный логин или пароль'); return; }
+      const r = await api.post('/api/auth/login', { login, password, mfa_code: mfaCode.trim() });
+      if (r.status === 401) { setErr('Неверный логин, пароль или код входа'); return; }
       if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
       const user = await r.json();
       if (user.role === 'admin') { window.location = '/'; return; }
@@ -396,6 +397,10 @@ function LoginView({ onLogin }) {
           <div class="field">
             <label class="label">Пароль</label>
             <input type="password" value=${password} onInput=${e => setPassword(e.target.value)} autocomplete="current-password" required />
+          </div>
+          <div class="field">
+            <label class="label">Код владельца (если настроен)</label>
+            <input type="password" value=${mfaCode} onInput=${e => setMfaCode(e.target.value)} autocomplete="one-time-code" />
           </div>
           ${err && html`<div class="error-msg">${err}</div>`}
           <button type="submit" class="btn btn-primary" disabled=${busy}>
