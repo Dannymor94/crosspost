@@ -321,3 +321,8 @@ Production legacy connection mutations are operator-only, including direct token
 ## Integrated VPS pilot candidate
 
 Docker/HTTPS source #45 integrated into latest UX/onboarding branch. Production auth forced in Compose; publication gate and scheduler off by default. No real deployment. CI pending, inherited Telegram/browser checks pending. Standalone source Docker/HTTPS PASS does not establish combined PASS.
+
+
+## VPS pilot recovery integration (draft)
+
+Original independently reviewed recovery script/tests from #47 retained byte-for-byte; Docker smoke stops the synthetic app and tests backup/verify/restore under `--network none`. Live data restore, encrypted offsite custody, key escrow and RPO/RTO not established. CI pending.

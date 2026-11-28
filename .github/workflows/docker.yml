@@ -113,7 +113,7 @@ jobs:
               "/app/backups/.t301-backup-marker": "backup-v1",
               "/app/runtime/media/.t301-media-marker": "media-v1",
               "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
-              "/app/runtime/settings.json": '{"t301_smoke": true}',
+              "/app/runtime/settings.json": '{"browser_headless": true}',
           }
           for name, content in markers.items():
               path = Path(name)
@@ -132,7 +132,7 @@ jobs:
               "/app/backups/.t301-backup-marker": "backup-v1",
               "/app/runtime/media/.t301-media-marker": "media-v1",
               "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
-              "/app/runtime/settings.json": '{"t301_smoke": true}',
+              "/app/runtime/settings.json": '{"browser_headless": true}',
           }
           for name, content in markers.items():
               assert Path(name).read_text(encoding="utf-8") == content, name
@@ -163,6 +163,37 @@ jobs:
             echo 'Expected Caddy runtime proxy error was not observed'
             exit 1
           fi
+
+      - name: Restore quiesced disposable runtime in network-isolated container
+        run: |
+          cid=$(docker compose ps -a -q app)
+          test "$(docker inspect --format '{{.State.Running}}' "$cid")" = false
+          docker run --rm -i --network none --volumes-from "$cid" \
+            -e VAULT_KEY --entrypoint /app/.venv/bin/python crosspost:local - <<'PY'
+          import json
+          import sqlite3
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "/app/scripts")
+          from recovery_bundle import backup_bundle, verify_bundle, restore_bundle
+
+          runtime = Path("/app/runtime")
+          output = Path("/app/backups/recovery-smoke")
+          bundle = backup_bundle(
+              runtime / "db.sqlite3", runtime / "media",
+              runtime / "profiles", runtime / "settings.json", output, True,
+          )
+          manifest = verify_bundle(bundle)
+          restored = restore_bundle(bundle, output / "restored")
+          assert verify_bundle(restored) == manifest
+          assert (restored / "media/.t301-media-marker").read_text() == "media-v1"
+          assert (restored / "profiles/.t301-profile-marker").read_text() == "profile-v1"
+          assert json.loads((restored / "settings.json").read_text()) == {"browser_headless": True}
+          with sqlite3.connect(restored / manifest["sqlite_snapshot"]) as db:
+              assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+              assert db.execute("SELECT version_num FROM alembic_version").fetchone() == ("t409_ux_security_merge",)
+          print("OFFLINE_RECOVERY_SMOKE_OK")
+          PY
 
       - name: Diagnostics on failure
         if: failure()

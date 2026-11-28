@@ -363,3 +363,8 @@
 - Отдельный GitHub Actions smoke проверяет сборку, старт и сохранность томов; живые проверки VPS, браузерного входа T-303 и TLS T-302 ещё нужны.
 - T-301-R2: запуск Docker smoke теперь охватывает изменения всех входов образа (`src`, `scripts`, `pyproject.toml`, `uv.lock`); smoke независимо проверяет сохранность обоих томов, медиа, браузерных профилей и runtime-настроек после пересоздания.
 
+
+
+## Unreleased — integrated VPS recovery rehearsal
+
+- Include original T-207 offline recovery bundle and tests, plus Docker quiesced synthetic backup/verify/restore under no network. No production recovery or deployment.

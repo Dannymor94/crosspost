@@ -522,3 +522,82 @@ GET/HEAD 200 для нужного видео из внешней сети и 40
 ## Integrated VPS pilot (draft; supersedes earlier Docker defaults)
 
 Use a new empty isolated runtime volume and owner-controlled DNS/TLS. Compose forces production auth and exact HTTPS origin. It defaults live publication, scheduler, health checks, invitations, client connections and PWA to off. Enable individual UI features only after explicit acceptance; scheduler cannot start unless live publication is explicitly true. Direct publish/retry/publish-now routes reject while disabled. This gate does not sandbox network egress or CLI; do not use CLI publication, real credentials or existing production volumes in pilot. Restrict access at the host/firewall. Do not copy real data or enable sends without owner approval and exact integration QA. Bootstrap owner via private terminal then configure MFA; never print passwords or codes in CI. Separate backups/restore, live browser provider acceptance and actual DNS/ACME are still required.
+
+
+### 6.1 Полный комплект восстановления (OPS-207 follow-up, до живого drill)
+
+Одного SQLite snapshot недостаточно: медиа, сохранённые браузерные профили и
+`runtime/settings.json` живут вне БД. Дополнительный офлайн-скрипт
+`scripts/recovery_bundle.py` создаёт **нешифрованный, но приватный** каталог с
+WAL-safe SQLite snapshot, медиа, профилями, настройками, списком SHA256 каждого
+файла, полным перечнем каталогов (включая пустые) и HMAC-манифестом,
+проверяемым исходным `VAULT_KEY`. Нечитаемый вложенный каталог останавливает
+весь процесс, а не пропускается без предупреждения. Сам ключ и `.env`
+не сохраняются; другие внешние секреты тоже должны иметь отдельное хранилище.
+
+**Операторский порядок (только на собственном VPS, без передачи файлов агентам):**
+
+1. Записать образ приложения/ревизию БД и анонимизированные счётчики; убедиться,
+   что `VAULT_KEY` доступен из защищённого escrow, но не копировать его в архив.
+2. Ввести окно обслуживания: остановить веб-приложение, планировщик, воркеры,
+   загрузки медиа и все записи браузерных профилей. `--quiesced` — явное
+   подтверждение этого шага оператором, а не автоматическая блокировка процесса.
+3. Подставив фактические значения `DB_URL`, `MEDIA_DIR`, `BROWSER_PROFILES_DIR`
+   и `RUNTIME_SETTINGS_PATH`, выполнить команду в закрытом окружении:
+
+   ```bash
+   python scripts/recovery_bundle.py backup \
+     --db runtime/db.sqlite3 --media-dir runtime/media \
+     --profiles-dir runtime/profiles --settings runtime/settings.json \
+     --dest /srv/private/crosspost-backups --quiesced
+   ```
+
+   Скрипт откажется работать, если обязательные каталоги отсутствуют, встречен
+   симлинк, неподдерживаемые поля настроек, пересечение входа/выхода или
+   неизвестный тип файла. Отсутствующий `settings.json` — допустимое состояние
+   чистой установки: это фиксируется как `settings_present=false` в подписанном
+   манифесте и сохраняется как отсутствие после восстановления. Каталог-родитель
+   настроек должен существовать.
+4. Выполнить `python scripts/recovery_bundle.py verify --bundle <КАТАЛОГ>`;
+   скопировать **весь каталог**, включая вложенные манифесты, в независимое
+   **шифрованное offsite**-хранилище. Скрипт не шифрует файлы, не отправляет их
+   по сети и не настраивает расписание. Браузерные профили содержат действующие
+   сессии и требуют той же защиты, что и секреты. Каталог не должен попадать в
+   веб-корень, git, общие логи или Issue.
+5. На отдельной машине/томе проверить получение зашифрованной offsite-копии,
+   доступность исходного ключа и восстановить в **новый пустой каталог**:
+
+   ```bash
+   python scripts/recovery_bundle.py restore --bundle <КАТАЛОГ> \
+     --target /srv/private/crosspost-recovered
+   ```
+
+   Результат: `database/crosspost-*.sqlite3`, `media/`, `profiles/`,
+   `settings.json` (если был) и аутентифицированные манифесты. Команды упаковки
+   и восстановления требуют Linux с `renameat2(RENAME_NOREPLACE)` для атомарной
+   публикации без перезаписи чужой даже пустой директории. Другие ОС отклоняются
+   без изменения цели. Восстановление не запускает
+   приложение и не заменяет рабочие тома/БД. Остановиться при любой ошибке.
+6. **Дальнейший тест запуска только в отдельном контейнере/namespace с
+   подтверждённым `--network none` или эквивалентным запретом исходящего
+   трафика**, с `SCHEDULER_ENABLED=false`, `HEALTH_CHECK_ENABLED=false`,
+   отдельными томами и тестовыми настройками. Запрещено подключать восстановленные
+   каналы к реальным площадкам: иначе отложенный пост может отправиться повторно.
+   Одного флага выключенного планировщика недостаточно для доказательства
+   сетевой изоляции. Проверять схему, связь медиа и анонимизированные счётчики
+   без отправки постов. Реальное переключение сервиса/rollback — отдельная
+   процедура владельца, не функция этого скрипта.
+
+Требуемые внешние решения до запуска: периодичность/retention/RPO/RTO, проверка
+возврата offsite-копии, хранение исходного `VAULT_KEY` и прочих необходимых ключей
+(`SESSION_SECRET`, `MEDIA_URL_SECRET`), восстановление прав uid=10001 из Docker,
+успешный drill на копии реальных данных. Бэкап группы файлов согласован по времени
+**только если оператор действительно остановил запись**; флаг не создаёт снимок
+файловой системы. До этого `DRILL_STATUS=OWNER_LOCAL_ACTION_REQUIRED`.
+
+
+---
+
+### Integrated container recovery rehearsal
+
+The Docker workflow stops the disposable app, runs the existing recovery bundle in a separate `--network none` container and verifies the migrated database and media/profile/settings markers in a new directory. Neither real data nor a production restore is involved. Keep the application stopped for a real backup; use separate encrypted offsite custody and a new isolated volume for restore. Existing runtime volumes must not be overwritten. Production RPO/RTO, key escrow and real-data drill remain owner gates.

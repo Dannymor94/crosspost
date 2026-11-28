@@ -516,3 +516,6 @@ T-517 first slice: install manifest, native prompt/manual instructions, safe pub
 
 
 T-301/T-302: Docker/HTTPS integrated into a draft VPS pilot candidate; live publication gate off, exact CI pending. No deployment approval.
+
+
+T-207/OPS: full offline recovery bundle source #47 integrated into VPS pilot #88. Synthetic container restore smoke added. Exact CI and owner real-data/offsite drill pending.
