@@ -462,8 +462,13 @@ async def test_initial_client_connection_validates_before_save(registration, mon
         account = await _login(c, "existing", "existing-password")
         pid = account["profile_id"]
         base = f"/api/profiles/{pid}/client-connection"
-        assert (await c.get(base + "/capabilities")).json()["channels"] == ["telegraph", "instagram"]
-        assert (await c.post(base + "/telegraph", json={"token": "synthetic-bad"})).status_code == 422
+        assert (await c.get(base + "/capabilities")).json()["channels"] == [
+            "telegraph",
+            "instagram",
+        ]
+        assert (
+            await c.post(base + "/telegraph", json={"token": "synthetic-bad"})
+        ).status_code == 422
         async with factory() as session:
             assert await session.scalar(select(Credential.id)) is None
             assert await session.scalar(select(Connection.id)) is None

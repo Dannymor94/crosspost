@@ -33,7 +33,9 @@ class ConnectBody(BaseModel):
 
 @router.get("/api/profiles/{profile_id}/client-connection/capabilities")
 async def capabilities(profile_id: int, actor: Actor) -> dict[str, list[str]]:
-    return {"channels": ["telegraph", "instagram"] if _enabled() and actor.role == Role.CLIENT else []}
+    return {
+        "channels": ["telegraph", "instagram"] if _enabled() and actor.role == Role.CLIENT else []
+    }
 
 
 @router.post("/api/profiles/{profile_id}/client-connection/{channel}")
