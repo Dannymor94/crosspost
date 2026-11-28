@@ -1,20 +1,26 @@
 """Роут авторизации: вход, выход, «кто я». Часть 1.
 
 Вход по login+паролю → подписанная httponly-кука с user_id (пароль в куке НЕ лежит).
-Регистрации/восстановления нет — аккаунты заводит админ (routes/users, CLI user-add).
+Вход, восстановление через владельца и ограничение попыток (T-406/T-409).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from crosspost.auth.passwords import hash_password, verify_password
-from crosspost.auth.sessions import sign_session, verify_recovery_token
+from crosspost.auth.sessions import sign_session, verify_recovery_token, verify_session_claims
 from crosspost.db.models import Role
-from crosspost.web.deps import SESSION_COOKIE, CurrentUser, UserRepoDep
+from crosspost.db.owner_mfa import consume_owner_factor
+from crosspost.web.auth_guard import limit_auth, production_mode, require_https
+from crosspost.web.csrf import issue_proof
+from crosspost.web.deps import SESSION_COOKIE, CurrentUser, SessionDep, UserRepoDep
+from crosspost.web.private_routes import PrivateRoute
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"], route_class=PrivateRoute)
 
 _SESSION_MAX_AGE = 30 * 24 * 3600  # 30 дней — совпадает с sessions._MAX_AGE
 
@@ -24,12 +30,13 @@ _DUMMY_HASH = hash_password("crosspost-dummy-constant")
 
 
 class LoginBody(BaseModel):
-    login: str
-    password: str
+    login: str = Field(max_length=1024)
+    password: str = Field(max_length=4096)
+    mfa_code: str = Field(default="", max_length=64)
 
 
 class RecoverBody(BaseModel):
-    token: str
+    token: str = Field(max_length=512)
     new_password: str = Field(min_length=12, max_length=256)
 
 
@@ -43,30 +50,51 @@ class MeOut(BaseModel):
 
 
 @router.post("/login", response_model=MeOut)
-async def login(body: LoginBody, response: Response, users: UserRepoDep) -> MeOut:
+async def login(
+    body: LoginBody, response: Response, users: UserRepoDep, session: SessionDep, request: Request
+) -> MeOut:
+    secure = require_https(request)
+    await limit_auth(request, session, "login", body.login.strip().casefold())
     user = await users.get_by_login(body.login.strip())
     # Всегда выполняем verify_password (по фиктивному хэшу, если юзера нет) —
     # постоянное время ответа, не раскрываем, какой логин существует.
     reference = user.password_hash if user is not None else _DUMMY_HASH
-    ok = verify_password(body.password, reference)
+    ok = await asyncio.to_thread(verify_password, body.password, reference)
     if user is None or not ok:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    if user.role == Role.ADMIN:
+        if user.mfa_secret is None:
+            if production_mode():
+                raise HTTPException(403, "Владелец должен настроить двухфакторный вход")
+        elif not await consume_owner_factor(
+            session, user.id, user.session_generation, user.password_hash, body.mfa_code
+        ):
+            raise HTTPException(401, "Неверный логин, пароль или код входа")
 
     response.set_cookie(
         SESSION_COOKIE,
         sign_session(user.id, generation=user.session_generation),
         max_age=_SESSION_MAX_AGE,
         httponly=True,  # JS не читает куку → токен не украсть XSS-ом
-        samesite="lax",
+        secure=secure,
+        samesite="strict" if production_mode() else "lax",
         path="/",
     )
     return MeOut.model_validate(user)
 
 
 @router.post("/recover")
-async def recover(body: RecoverBody, response: Response, users: UserRepoDep) -> dict[str, bool]:
+async def recover(
+    body: RecoverBody,
+    response: Response,
+    users: UserRepoDep,
+    session: SessionDep,
+    request: Request,
+) -> dict[str, bool]:
     """Клиент задаёт новый пароль по одноразовому токену, выданному владельцем."""
     response.headers["Cache-Control"] = "no-store"
+    await limit_auth(request, session, "recover", body.token)
     claims = verify_recovery_token(body.token)
     if claims is None:
         raise HTTPException(status_code=400, detail="Ссылка недействительна или устарела")
@@ -79,9 +107,27 @@ async def recover(body: RecoverBody, response: Response, users: UserRepoDep) -> 
 
 
 @router.post("/logout")
-async def logout(response: Response) -> dict[str, bool]:
-    response.delete_cookie(SESSION_COOKIE, path="/")
+async def logout(response: Response, request: Request, users: UserRepoDep) -> dict[str, bool]:
+    secure = require_https(request)
+    claims = verify_session_claims(request.cookies.get(SESSION_COOKIE, ""))
+    if claims is not None:
+        user_id, generation = claims
+        # Commit before acknowledging logout; invalid/stale cookies are cleared
+        # without touching a newer generation. Recovery tokens also become stale.
+        await users.revoke_sessions(user_id, generation=generation)
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="strict" if production_mode() else "lax",
+    )
     return {"ok": True}
+
+
+@router.get("/csrf")
+async def csrf(request: Request, response: Response) -> dict[str, str | bool]:
+    return issue_proof(request, response)
 
 
 @router.get("/me", response_model=MeOut)

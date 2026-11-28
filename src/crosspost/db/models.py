@@ -350,6 +350,10 @@ class User(Base):
     session_generation: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )  # повышается при recovery, отзывает все старые HMAC-cookie
+    mfa_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mfa_backup_hashes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_changed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     role: Mapped[Role] = mapped_column(String(16), default=Role.CLIENT, nullable=False)
     profile_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True
@@ -359,6 +363,52 @@ class User(Base):
     )
 
     profile: Mapped[Profile | None] = relationship("Profile")
+
+
+class OwnerMfaEvent(Base):
+    """Append-only local MFA enrollment/replacement evidence, without secrets."""
+
+    __tablename__ = "owner_mfa_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class AuthAttempt(Base):
+    """Bounded, pseudonymous authentication admission events (T-409)."""
+
+    __tablename__ = "auth_attempts"
+    __table_args__ = (
+        Index("ix_auth_attempts_family_time", "family", "occurred_at"),
+        Index("ix_auth_attempts_ip_time", "family", "ip_key", "occurred_at"),
+        Index("ix_auth_attempts_subject_time", "family", "subject_key", "occurred_at"),
+        Index("ix_auth_attempts_time", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    family: Mapped[str] = mapped_column(String(32), nullable=False)
+    ip_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ClientInvitation(Base):
+    """Single invitation slot for a newly created client profile (T-407)."""
+
+    __tablename__ = "client_invitations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("profiles.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    profile_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consumed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class Log(Base):

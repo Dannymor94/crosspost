@@ -21,6 +21,7 @@ from crosspost.db.scheduler_repo import SchedulerRepository
 from crosspost.ops.health import ErrorSpikeCache, SchedulerProgress
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
+from crosspost.web.csrf import CSRFMiddleware
 from crosspost.web.routes import (
     auth,
     calendar_actions,
@@ -30,10 +31,12 @@ from crosspost.web.routes import (
     health,
     history,
     import_plan,
+    invitations,
     profiles,
     public_media,
     publish,
     settings,
+    support,
     telegram_discovery,
     tg_login,
     tunnel_health,
@@ -152,9 +155,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Crosspost Admin", lifespan=lifespan)
+    app.add_middleware(CSRFMiddleware)
     app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(users.router)
+    app.include_router(invitations.router)
+    app.include_router(support.router)
     app.include_router(profiles.router)
     app.include_router(channels.router)
     app.include_router(telegram_discovery.router)
@@ -176,6 +182,21 @@ def create_app() -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def serve_spa() -> FileResponse:
             return FileResponse(_FRONTEND_DIR / "index.html")
+
+        @app.get("/account", include_in_schema=False)
+        async def serve_account() -> FileResponse:
+            return FileResponse(
+                _FRONTEND_DIR / "account.html",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; script-src 'self'; style-src 'self'; "
+                        "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+                        "base-uri 'none'"
+                    ),
+                },
+            )
 
         client_html = _FRONTEND_DIR / "client.html"
         if client_html.exists():

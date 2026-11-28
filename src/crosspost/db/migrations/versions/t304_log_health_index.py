@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "t304_log_health_index"
-down_revision = "t203_fencing"
+down_revision = "t406_session_generation"
 branch_labels = None
 depends_on = None
 

@@ -34,6 +34,16 @@ def _sign(payload: str) -> str:
     return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
 
 
+def csrf_token(nonce: str, session_cookie: str) -> str:
+    """Bind the CSRF proof to the exact browser nonce and session cookie."""
+    return _sign(f"csrf-v1:{nonce}:{session_cookie}")
+
+
+def rate_key(family: str, kind: str, value: str) -> str:
+    """Purpose-separated digest; do not persist raw IP, login or capability."""
+    return _sign(f"auth-rate-v1:{family}:{kind}:{value}")
+
+
 def sign_session(user_id: int, *, issued_at: int | None = None, generation: int = 0) -> str:
     """Подписать user_id и версию сессий; старый 3-польный формат = generation 0."""
     ts = int(issued_at if issued_at is not None else time.time())

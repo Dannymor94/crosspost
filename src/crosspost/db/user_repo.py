@@ -67,6 +67,20 @@ class UserRepository:
         result = await self._s.execute(select(func.count()).select_from(User))
         return int(result.scalar_one())
 
+    async def revoke_sessions(self, user_id: int, *, generation: int) -> bool:
+        """CAS: revoke this generation only; stale logout cannot revoke a fresh login."""
+        result = await self._s.execute(
+            update(User)
+            .where(User.id == user_id, User.session_generation == generation)
+            .values(session_generation=User.session_generation + 1)
+            .returning(User.id)
+        )
+        if result.scalar_one_or_none() is None:
+            await self._s.rollback()
+            return False
+        await self._s.commit()
+        return True
+
     async def recover_client_password(
         self, user_id: int, *, generation: int, new_password: str
     ) -> bool:
