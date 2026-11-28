@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -64,7 +65,7 @@ class SignInResult:
 class TelegramLoginSession:
     """Живое состояние одного флоу входа. Хранится в памяти сервера."""
 
-    profile_id: int
+    profile_id: int | str
     api_id: int
     api_hash: str
     target_channel: str
@@ -75,7 +76,7 @@ class TelegramLoginSession:
 
 
 # profile_id → активный флоу. Один вход на профиль в момент времени.
-_LOGIN_SESSIONS: dict[int, TelegramLoginSession] = {}
+_LOGIN_SESSIONS: dict[int | str, TelegramLoginSession] = {}
 
 
 def _build_client(api_id: int, api_hash: str) -> Any:
@@ -94,7 +95,7 @@ def _build_client_from_session(api_id: int, api_hash: str, session: str) -> Any:
     return TelegramClient(StringSession(session), api_id, api_hash)
 
 
-def _get_session(profile_id: int) -> TelegramLoginSession:
+def _get_session(profile_id: int | str) -> TelegramLoginSession:
     sess = _LOGIN_SESSIONS.get(profile_id)
     if sess is None:
         raise TelegramLoginError(
@@ -103,18 +104,18 @@ def _get_session(profile_id: int) -> TelegramLoginSession:
     return sess
 
 
-async def _discard(profile_id: int) -> None:
+async def _discard(profile_id: int | str) -> None:
     """Закрыть и удалить активный флоу профиля, если он есть."""
     sess = _LOGIN_SESSIONS.pop(profile_id, None)
     if sess is not None:
         try:
             await sess.client.disconnect()
         except Exception as exc:  # noqa: BLE001 — best-effort очистка
-            logger.debug("disconnect on discard failed: %s", exc)
+            logger.debug("disconnect on discard failed: %s", type(exc).__name__)
 
 
 async def begin(
-    profile_id: int,
+    profile_id: int | str,
     api_id: int,
     api_hash: str,
     target_channel: str,
@@ -133,8 +134,14 @@ async def begin(
     client = _build_client(api_id, api_hash)
     try:
         await client.connect()
-    except Exception as exc:
-        raise TelegramLoginError(f"Не удалось подключиться к Telegram: {exc}") from exc
+    except (Exception, asyncio.CancelledError) as exc:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise TelegramLoginError("Не удалось подключиться к Telegram") from None
 
     _LOGIN_SESSIONS[profile_id] = TelegramLoginSession(
         profile_id=profile_id,
@@ -146,7 +153,7 @@ async def begin(
     return "phone"
 
 
-async def request_code(profile_id: int, phone: str) -> str:
+async def request_code(profile_id: int | str, phone: str) -> str:
     """Шаг 2: отправить код на телефон. Возвращает следующий шаг ('code')."""
     if not phone:
         raise TelegramLoginError("Укажите номер телефона в международном формате (+7…).")
@@ -177,9 +184,9 @@ async def request_code(profile_id: int, phone: str) -> str:
             "там. Если его нет, закройте окно и начните вход заново через несколько минут."
         ) from exc
     except Exception as exc:  # noqa: BLE001 — не отдаём 500, показываем причину пользователю
-        logger.warning("telegram send_code failed: %s", exc)
+        logger.warning("telegram send_code failed: %s", type(exc).__name__)
         raise TelegramLoginError(
-            f"Не удалось отправить код: {exc}. Попробуйте начать вход заново чуть позже."
+            "Не удалось отправить код. Попробуйте начать вход заново чуть позже."
         ) from exc
 
     sess.phone = phone
@@ -189,7 +196,7 @@ async def request_code(profile_id: int, phone: str) -> str:
 
 
 async def submit_code(
-    profile_id: int,
+    profile_id: int | str,
     code: str | None = None,
     password: str | None = None,
 ) -> SignInResult:
@@ -223,8 +230,8 @@ async def submit_code(
         except TelegramLoginError:
             raise
         except Exception as exc:  # noqa: BLE001 — не 500, показываем причину
-            logger.warning("telegram sign_in(code) failed: %s", exc)
-            raise TelegramLoginError(f"Не удалось подтвердить код: {exc}") from exc
+            logger.warning("telegram sign_in(code) failed: %s", type(exc).__name__)
+            raise TelegramLoginError("Не удалось подтвердить код") from None
 
     # Шаг 2FA (если Telegram потребовал облачный пароль).
     if sess.awaiting_password:
@@ -235,14 +242,14 @@ async def submit_code(
         except PasswordHashInvalidError as exc:
             raise TelegramLoginError("Неверный облачный пароль (2FA).") from exc
         except Exception as exc:  # noqa: BLE001 — не 500, показываем причину
-            logger.warning("telegram sign_in(2fa) failed: %s", exc)
-            raise TelegramLoginError(f"Не удалось подтвердить пароль: {exc}") from exc
+            logger.warning("telegram sign_in(2fa) failed: %s", type(exc).__name__)
+            raise TelegramLoginError("Не удалось подтвердить пароль") from None
 
     return await _finalize(sess)
 
 
 async def import_session(
-    profile_id: int,
+    profile_id: int | str,
     *,
     api_id: int,
     api_hash: str,

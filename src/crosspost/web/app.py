@@ -27,6 +27,7 @@ from crosspost.web.routes import (
     calendar_actions,
     channels,
     client_connection,
+    client_telegram,
     drafts,
     errors,
     health,
@@ -151,6 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.scheduler_enabled = None
         app.state.health_factory = None
         app.state.health_error_cache = None
+        await client_telegram.close_all()
         await engine.dispose()
 
 
@@ -165,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(profiles.router)
     app.include_router(channels.router)
     app.include_router(client_connection.router)
+    app.include_router(client_telegram.router)
     app.include_router(telegram_discovery.router)
     app.include_router(tg_login.router)
     app.include_router(publish.router)

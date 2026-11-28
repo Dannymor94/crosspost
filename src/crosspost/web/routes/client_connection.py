@@ -15,6 +15,7 @@ from crosspost.db.models import Role, User
 from crosspost.web.auth_guard import limit_auth
 from crosspost.web.deps import RepoDep, SessionDep, require_profile_access
 from crosspost.web.private_routes import PrivateRoute
+from crosspost.web.routes import client_telegram
 
 router = APIRouter(tags=["client-connection"], route_class=PrivateRoute)
 Actor = Annotated[User, Depends(require_profile_access)]
@@ -33,9 +34,12 @@ class ConnectBody(BaseModel):
 
 @router.get("/api/profiles/{profile_id}/client-connection/capabilities")
 async def capabilities(profile_id: int, actor: Actor) -> dict[str, list[str]]:
-    return {
-        "channels": ["telegraph", "instagram"] if _enabled() and actor.role == Role.CLIENT else []
-    }
+    if actor.role != Role.CLIENT:
+        return {"channels": []}
+    channels = ["telegraph", "instagram"] if _enabled() else []
+    if client_telegram.enabled():
+        channels.append("telegram")
+    return {"channels": channels}
 
 
 @router.post("/api/profiles/{profile_id}/client-connection/{channel}")

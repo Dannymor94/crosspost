@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — T-515 client Telegram login (draft)
+
+- Isolated five-minute Telegram initial login wizard, scoped flow and final encrypted save, no blind retries. Legacy production client login denied. Flag off by default; live provider acceptance pending.
+
 ## Unreleased — T-517 installable Web app (draft)
 
 - Manifest and install controls for admin/client; network-first app navigation with public offline page only. No private API caching, background replay, push or real device acceptance. Feature off by default.
