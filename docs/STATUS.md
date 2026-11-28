@@ -310,3 +310,14 @@ Opt-in initial login with short-lived opaque flow, one per profile, bounded glob
 ## T-515 browser operator boundary (draft)
 
 Production legacy connection mutations are operator-only, including direct token save, Telegraph creation, validation/disconnect and browser login. Browser confirmation rejects foreign probe origins and lookalike cookie domains. Mobile self-service VK/Yandex remains blocked on provider/device evidence; see `docs/T-515-BROWSER-ONBOARDING.md`. No shared remote desktop exposed.
+
+
+**T-301 (PR #41, исходный QA PASS):** Docker/Compose для одного FastAPI/SQLite процесса, постоянные runtime/backups, loopback-порт, внешний ввод секретов. Исходные Docker smoke и CI успешны на eb277a0; интеграция с main 29fcc94 требует CI и проверки изменённой границы. VPS/HTTPS/живой браузерный вход и восстановление реальных данных ещё не подтверждены.
+
+**T-302 (PR #45, исходный QA PASS):** Caddy 2.11.9, HTTPS, фиксированная граница доверия proxy headers, безопасный public-media origin и санитизация логов. Исходные Docker/Caddy smoke и CI успешны на 31c372b. Стек актуализирован после T-301, но не объединён с main. DNS/ACME/Meta fetch, Secure-cookie T-409 и live smoke ожидаются.
+
+
+
+## Integrated VPS pilot candidate
+
+Docker/HTTPS source #45 integrated into latest UX/onboarding branch. Production auth forced in Compose; publication gate and scheduler off by default. No real deployment. CI pending, inherited Telegram/browser checks pending. Standalone source Docker/HTTPS PASS does not establish combined PASS.

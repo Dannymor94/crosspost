@@ -513,3 +513,6 @@ T-515 next slice: opt-in initial Telegraph/Instagram API connection implemented 
 
 
 T-517 first slice: install manifest, native prompt/manual instructions, safe public offline shell; device acceptance and release flag pending.
+
+
+T-301/T-302: Docker/HTTPS integrated into a draft VPS pilot candidate; live publication gate off, exact CI pending. No deployment approval.

@@ -1,17 +1,90 @@
-services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+# T-301 + T-302: one FastAPI worker behind a TLS-only public Caddy ingress.
+# Set required secrets in the server environment/secret manager, never in Git.
+name: crosspost
 
-  postgres:
-    image: postgres:16-alpine
+services:
+  app:
+    build: .
+    image: crosspost:local
+    init: true
+    restart: unless-stopped
+    # Do not expose unaudited admin routes on the public network before T-302/T-409.
+    ports:
+      - "127.0.0.1:${CROSSPOST_PORT:-8001}:8001"
     environment:
-      POSTGRES_USER: crosspost
-      POSTGRES_PASSWORD: crosspost
-      POSTGRES_DB: crosspost
-    ports: ["5432:5432"]
+      SESSION_SECRET: "${SESSION_SECRET:?Set SESSION_SECRET in the server environment}"
+      VAULT_KEY: "${VAULT_KEY:?Set VAULT_KEY in the server environment}"
+      MEDIA_URL_SECRET: "${MEDIA_URL_SECRET:?Set MEDIA_URL_SECRET in the server environment}"
+      DB_URL: "sqlite+aiosqlite:///runtime/db.sqlite3"
+      MEDIA_DIR: "runtime/media"
+      SCREENSHOT_DIR: "runtime/screenshots"
+      RUNTIME_SETTINGS_PATH: "runtime/settings.json"
+      BROWSER_PROFILES_DIR: "runtime/profiles"
+      # Safe defaults for an isolated pilot. Owner approval is required to enable sends.
+      CROSSPOST_AUTH_MODE: "production"
+      CROSSPOST_AUTH_ORIGIN: "https://${CROSSPOST_DOMAIN:?Set CROSSPOST_DOMAIN to a DNS hostname}"
+      CROSSPOST_LIVE_PUBLICATION_ENABLED: "${CROSSPOST_LIVE_PUBLICATION_ENABLED:-false}"
+      CLIENT_INVITATIONS_ENABLED: "${CLIENT_INVITATIONS_ENABLED:-false}"
+      CLIENT_API_CONNECTION_ENABLED: "${CLIENT_API_CONNECTION_ENABLED:-false}"
+      CLIENT_TELEGRAM_CONNECTION_ENABLED: "${CLIENT_TELEGRAM_CONNECTION_ENABLED:-false}"
+      CROSSPOST_PWA_ENABLED: "${CROSSPOST_PWA_ENABLED:-false}"
+      BROWSER_HEADLESS: "${BROWSER_HEADLESS:-true}"
+      SCHEDULER_ENABLED: "${SCHEDULER_ENABLED:-false}"
+      SCHEDULER_POLL_SECONDS: "${SCHEDULER_POLL_SECONDS:-30}"
+      SCHEDULER_PACING_SECONDS: "${SCHEDULER_PACING_SECONDS:-5}"
+      SCHEDULER_MAX_ATTEMPTS: "${SCHEDULER_MAX_ATTEMPTS:-3}"
+      HEALTH_CHECK_ENABLED: "${HEALTH_CHECK_ENABLED:-false}"
+      HEALTH_CHECK_POLL_SECONDS: "${HEALTH_CHECK_POLL_SECONDS:-300}"
+      # Derive the only media origin from the same required Caddy host.
+      INSTAGRAM_PUBLIC_BASE_URL: "https://${CROSSPOST_DOMAIN:?Set CROSSPOST_DOMAIN to a DNS hostname}"
+      # Uvicorn trusts forwarded scheme/IP only from the exact Caddy container.
+      FORWARDED_ALLOW_IPS: "${CROSSPOST_PROXY_IP:-172.30.92.2}"
+      INSTAGRAM_PROXY_URL: "${INSTAGRAM_PROXY_URL:-}"
+      VK_PROXY_URL: "${VK_PROXY_URL:-}"
+      YANDEX_PROXY_URL: "${YANDEX_PROXY_URL:-}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - crosspost_runtime:/app/runtime
+      - crosspost_backups:/app/backups
+    shm_size: "1gb"  # Chromium: avoid /dev/shm exhaustion.
+    stop_grace_period: 120s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      ingress:
+        # Reserve a separate address so the app never claims Caddy's .2 first.
+        ipv4_address: "${CROSSPOST_APP_IP:-172.30.92.3}"
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CROSSPOST_DOMAIN: "${CROSSPOST_DOMAIN:?Set CROSSPOST_DOMAIN to a DNS hostname}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      ingress:
+        ipv4_address: "${CROSSPOST_PROXY_IP:-172.30.92.2}"
 
 volumes:
-  pgdata:
+  crosspost_runtime: {}
+  crosspost_backups: {}
+  caddy_data: {}
+  caddy_config: {}
+
+networks:
+  ingress:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}"

@@ -1,0 +1,173 @@
+name: Docker deployment smoke
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - deploy/**
+      - .env.example
+      - .github/workflows/docker.yml
+      - tests/deployment/**
+      - src/**
+      - scripts/**
+      - pyproject.toml
+      - uv.lock
+
+jobs:
+  build-and-persist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate disposable smoke credentials
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import secrets
+
+          values = {
+              "VAULT_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+              "SESSION_SECRET": secrets.token_hex(32),
+              "MEDIA_URL_SECRET": secrets.token_hex(32),
+              "SCHEDULER_ENABLED": "false",
+              "CROSSPOST_LIVE_PUBLICATION_ENABLED": "false",
+              "CROSSPOST_PWA_ENABLED": "true",
+              "HEALTH_CHECK_ENABLED": "false",
+              # No public DNS or ACME needed. Caddy serves local TLS with its local CA.
+              "CROSSPOST_DOMAIN": "localhost",
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              for key, value in values.items():
+                  print(f"::add-mask::{value}")
+                  out.write(f"{key}={value}\n")
+          PY
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Validate Caddy TLS reverse proxy configuration offline
+        run: docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Build Python and Chromium image
+        run: docker compose build --pull
+
+      - name: Start without external channels
+        run: docker compose up -d --no-build
+
+      - name: Verify HTTP redirects to HTTPS and HTTPS proxies client UI
+        run: |
+          ok=0
+          for _ in $(seq 1 45); do
+            redirect=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 3 http://localhost/ || true)
+            if [ "$redirect" = "308" ] && curl --silent --show-error --fail --insecure --max-time 3 https://localhost/client -o /dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then
+            docker compose ps
+            docker compose logs --tail=100 caddy
+            exit 1
+          fi
+
+      - name: Verify production authentication, PWA and disabled live publication
+        run: |
+          curl --silent --show-error --fail --insecure https://localhost/pwa/config | python3 -c 'import json,sys; assert json.load(sys.stdin)=={"enabled": True}'
+          curl --silent --show-error --fail --insecure https://localhost/api/auth/csrf -D /tmp/crosspost-csrf-headers -o /tmp/crosspost-csrf-body
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          headers = Path("/tmp/crosspost-csrf-headers").read_text().lower()
+          assert "__host-crosspost_csrf=" in headers and "secure" in headers and "httponly" in headers
+          assert json.loads(Path("/tmp/crosspost-csrf-body").read_text())["enabled"] is True
+          PY
+          code=$(curl --silent --insecure -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' https://localhost/api/auth/login)
+          test "$code" = 403
+          docker compose exec -T app python -c 'from crosspost.web.live_gate import live_publication_enabled; assert not live_publication_enabled()'
+          rm -f /tmp/crosspost-csrf-headers /tmp/crosspost-csrf-body
+
+      - name: Verify application and persistent SQLite
+        run: |
+          ok=0
+          for _ in $(seq 1 45); do
+            if curl --silent --show-error --fail http://127.0.0.1:8001/ -o /dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then
+            docker compose logs --tail=150 app
+            exit 1
+          fi
+          docker compose exec -T app python -c 'import sqlite3; db = sqlite3.connect("runtime/db.sqlite3"); assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",); assert db.execute("select name from sqlite_master where type=\x27table\x27 and name=\x27profiles\x27").fetchone()'
+          docker compose exec -T app python - <<'PY'
+          from pathlib import Path
+
+          markers = {
+              "/app/backups/.t301-backup-marker": "backup-v1",
+              "/app/runtime/media/.t301-media-marker": "media-v1",
+              "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
+              "/app/runtime/settings.json": '{"t301_smoke": true}',
+          }
+          for name, content in markers.items():
+              path = Path(name)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content, encoding="utf-8")
+          PY
+
+      - name: Preserve both volumes across recreation
+        run: |
+          docker compose down
+          docker compose up -d --no-build
+          docker compose exec -T app python - <<'PY'
+          from pathlib import Path
+
+          markers = {
+              "/app/backups/.t301-backup-marker": "backup-v1",
+              "/app/runtime/media/.t301-media-marker": "media-v1",
+              "/app/runtime/profiles/.t301-profile-marker": "profile-v1",
+              "/app/runtime/settings.json": '{"t301_smoke": true}',
+          }
+          for name, content in markers.items():
+              assert Path(name).read_text(encoding="utf-8") == content, name
+          PY
+          docker compose exec -T app test -f /app/runtime/db.sqlite3
+          docker compose exec -T app python -c 'import sys; assert sys.version_info[:2] == (3, 13)'
+
+      - name: Reject proxy error-log disclosure of signed URL and headers
+        run: |
+          # Disposable sentinel only: never put a real signed media token in CI.
+          docker compose stop app
+          code=$(curl --silent --show-error --insecure --output /dev/null \
+            --write-out '%{http_code}' --max-time 10 \
+            -H 'Authorization: Bearer QA_FAKE_HEADER_NEVER_LOG' \
+            'https://localhost/public-media/QA_FAKE_BEARER_DO_NOT_LOG')
+          if [ "$code" != 502 ]; then
+            echo "Expected 502 from intentionally stopped app; got $code"
+            exit 1
+          fi
+          docker compose logs --no-color caddy > /tmp/crosspost-caddy-runtime.log
+          if grep -F -e QA_FAKE_BEARER_DO_NOT_LOG \
+            -e QA_FAKE_HEADER_NEVER_LOG /tmp/crosspost-caddy-runtime.log; then
+            echo 'Caddy runtime error logs contain disposable request secret!'
+            exit 1
+          fi
+          # Do not accidentally pass if the reverse-proxy error was not logged.
+          if ! grep -F 'http.log.error' /tmp/crosspost-caddy-runtime.log; then
+            echo 'Expected Caddy runtime proxy error was not observed'
+            exit 1
+          fi
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --tail=150 app caddy
+
+      - name: Stop test services without deleting persistent volumes
+        if: always()
+        run: docker compose down

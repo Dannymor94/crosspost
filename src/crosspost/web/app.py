@@ -22,6 +22,7 @@ from crosspost.ops.health import ErrorSpikeCache, SchedulerProgress
 from crosspost.scheduler.executor import ScheduledExecutor
 from crosspost.web import deps
 from crosspost.web.csrf import CSRFMiddleware
+from crosspost.web.live_gate import live_publication_enabled
 from crosspost.web.routes import (
     auth,
     calendar_actions,
@@ -116,7 +117,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Исполнитель расписания: фоновый демон публикует созревшие посты сам.
     # Выключается флагом SCHEDULER_ENABLED=false (напр. в тестах/CLI).
     scheduler_task: asyncio.Task | None = None
-    scheduler_enabled = parse_bool(os.environ.get("SCHEDULER_ENABLED", "true"))
+    scheduler_enabled = live_publication_enabled() and parse_bool(
+        os.environ.get("SCHEDULER_ENABLED", "true")
+    )
     app.state.scheduler_enabled = scheduler_enabled
     app.state.scheduler_task = None
     app.state.scheduler_progress = None

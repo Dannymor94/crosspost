@@ -16,8 +16,8 @@ Resumable upload (rupload.facebook.com) требует Facebook Login for Busine
         Authorization: Bearer <token>
         -> {"id": media_id}   ← квитанция об успехе (external_id)
 
-video_url — публично доступный URL файла. Приложение монтирует /media как static,
-INSTAGRAM_PUBLIC_BASE_URL задаёт публичный корень (например https://my-host.com).
+video_url — публичный временный подписанный /public-media/{token}, не открытая /media.
+INSTAGRAM_PUBLIC_BASE_URL задаёт HTTPS origin (например https://my-host.com).
 Без INSTAGRAM_PUBLIC_BASE_URL Instagram-публикации завершатся с явной ошибкой.
 
 Идемпотентность: контейнер создаётся один раз, id сохраняется в store ДО публикации.
@@ -32,8 +32,9 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -87,20 +88,61 @@ def _is_local_host(host: str) -> bool:
 
 
 def _public_base_url() -> str:
-    """Read and validate public base URL. Raises InstagramError when missing or local.
+    """Validate an external HTTPS origin before publishing a signed media link.
 
     Reads from tunnel.state (updated at runtime by auto-restart) instead of os.environ
     directly, so a restarted tunnel's new URL takes effect without a server restart.
     """
     from crosspost.tunnel import state as _tstate  # noqa: PLC0415
 
-    val = _tstate.get_public_base_url().rstrip("/")
+    val = _tstate.get_public_base_url()
     if not val:
         raise InstagramError(_ERR_LOCAL_URL)
-    host = urlparse(val).hostname or ""
-    if _is_local_host(host):
+    try:
+        parsed = urlsplit(val)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        raise InstagramError(_ERR_LOCAL_URL) from None
+    # A public origin cannot include credentials, media paths, query strings,
+    # fragments, malformed ports, ambiguous separators or non-HTTPS schemes.
+    if (
+        parsed.scheme != "https"
+        or not host
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        # urlsplit() returns empty strings for bare delimiters, yet they make
+        # the appended media path a query/fragment instead of a URL path.
+        or "?" in val
+        or "#" in val
+        or (port is not None and not 1 <= port <= 65535)
+        or any(char in val for char in ("\\", "%", "\r", "\n", "\t", " "))
+        or _is_local_host(host)
+    ):
         raise InstagramError(_ERR_LOCAL_URL)
-    return val
+    # RFC 1123 hostname labels or globally routable literal IPv4/IPv6 only.
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        if not (
+            "." in host
+            and len(host) <= 253
+            and all(
+                re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", part)
+                for part in host.split(".")
+            )
+        ):
+            raise InstagramError(_ERR_LOCAL_URL) from None
+        if host.lower().endswith((".local", ".localhost", ".internal", ".invalid")):
+            raise InstagramError(_ERR_LOCAL_URL) from None
+    else:
+        if not addr.is_global:
+            raise InstagramError(_ERR_LOCAL_URL)
+    return val.rstrip("/")
 
 
 # status_code значения опроса контейнера.

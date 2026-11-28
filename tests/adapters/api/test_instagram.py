@@ -26,6 +26,8 @@ import pytest
 
 from crosspost.adapters.api.instagram import (
     InstagramAdapter,
+    InstagramError,
+    _public_base_url,
     _validate_reel_file,
 )
 from crosspost.adapters.base import ResultStatus
@@ -484,6 +486,47 @@ async def test_private_ip_base_url_fails_before_any_api_call(tmp_path, monkeypat
     assert result.status is ResultStatus.FAILED
     assert "локального" in result.error
     assert http.create_calls == 0
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://example.org",
+        "http://example.org:443",
+        "https://localhost",
+        "https://127.0.0.1",
+        "https://192.168.1.10",
+        "https://user:password@example.org",
+        "https://example.org/path",
+        "https://example.org/?query=1",
+        "https://example.org/#fragment",
+        "https://example.org?",
+        "https://example.org#",
+        "https://example.org/?",
+        "https://example.org/#",
+        "https://example.org:invalid",
+        "https://example.org:0",
+        "https://example.org:65536",
+        "ftp://example.org",
+        "//example.org",
+        "https:///missing-host",
+        "https://example.org\\evil",
+        "https://example.org%0aattacker.com",
+    ],
+)
+def test_public_base_rejects_noncanonical_origin(monkeypatch, bad_url: str) -> None:
+    monkeypatch.setenv("INSTAGRAM_PUBLIC_BASE_URL", bad_url)
+    with pytest.raises(InstagramError):
+        _public_base_url()
+
+
+@pytest.mark.parametrize(
+    "valid_url",
+    ["https://example.org", "https://example.org:8443", "https://dev-123.lhr.life"],
+)
+def test_public_base_accepts_public_https_origin(monkeypatch, valid_url: str) -> None:
+    monkeypatch.setenv("INSTAGRAM_PUBLIC_BASE_URL", valid_url)
+    assert _public_base_url() == valid_url
 
 
 @pytest.mark.asyncio

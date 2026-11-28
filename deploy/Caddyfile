@@ -1,0 +1,27 @@
+# Only this owner-controlled DNS name is served. The explicit https:// scheme
+# makes an accidentally configured http:// domain fail, rather than disable TLS.
+# Caddy automatically obtains/renews TLS certificates and redirects :80 -> :443.
+# Do not enable site access logging: signed /public-media/{token} is a bearer URL.
+# Proxy failures also emit http.log.error entries containing request.uri unless
+# the GLOBAL runtime logger removes the entire request object. Keep error
+# status/trace/message for diagnosis while excluding request URI and headers.
+# No static file service or media filesystem mounts; all routing stays in FastAPI.
+{
+    log default {
+        output stderr
+        format filter {
+            fields {
+                request delete
+                request_uri delete
+                uri delete
+                headers delete
+                resp_headers delete
+            }
+            wrap json
+        }
+    }
+}
+
+https://{$CROSSPOST_DOMAIN} {
+    reverse_proxy app:8001
+}
