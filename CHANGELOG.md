@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-11-28 — T-409 fresh MFA step-up and enrollment audit (draft)
+
+- Invitation issue/renew/revoke and recovery issuance recheck password and consume a fresh factor in the business writer transaction; failures roll back factor consumption. Owner enrollment/replacement persists a secret-free event atomically with the generation change.
+- Remaining sensitive settings, external operations and integrated UI retain their own release gates.
+
+## 2026-11-28 — T-409 local owner MFA enrollment (draft)
+
+- Encrypted TOTP secret and hashed one-use backup codes; local interactive enrollment or replacement revokes prior sessions. Enrolled owners require a factor at login, unenrolled production owners are denied.
+- Serialized TOTP/backup consumption; legacy login UI accepts a code. Fresh MFA step-up for sensitive actions, durable full operator audit and new UX integration remain release blockers.
+
+## 2026-11-28 — T-409 server-side logout (draft)
+
+- Logout advances the authenticated generation atomically before clearing the cookie; stale logout cannot invalidate a newer generation. All devices of that account and outstanding recovery tokens are invalidated; unrelated accounts unaffected.
+- Legacy browser pages retain authenticated state on logout request failure and offer retry. In-flight protected mutation fences, MFA, integrated UX and rollout remain open.
+
+## 2026-11-27 — T-409 CSRF (draft)
+
+- Same-origin proof endpoint, HttpOnly browser nonce and session-bound HMAC; all unsafe HTTP methods checked before handler. Explicit production HTTPS origin; cross-site and sibling-origin requests refused.
+- Shared browser helper for current admin/client/account pages, including XHR media upload. No automatic replay. New UX stack integration and browser acceptance remain pending.
+
+## 2026-11-27 — T-409 authentication admission and cookie policy (draft)
+
+- Persistent admission before password verification: IP 5/15 min, subject 20/hour, family 300/15 min; no raw IP/login/token stored. Successful attempts count too. Production mode requires HTTPS and rate limiting; HTTPS always uses Secure cookie.
+- Credential route validation returns generic errors without input echo. CSRF, server-side logout and MFA are still release blockers.
+
+## 2026-11-27 — T-408 owner support card (draft)
+
+- Явный выбор профиля, серверная admin-only карточка, запись просмотра с actor/profile до ответа.
+- Сохранённые подключения, аккаунты, модерация, счётчики расписания и 10 наблюдаемых результатов; без секретов, impersonation или мутаций настроек. Полный аудит support-изменений остаётся отдельной задачей.
+
+## 2026-11-27 — T-407 owner invitations (draft)
+
+- Новый профиль и приглашение создаются атомарно; хранится только SHA-256 токена, 24 часа, ротация/отзыв. Погашение и создание CLIENT в одной транзакции.
+- Отдельная мобильная страница регистрации/восстановления и выдачи владельцем; токен в URL fragment, не HTTP query. По умолчанию регистрация выключена до T-409 и допуска.
+
+
 ## 2026-11-27 — T-402 in-app publication attention (draft)
 
 - Недавние зафиксированные отказы, неподтверждённые результаты, необходимость повторного входа и другие предупреждения видны на главной клиента; переход в историю без мутаций.

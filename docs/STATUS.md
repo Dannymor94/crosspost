@@ -281,3 +281,12 @@ Existing scoped history text may be offered to an empty editor through an explic
 ## T-401 client help UI (draft)
 
 Client-facing complement to the operator runbook #49: in-app step-by-step help with live navigation to connections, editor, calendar and history; explicit moderation, unknown-result and recovery cautions. Login accessible labels and current admin-created account instructions. No registration/recovery endpoint or external notification invented. T-406/T-410 and owner onboarding gate remain open. CI pending.
+
+
+## UX + security validation candidate (2026-11-28)
+
+- **T-409 (draft, first slice).** SQLite admission per trusted ASGI peer, pseudonymous subject and global family budget; login/recovery/registration/owner step-up. Production mode requires HTTPS and Secure/HttpOnly/Strict cookie; validation no longer echoes sensitive input. Signed browser/session-bound CSRF draft covers all unsafe methods, including login and logout. Logout now CAS-revokes all devices of the same account, including outstanding recovery tokens. Local owner MFA enrollment, encrypted state, atomic TOTP/backup consumption and production fail-closed login are drafted. Invitation/recovery issue and rotation require fresh owner factor in the same writer transaction; enrollment/replacement events persist atomically. In-flight operation fences on other routes, remaining sensitive settings, GET side-effect audit, new UX integration and deploy wiring remain open.
+- **T-408 (draft, read-only first slice).** Карточка выбранного профиля владельца, логины, сохранённые подключения, модерация, счётчики расписания и 10 результатов. Явное открытие записывается с actor/profile; никакого impersonation. Аудит изменений и защищённые support-мутации остаются открытыми.
+- **T-407 (draft).** Владелец создаёт новый профиль с одноразовым приглашением; клиент задаёт логин и пароль. Ветка поверх T-304, включение только в изолированных тестах. Не допущено к production; существующие профили не переиспользуются.
+
+Combined draft preserves UX and security chains. CI pending, no merge or deployment. Main remains 29fcc94 (T-406 merged). New migration merge marker is validation-only. Live browser, real device, external platforms, independent QA and owner approval remain gates.
