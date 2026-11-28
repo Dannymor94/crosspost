@@ -88,7 +88,7 @@ jobs:
           PY
           code=$(curl --silent --insecure -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' https://localhost/api/auth/login)
           test "$code" = 403
-          docker compose exec -T app python -c 'from crosspost.web.live_gate import live_publication_enabled; assert not live_publication_enabled()'
+          docker compose exec -T app /app/.venv/bin/python -c 'from crosspost.web.live_gate import live_publication_enabled; assert not live_publication_enabled()'
           rm -f /tmp/crosspost-csrf-headers /tmp/crosspost-csrf-body
 
       - name: Verify application and persistent SQLite
