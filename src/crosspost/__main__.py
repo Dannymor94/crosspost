@@ -315,6 +315,45 @@ async def _run_user_add(login: str, role: str, profile_id: int | None, password:
         await engine.dispose()
 
 
+async def _run_owner_mfa_enroll(login: str) -> int:
+    """Privileged local operator ceremony; never run through CI or recorded terminal."""
+    import getpass
+    import sys
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from crosspost.auth.totp import generate_secret
+    from crosspost.db.engine import create_engine_and_tables
+    from crosspost.db.owner_mfa import enroll_owner
+
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("MFA: требуется приватный интерактивный терминал")
+        return 1
+    print("Настройка заменяет прежний аутентификатор и отзывает все сеансы владельца.")
+    if input("Введите ENROLL для подтверждения: ") != "ENROLL":
+        return 1
+    password = getpass.getpass("Текущий пароль владельца: ")
+    secret = generate_secret()
+    print("Добавьте в аутентификатор вручную: TOTP, SHA1, 6 цифр, 30 секунд.")
+    print("Ключ (не копируйте в чат или журнал):", secret)
+    code = getpass.getpass("Код из приложения: ").strip()
+    load_config()
+    engine = await create_engine_and_tables()
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            codes = await enroll_owner(session, login.strip(), password, secret, code)
+        if codes is None:
+            print("MFA: настройка не выполнена, проверьте пароль и код")
+            return 1
+        print("Сохраните одноразовые резервные коды в приватном хранилище:")
+        for value in codes:
+            print(value)
+        print("MFA активирована. Войдите заново со следующим кодом.")
+        return 0
+    finally:
+        await engine.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="crosspost")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -354,6 +393,9 @@ def main(argv: list[str] | None = None) -> int:
         "--password", default=None, help="пароль (иначе env CROSSPOST_PASSWORD или запрос)"
     )
 
+    mfa = sub.add_parser("user-mfa-enroll", help="локальная настройка MFA владельца")
+    mfa.add_argument("--login", required=True, help="логин владельца")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "tg-session":
@@ -362,6 +404,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "login":
         cfg = load_config()
         return asyncio.run(_run_login(args.channel, cfg))
+
+    if args.cmd == "user-mfa-enroll":
+        return asyncio.run(_run_owner_mfa_enroll(args.login))
 
     if args.cmd == "user-add":
         return asyncio.run(_run_user_add(args.login, args.role, args.profile_id, args.password))

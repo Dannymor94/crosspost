@@ -22,7 +22,7 @@
       headers["Content-Type"] = "application/json";
       options.body = JSON.stringify(body);
     }
-    const response = await fetch(base + "/editor-draft", options);
+    const response = await (window.CrosspostRequest?.fetch || fetch)(base + "/editor-draft", options);
     if (!response.ok) {
       const e = new Error("Черновик не сохранён.");
       e.status = response.status;

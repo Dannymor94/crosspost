@@ -73,6 +73,8 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
+        if parsed.hostname == "localhost" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            assert request.headers.get("x-csrf-token") == "a" * 64
         if parsed.hostname != "localhost":
             route.abort()
         elif path == "/":
@@ -85,6 +87,8 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             asset = FRONTEND / path.removeprefix("/static/")
             mime = "text/css" if asset.suffix == ".css" else "application/javascript"
             route.fulfill(path=asset, content_type=mime)
+        elif path == "/api/auth/csrf":
+            route.fulfill(json={"enabled": True, "token": "a" * 64})
         elif path == "/api/auth/me":
             actor = {"id": 2, "login": "test-admin", "role": "admin", "profile_id": None}
             route.fulfill(json=actor)

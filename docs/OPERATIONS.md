@@ -332,3 +332,41 @@ exactly-once: повтор возможен, если сообщение при�
 
 До успешного drill внешние аварийные уведомления считаются **непроверенными**;
 одни зелёные тесты PR не означают production-ready.
+
+
+## T-407 — приглашения (draft, не включать публично)
+
+На изолированном тестовом экземпляре после миграции T-304/T-407 установить
+`CLIENT_INVITATIONS_ENABLED=true`. Владелец открывает `/account#owner`,
+подтверждает свой пароль и создаёт новый уникальный профиль. Передаёт клиенту
+одноразовую ссылку только приватным согласованным способом. Ссылка живёт 24 часа;
+при перевыпуске старая перестаёт действовать. Клиент сам выбирает логин и пароль
+от 12 символов, затем входит обычным способом. Не пересылать токены в GitHub,
+логи или групповые чаты. Восстановление существующего клиента — через отдельную
+форму владельца с 15-минутным токеном T-406. Не открывать регистрацию публично
+до T-409, независимого QA, фактического main CI и разрешения владельца.
+
+
+## T-409 authentication admission (draft)
+
+`CROSSPOST_AUTH_MODE=production` requires trusted HTTPS for login and sensitive account routes and enables persistent admission unconditionally. Only Uvicorn's explicitly trusted Caddy proxy may resolve client IP; never trust raw forwarded headers. Production Compose wiring and end-to-end TLS are pending. Development defaults to HTTP compatibility; set `CROSSPOST_AUTH_RATE_LIMIT=true` to exercise admission on isolated tests. Separate budgets per login, register, recover, and shared owner step-up family: 5 requests/15 min per peer, 20/hour per normalized subject, 300/15 min per family. All admitted attempts (including successful ones) count to prevent concurrent reservation bypass; this is intentionally conservative and may throttle shared NAT or a targeted login. A blocked request does not invoke password verification; retry-after is conservative. Old rows are pruned on admission; keys are purpose-separated HMAC digests, no raw IP, password, login or token. SQLite write failure denies the operation. Do not enable public onboarding until CSRF, logout revocation, MFA, independent review and actual-main CI pass.
+
+
+## T-409 CSRF (draft)
+
+Production requires an explicit canonical `CROSSPOST_AUTH_ORIGIN=https://<domain>` and always checks a signed proof for all unsafe HTTP methods, even anonymous login, recovery, registration and logout. The proof endpoint is same-origin and no-store, tied to an HttpOnly host-only nonce and the exact session cookie. HTTPS uses a `__Host-` nonce; the proof is not persisted by JavaScript. API consumers must fetch the proof with their cookie jar and send `X-CSRF-Token`; never auto-retry a failed mutation. Development opt-in: `CROSSPOST_CSRF_ENABLED=true`. No permissive CORS. Origin/Referer, if present, must equal the configured origin; Sec-Fetch-Site cross-site/same-site is denied. Existing GET handlers with lazy writes or external effects need separate review. Deployment wiring, newer UX stack, real browser acceptance, logout revocation and MFA remain release blockers.
+
+
+### Server-side logout (draft)
+
+Logout revokes all devices for that account using the existing session generation CAS. Previously issued recovery links for that generation become invalid; the owner can issue a fresh link. Stale/invalid cookies are cleared without incrementing a newer generation. A failed logout request must not be presented as confirmed server revocation. Already admitted or in-flight operations are not cancelled by this slice; their admission fences are a separate rollout gate.
+
+
+### Owner MFA bootstrap (draft)
+
+Before enabling production mode, the owner uses a private, unrecorded interactive server terminal: `python -m crosspost user-mfa-enroll --login <owner-login>`. Never run this in GitHub Actions, a shared screen, a captured shell, or an agent log. Confirm ENROLL, enter the current password, manually add the generated TOTP key to an authenticator (SHA1, six digits, 30 seconds), and confirm its code. Save eight backup codes offline; they are shown once. Enrollment/replacement revokes all old sessions. An owner with a lost device may use a backup code; authorized host access plus the current password permits re-enrollment, replacing all codes. Production will not allow an unenrolled owner normal login or access using an older cookie. This is a draft operator path, not approval to enable production. Fresh MFA step-up, durable replacement event history, recovery drill, integrated UI and independent QA remain mandatory.
+
+
+### Fresh owner MFA confirmation (draft)
+
+Issuing/replacing/revoking invitations and issuing recovery links requires the owner password plus a new TOTP or unused backup code once enrolled. Wait for the next authenticator code after login or use a backup code. Factor consumption and the business operation share the SQLite writer transaction; a failed action does not consume the factor. Local enrollment/replacement writes a persistent `owner_mfa_events` entry without secrets. Other privileged mutations still require a separately defined step-up/audit policy before release.

@@ -188,3 +188,20 @@ Reuse existing authorized history text only, not a new saved template store or m
 ### T-401 client help (draft)
 
 Complement #49 operator runbook without duplicating it. Show only current available flows and no fabricated contact link, invitation or credential collection. Navigation uses existing dirty-draft guards; public login instructions are static, not an auth feature.
+
+
+## 2026-11-28 — T-409 all-device logout (draft)
+
+MVP logout uses the T-406 generation CAS, not a second revocation ledger. An acknowledged logout invalidates that account's current generation on every device and any outstanding recovery token. Replayed stale logout cannot advance the new generation. This does not cancel already admitted operations. Independent QA and final integration remain required.
+
+## 2026-11-27 — T-407 invitation first delivery candidate
+
+Only a newly created unique profile may be invited; no adoption of existing profiles in this slice.
+A single slot per profile stores a SHA-256 digest of 32 random bytes encoded URL-safe,
+expiry (24h) and consumption; replacement/revocation invalidates the previous capability.
+Issue and redeem use one writer transaction including the audit event. The API binds CLIENT and
+profile server-side. Legacy administrator/CLI account creation remains operator-only; if an account
+already exists for the invitation profile, redemption refuses. No global legacy profile uniqueness
+change. The migration is stacked after T-304; not approved for release. Default-disabled feature flag
+until T-409, independent QA and owner onboarding approval. Links use fragments, never query strings.
+

@@ -47,7 +47,7 @@
       if(!Number.isSafeInteger(pid)||pid<=0)return;
       const controller=new AbortController();
       setResult({pid,attempt,kind:"loading"});
-      fetch("/api/profiles/"+pid+"/history?limit=20",{credentials:"same-origin",cache:"no-store",signal:controller.signal})
+      (window.CrosspostRequest?.fetch || fetch)("/api/profiles/"+pid+"/history?limit=20",{credentials:"same-origin",cache:"no-store",signal:controller.signal})
         .then(r=>{if(!r.ok)throw Error("Read failed");return r.json();})
         .then(data=>{if(!controller.signal.aborted)setResult({pid,attempt,kind:"ready",items:attention(data)});})
         .catch(()=>{if(!controller.signal.aborted)setResult({pid,attempt,kind:"error"});});
@@ -73,7 +73,7 @@
           const options={credentials:"same-origin",cache:"no-store",signal:controller.signal};
           if(filtered) Object.assign(options,{method:"POST",headers:{"Content-Type":"application/json"},
             body:JSON.stringify({source:filter,query:activeQuery,limit:20,before:cursor||null})});
-          const response=await fetch(url,options);
+          const response=await (window.CrosspostRequest?.fetch || fetch)(url,options);
           if(!response.ok) throw Error("Read failed");
           const data=validate(await response.json());
           if(controller.signal.aborted) return;

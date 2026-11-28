@@ -16,12 +16,16 @@ from crosspost.db.models import Base
 
 def test_rehearsal_has_single_head_and_preserves_original_parents():
     script = ScriptDirectory.from_config(migration_config())
-    assert script.get_heads() == ["t304_ux_auth_merge"]
+    assert script.get_heads() == ["t409_ux_security_merge"]
+    assert script.get_revision("t409_ux_security_merge").down_revision == (
+        "t304_ux_auth_merge",
+        "t409_mfa_audit",
+    )
     assert script.get_revision("t304_ux_auth_merge").down_revision == (
         "t406_ux_merge",
         "t304_log_health_index",
     )
-    assert script.get_revision("t304_log_health_index").down_revision == "t203_fencing"
+    assert script.get_revision("t304_log_health_index").down_revision == "t406_session_generation"
     assert script.get_revision("t406_ux_merge").down_revision == (
         "t406_session_generation",
         "t218_editor_draft",
@@ -38,6 +42,9 @@ def test_rehearsal_has_single_head_and_preserves_original_parents():
         "t218_editor_draft",
         "t406_ux_merge",
         "t304_log_health_index",
+        "t304_ux_auth_merge",
+        "t407_client_invitations",
+        "t409_mfa_audit",
     ],
 )
 async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
@@ -78,7 +85,7 @@ async def test_auth_ux_upgrade_preserves_existing_state(tmp_path, start):
         try:
             async with engine.connect() as conn:
                 assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == (
-                    "t304_ux_auth_merge"
+                    "t409_ux_security_merge"
                 )
                 assert (
                     await conn.run_sync(

@@ -329,6 +329,7 @@ textarea { resize: vertical; min-height: 110px; }
 </style>
 <link rel="stylesheet" href="/static/styles/ux-system.css">
 <link rel="stylesheet" href="/static/styles/ux-live.css">
+<script src="/static/csrf.js"></script>
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
 <script src="/static/shared/ux-navigation.js"></script>
@@ -355,15 +356,15 @@ const html = htm.bind(preact.h);
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 const api = {
-  get: (url) => fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
-  post: (url, body) => fetch(url, {
+  get: (url) => window.CrosspostRequest.fetch(url, { credentials: 'include' }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+  post: (url, body) => window.CrosspostRequest.fetch(url, {
     method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }),
-  postForm: (url, fd, headers) => fetch(url, { method: 'POST', credentials: 'include', body: fd, headers }),
-  del: (url) => fetch(url, { method: 'DELETE', credentials: 'include' }),
-  patch: (url, body, extraHeaders = {}) => fetch(url, {
+  postForm: (url, fd, headers) => window.CrosspostRequest.fetch(url, { method: 'POST', credentials: 'include', body: fd, headers }),
+  del: (url) => window.CrosspostRequest.fetch(url, { method: 'DELETE', credentials: 'include' }),
+  patch: (url, body, extraHeaders = {}) => window.CrosspostRequest.fetch(url, {
     method: 'PATCH', credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify(body)
@@ -380,6 +381,7 @@ function fmtDate(iso) {
 function LoginView({ onLogin }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -388,8 +390,8 @@ function LoginView({ onLogin }) {
     if (busy) return;
     setBusy(true); setErr('');
     try {
-      const r = await api.post('/api/auth/login', { login, password });
-      if (r.status === 401) { setErr('Неверный логин или пароль'); return; }
+      const r = await api.post('/api/auth/login', { login, password, mfa_code: mfaCode.trim() });
+      if (r.status === 401) { setErr('Неверный логин, пароль или код входа'); return; }
       if (!r.ok) { setErr('Что-то пошло не так. Попробуйте ещё раз.'); return; }
       const user = await r.json();
       if (user.role === 'admin') { window.location = '/'; return; }
@@ -411,12 +413,17 @@ function LoginView({ onLogin }) {
             <label class="label" for="client-password">Пароль</label>
             <input id="client-password" type="password" value=${password} onInput=${e => setPassword(e.target.value)} autocomplete="current-password" required />
           </div>
+          <div class="field">
+            <label class="label" for="client-mfa">Код владельца (если настроен)</label>
+            <input id="client-mfa" type="password" value=${mfaCode} onInput=${e => setMfaCode(e.target.value)} autocomplete="one-time-code" />
+          </div>
           ${err && html`<div class="error-msg">${err}</div>`}
           <button type="submit" class="btn btn-primary" disabled=${busy}>
             ${busy ? html`<span class="spinner"></span>` : null}
             Войти
           </button>
         </form>
+        <p><a href="/account">Приглашение или восстановление доступа</a></p>
         <p class="cp-muted">Аккаунт создаёт администратор. Если не можете войти, обратитесь к нему по согласованному контакту. Не передавайте пароль.</p>
       </div>
     </div>
@@ -1047,7 +1054,12 @@ function App() {
 
   async function logout() {
     if (!window.CrosspostDraft.canLeave()) return;
-    await api.post('/api/auth/logout', {});
+    try {
+      const r = await api.post('/api/auth/logout', {});
+      if (!r.ok) throw Error("logout failed");
+    } catch (_) {
+      window.alert("Не удалось завершить сеансы. Повторите выход."); return;
+    }
     navigation.replaceContext("compose");
     setUser(null);
   }

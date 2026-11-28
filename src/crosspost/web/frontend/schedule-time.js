@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   async function request(url, options) {
-    const response = await fetch(url, {credentials: "same-origin", cache: "no-store", ...options});
+    const response = await (window.CrosspostRequest?.fetch || fetch)(url, {credentials: "same-origin", cache: "no-store", ...options});
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Не удалось проверить часовой пояс.");
     return body;
