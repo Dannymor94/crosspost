@@ -126,7 +126,8 @@ async def test_peer_access_hash_rejected_from_api(client, factory):
         json={"name": "Chan", "value": "@chan", "peer_access_hash": 99999},
     )
     assert r.status_code == 422
-    assert "peer_access_hash" in r.text
+    assert r.json() == {"detail": "Проверьте поля формы"}
+    assert "99999" not in r.text
 
 
 # ── patch_target with topic_id ────────────────────────────────────────────────
