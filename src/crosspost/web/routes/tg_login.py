@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -23,9 +24,7 @@ from crosspost.web.deps import RepoDep, require_profile_access
 
 
 # Все роуты под /api/profiles/{profile_id}/… → гейт изоляции на весь роутер.
-async def _legacy_operator(
-    actor: User = Depends(require_profile_access),
-) -> None:
+async def _legacy_operator(actor: Annotated[User, Depends(require_profile_access)]) -> None:
     if production_mode() and actor.role != Role.ADMIN:
         raise HTTPException(403, "Используйте клиентский мастер подключения")
 

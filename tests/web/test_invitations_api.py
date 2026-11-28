@@ -552,9 +552,7 @@ async def test_production_client_cannot_bypass_initial_connection_gate(registrat
         assert cookie is not None
     monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
     monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
-    async with AsyncClient(
-        transport=ASGITransport(app=create_app()), base_url="https://test"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
         c.cookies.set("session", cookie)
         proof = (await c.get("/api/auth/csrf")).json()["token"]
         headers = {"X-CSRF-Token": proof}

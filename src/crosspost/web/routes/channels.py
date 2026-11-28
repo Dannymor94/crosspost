@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,7 +30,7 @@ _PROFILE_GUARD = [Depends(require_profile_access)]
 
 
 async def _legacy_connection_operator(
-    actor: User = Depends(require_profile_access),
+    actor: Annotated[User, Depends(require_profile_access)],
 ) -> None:
     if production_mode() and actor.role != Role.ADMIN:
         raise HTTPException(403, "Обратитесь к администратору или используйте клиентский мастер")
