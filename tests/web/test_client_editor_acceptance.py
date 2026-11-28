@@ -60,6 +60,8 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
+        if parsed.hostname == "localhost" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            assert request.headers.get("x-csrf-token") == "a" * 64
         if parsed.hostname == "unpkg.com" and path in scripts:
             route.fulfill(path=scripts[path], content_type="application/javascript")
         elif parsed.hostname != "localhost":
@@ -70,6 +72,8 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
             asset = FRONTEND / path.removeprefix("/static/")
             mime = "text/css" if asset.suffix == ".css" else "application/javascript"
             route.fulfill(path=asset, content_type=mime)
+        elif path == "/api/auth/csrf":
+            route.fulfill(json={"enabled": True, "token": "a" * 64})
         elif path == "/api/auth/me":
             actor = {"id": 1, "login": "test-client", "role": "client", "profile_id": 1}
             route.fulfill(json=actor)

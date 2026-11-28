@@ -1236,6 +1236,7 @@ body {
 </style>
 <link rel="stylesheet" href="/static/styles/ux-system.css">
 <link rel="stylesheet" href="/static/styles/ux-live.css">
+<script src="/static/csrf.js"></script>
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
 <script src="/static/shared/ux-navigation.js"></script>
@@ -1263,12 +1264,12 @@ const { createRoot } = await import("https://esm.sh/react-dom@18/client");
 // ── API helpers ────────────────────────────────────────────────────────────
 const api = {
   async get(url) {
-    const r = await fetch(url);
+    const r = await window.CrosspostRequest.fetch(url);
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
   async post(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1277,12 +1278,12 @@ const api = {
     return r.json();
   },
   async postForm(url, formData) {
-    const r = await fetch(url, { method: "POST", body: formData });
+    const r = await window.CrosspostRequest.fetch(url, { method: "POST", body: formData });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
   async put(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1291,7 +1292,7 @@ const api = {
     return r.json();
   },
   async patch(url, body) {
-    const r = await fetch(url, {
+    const r = await window.CrosspostRequest.fetch(url, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -1300,7 +1301,7 @@ const api = {
     return r.json();
   },
   async del(url) {
-    const r = await fetch(url, { method: "DELETE" });
+    const r = await window.CrosspostRequest.fetch(url, { method: "DELETE" });
     if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
     return r.json();
   },
@@ -2064,7 +2065,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
   async function loadDialogs(refresh) {
     setRefreshing(true); setFloodSecs(null);
     try {
-      const r = await fetch(`${base}/dialogs${refresh ? "?refresh=1" : ""}`);
+      const r = await window.CrosspostRequest.fetch(`${base}/dialogs${refresh ? "?refresh=1" : ""}`);
       if (r.status === 429) {
         const b = await r.json(); const d = b.detail || b;
         setFloodSecs(d.retry_after);
@@ -2078,7 +2079,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
 
   useEffect(() => {
     loadDialogs(false);
-    fetch(`${base}/targets`).then(r => r.ok ? r.json() : []).then(setExistingTargets).catch(() => {});
+    window.CrosspostRequest.fetch(`${base}/targets`).then(r => r.ok ? r.json() : []).then(setExistingTargets).catch(() => {});
   }, []);
 
   async function expandForum(tv) {
@@ -2087,7 +2088,7 @@ function TelegramPickerPanel({ profileId, onClose, onTargetsAdded }) {
     if (!willOpen || topicsCache[tv]) return;
     setTopicsCache(prev => ({ ...prev, [tv]: { loading: true, items: null } }));
     try {
-      const r = await fetch(`${base}/dialogs/${encodeURIComponent(tv)}/topics`);
+      const r = await window.CrosspostRequest.fetch(`${base}/dialogs/${encodeURIComponent(tv)}/topics`);
       if (r.ok) {
         const b = await r.json();
         setTopicsCache(prev => ({ ...prev, [tv]: { loading: false, items: b.items } }));
@@ -2524,7 +2525,8 @@ function AdminClients({profiles,active,onSelect,onNew,onNewClient}) {
         "aria-current":p.id===active?.id?"true":undefined,onClick:()=>onSelect(p)},p.name))
         : h("p",{className:"cp-muted"},"Нет профилей."),
       h("button",{className:"cp-button cp-button--primary",onClick:onNew},"Новый профиль"),
-      h("button",{className:"cp-button",disabled:!profiles.length,onClick:onNewClient},"Аккаунт клиента")));
+      h("button",{className:"cp-button",disabled:!profiles.length,onClick:onNewClient},"Аккаунт клиента"),
+      h("a",{className:"cp-button",href:"/account#owner"},"Карточка, приглашения и восстановление")));
 }
 function AdminMore({onNavigate}) {
   return h("section",{className:"cp-stack"},h("h1",{className:"cp-title"},"Ещё"),
@@ -3126,7 +3128,7 @@ function BlockPreview({ profileId, text }) {
       try {
         const fd = new FormData();
         fd.append("text", text);
-        const resp = await fetch(
+        const resp = await window.CrosspostRequest.fetch(
           `/api/profiles/${profileId}/publish/preview-blocks`,
           { method: "POST", body: fd, signal: ctrl.signal }
         );
@@ -3379,7 +3381,7 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss, reuseText
     mediaDebounceRef.current = setTimeout(async () => {
       try {
         const fd = new FormData(); fd.append("image", url.trim());
-        const r = await fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
+        const r = await window.CrosspostRequest.fetch(`${base}/publish/resolve-media`, { method: "POST", body: fd });
         const b = await r.json().catch(() => null);
         if (!current()) return;
         if (r.ok && b) setMediaThumb(b);
@@ -3417,12 +3419,14 @@ function PublishView({ profile, user, scheduleIntent, onIntentDismiss, reuseText
     return true;
   }
 
-  function postFormWithProgress(url, fd, headers) {
+  async function postFormWithProgress(url, fd, headers) {
+    const proof = await window.CrosspostRequest.proof();
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
       xhr.withCredentials = true;
       Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+      if (proof) xhr.setRequestHeader("X-CSRF-Token", proof);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100));
       };
@@ -3883,7 +3887,7 @@ function SchedEditForm({ base, post, onSaved, onClose }) {
     try {
       if (timeChanged) patch.scheduled_at = await window.CrosspostTime.resolve(base, when, zone);
       // Используем fetch напрямую — нужен статус-код для различения 409/422/404.
-      const r = await fetch(`${base}/scheduled/${post.id}`, {
+      const r = await window.CrosspostRequest.fetch(`${base}/scheduled/${post.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "X-Schedule-Time-Contract": "utc-v1" },
         body: JSON.stringify(patch),
@@ -4587,6 +4591,7 @@ function ViewTabs({ view, onChange }) {
 function LoginView({ onSuccess }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const ref = useRef(null);
@@ -4597,7 +4602,7 @@ function LoginView({ onSuccess }) {
     if (!login.trim() || !password) return;
     setLoading(true); setErr(null);
     try {
-      const me = await api.post("/api/auth/login", { login: login.trim(), password });
+      const me = await api.post("/api/auth/login", { login: login.trim(), password, mfa_code: mfaCode.trim() });
       onSuccess(me);
     } catch (ex) { setErr(ex.message); }
     finally { setLoading(false); }
@@ -4607,6 +4612,7 @@ function LoginView({ onSuccess }) {
     h("form", { className: "login-card", onSubmit: submit },
       h("div", { className: "login-logo" }, "⊹ CROSSPOST"),
       h("p", { className: "login-sub" }, "Вход в панель"),
+      h("a", { href: "/account" }, "Приглашение или восстановление доступа"),
       h("div", { className: "form-group" },
         h("label", { className: "form-label", htmlFor: "l-login" }, "Логин"),
         h("input", { id: "l-login", ref, className: "form-input", value: login,
@@ -4616,6 +4622,11 @@ function LoginView({ onSuccess }) {
         h("label", { className: "form-label", htmlFor: "l-pass" }, "Пароль"),
         h("input", { id: "l-pass", className: "form-input", type: "password", value: password,
           autoComplete: "current-password", onChange: (e) => setPassword(e.target.value) }),
+      ),
+      h("div", { className: "form-group" },
+        h("label", { className: "form-label", htmlFor: "l-mfa" }, "Код владельца (если настроен)"),
+        h("input", { id: "l-mfa", className: "form-input", type: "password", value: mfaCode,
+          autoComplete: "one-time-code", onChange: (e) => setMfaCode(e.target.value) }),
       ),
       err && h(Alert, { type: "error" }, err),
       h("button", { type: "submit", className: "btn btn-primary", style: { width: "100%", marginTop: "8px" },
@@ -4909,7 +4920,9 @@ function App() {
 
   async function logout() {
     if (!window.CrosspostDraft.canLeave()) return;
-    try { await api.post("/api/auth/logout"); } catch (_) {}
+    try { await api.post("/api/auth/logout"); } catch (_) {
+      window.alert("Не удалось завершить сеансы. Повторите выход."); return;
+    }
     navigation.replaceContext("publish");
     setMe(null); setProfiles([]); setActive(null); setPendingCount(0);
     setShowNewProfile(false); setShowNewClient(false);

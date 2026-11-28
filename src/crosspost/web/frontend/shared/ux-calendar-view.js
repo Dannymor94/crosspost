@@ -28,7 +28,7 @@
         if(flight.current||!moving||!newWall||!canMove||zone!==moving.zone)return;
         flight.current=true;setBusy(true);setNotice(null);
         try {
-          const response=await fetch("/api/profiles/"+pid+"/scheduled/"+moving.id+"/move",{
+          const response=await (window.CrosspostRequest?.fetch || fetch)("/api/profiles/"+pid+"/scheduled/"+moving.id+"/move",{
             method:"POST",credentials:"same-origin",cache:"no-store",
             headers:{"Content-Type":"application/json"},
             body:JSON.stringify({expected_at:moving.when,wall:newWall,zone})
