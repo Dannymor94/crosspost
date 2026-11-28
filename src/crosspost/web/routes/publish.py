@@ -63,6 +63,7 @@ from crosspost.scheduler.schedule_time import (
 )
 from crosspost.web import media as media_store
 from crosspost.web.deps import AdminUser, CurrentUser, SessionDep, require_profile_access
+from crosspost.web.live_gate import require_live_publication
 from crosspost.web.moderation import require_unmoderated_action
 from crosspost.web.operation_admission import (
     current_draft_revision,
@@ -579,7 +580,11 @@ async def publish_targets(
 # ── Publish now ───────────────────────────────────────────────────────────────
 
 
-@router.post("/api/profiles/{profile_id}/publish", response_model=PublishResult)
+@router.post(
+    "/api/profiles/{profile_id}/publish",
+    response_model=PublishResult,
+    dependencies=[Depends(require_live_publication)],
+)
 async def publish_now(
     profile_id: int,
     session: SessionDep,
@@ -818,6 +823,7 @@ async def publish_status(
 @router.post(
     "/api/profiles/{profile_id}/publish/{publication_id}/retry/{channel}",
     response_model=OutcomeOut,
+    dependencies=[Depends(require_live_publication)],
 )
 async def publish_retry(
     profile_id: int,
@@ -1362,7 +1368,10 @@ async def cancel_scheduled(profile_id: int, scheduled_id: int, session: SessionD
     return {"cancelled": True}
 
 
-@router.post("/api/profiles/{profile_id}/scheduled/{scheduled_id}/publish-now")
+@router.post(
+    "/api/profiles/{profile_id}/scheduled/{scheduled_id}/publish-now",
+    dependencies=[Depends(require_live_publication)],
+)
 async def publish_scheduled_now(
     profile_id: int, scheduled_id: int, request: Request, session: SessionDep, user: CurrentUser
 ) -> dict:

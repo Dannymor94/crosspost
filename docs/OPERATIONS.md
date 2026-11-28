@@ -370,3 +370,234 @@ Before enabling production mode, the owner uses a private, unrecorded interactiv
 ### Fresh owner MFA confirmation (draft)
 
 Issuing/replacing/revoking invitations and issuing recovery links requires the owner password plus a new TOTP or unused backup code once enrolled. Wait for the next authenticator code after login or use a backup code. Factor consumption and the business operation share the SQLite writer transaction; a failed action does not consume the factor. Local enrollment/replacement writes a persistent `owner_mfa_events` entry without secrets. Other privileged mutations still require a separately defined step-up/audit policy before release.
+
+
+
+---
+
+## 9. Docker/VPS: T-301 (код на ревью, deployment не выполнялся)
+
+`Dockerfile` использует Python 3.13 и Playwright Chromium; `docker-compose.yml`
+запускает **ровно один** процесс FastAPI/SQLite, без Redis и Postgres. Планировщик,
+проверка сессий и интерактивный вход держат состояние процесса — дополнительные
+воркеры, горизонтальный scale и параллельные контейнеры запрещены до отдельной
+архитектуры единоличного владения scheduler и browser-login. Публикации на VPS
+ещё не проверены.
+
+**Перед стартом:** настроить на сервере `SESSION_SECRET`, `VAULT_KEY`,
+`MEDIA_URL_SECRET` как **внешние переменные окружения** или через защищённый
+secret-manager (не вписывать реальные значения в Compose, Dockerfile, build args,
+`.env` репозитория или логи). Использовать **тот же** `VAULT_KEY` при переносе
+существующей БД. Дополнительные параметры: `CROSSPOST_PORT` (по умолчанию 8001),
+`BROWSER_HEADLESS=true`, `SCHEDULER_ENABLED=true`, `HEALTH_CHECK_ENABLED=true`,
+`VK_PROXY_URL`, `YANDEX_PROXY_URL`, `INSTAGRAM_PROXY_URL`,
+`INSTAGRAM_PUBLIC_BASE_URL`. Compose не монтирует отдельный `.env` в контейнер,
+но `crosspost.config.load_config()` **прочитает** `runtime/.env`, если такой файл
+уже находится в постоянном томе (например, после переноса старого окружения).
+Явные переменные процесса имеют приоритет над значениями файла. Для production
+хранить секреты только во внешнем защищённом окружении, `runtime/.env` не создавать.
+
+```bash
+docker compose config --quiet       # fail closed, если нет обязательных секретов
+docker compose up -d --build        # создаст app + именованные тома
+docker compose ps
+curl --fail http://127.0.0.1:8001/ # только локальная проверка HTTP (не DB/runner health)
+docker compose logs --tail=100 app
+```
+
+Снаружи порт **не открыт**: привязка по умолчанию `127.0.0.1:8001`, публичный
+HTTPS/domain и Instagram URL — T-302. Отдельный T-304 добавит `/health` и мониторинг.
+Тест GitHub Actions `.github/workflows/docker.yml` проверяет холодный старт,
+миграцию новой БД и сохранность `runtime` при пересоздании контейнера. До
+успешного CI и реального VPS-smoke приёмка T-301 не завершена.
+
+**Тома и резервные копии:** `crosspost_runtime` примонтирован как `/app/runtime`
+(SQLite вместе с WAL, `media`, `screenshots`, `profiles`, `settings.json`),
+`crosspost_backups` — как `/app/backups`. Эти тома содержат клиентские секреты
+и никогда не отдаются напрямую веб-сервером. Не выполнять `docker compose down -v`:
+это удалит данные и локальные резервные копии. Только SQLite online backup:
+
+```bash
+docker compose exec -T app python scripts/sqlite_backup.py backup --db runtime/db.sqlite3 --dest /app/backups --keep 7
+```
+
+Бэкап **неполон без** защищённой внешней копии `media`, `profiles`,
+`settings.json` и отдельно сохранённого `VAULT_KEY`; их нужно шифровать и
+выгружать в независимое хранилище. Перед реальными клиентами провести восстановление
+копии БД и медиа по §6, проверку ключа и доступа. Именованные тома на том же
+VPS не заменяют внешнюю копию.
+
+**Перезапуск/обновление:** `docker compose restart app` не удаляет тома; сигнал
+SIGTERM и `stop_grace_period: 120s` дают Uvicorn время отменить фоновые задачи.
+Перед обновлением выполнить backup по §6, сохранить идентификатор предыдущего
+образа и проверить совместимость миграций. Для отката остановить приложение,
+вернуть прежний образ и **при несовместимой миграции** восстановить прежнюю БД
+в новый файл (не затирая старую). Сам по себе откат образа не откатывает схему.
+
+**Важное ограничение:** `BROWSER_HEADLESS=true` позволяет публикации через Chromium,
+но вход VK/Яндекс в приложении всегда требует **видимого** окна браузера. Для
+удалённого интерактивного входа, Xvfb/VNC и проверки антибота нужна T-303.
+
+## 10. HTTPS и публичные подписанные медиа (T-302, код на ревью)
+
+Этот раздел описывает **будущую** конфигурацию после owner-merge T-301 → T-302,
+не свидетельствует о выполненном VPS deployment. У CI нет реального домена,
+сертификата ACME или внешнего Meta fetch. Production вводит только владелец.
+
+**Предварительные условия:** FQDN под управлением владельца, DNS A на публичный
+IPv4 VPS, AAAA только если публичный IPv6 действительно маршрутизируется к VPS;
+внешние TCP **80 и 443** разрешены firewall/VPS-провайдером и не заняты другим
+nginx/Caddy, наружу **не** открывать 8001, SQLite, Docker API, VNC или отладку.
+В outbound сети серверу нужен доступ к центрам сертификации/ACME и Instagram;
+серверное доменное имя должно реально разрешаться в адрес этого VPS.
+
+Перед запуском установить внешнюю переменную `CROSSPOST_DOMAIN` — только
+DNS-hostname, например `post.example.com`, без `https://`, слеша, порта или
+пробелов. Обязательные `SESSION_SECRET`, `VAULT_KEY`, `MEDIA_URL_SECRET` согласно
+§9 остаются в защищённом окружении, **без** записи в Git или журнал команд.
+Для production Compose сам задаёт
+`INSTAGRAM_PUBLIC_BASE_URL=https://${CROSSPOST_DOMAIN}`, исключая расхождение
+origin между Instagram и Caddy. В обычном CLI/dev разрешён отдельный HTTPS
+туннель `*.lhr.life`; не использовать его вместо production DNS.
+
+В Compose Caddy публикует только 80/443 и перенаправляет HTTP→HTTPS; cert/key
+хранятся в постоянных томах `caddy_data:/data` и `caddy_config:/config`,
+обновляются самим Caddy. FastAPI сохранён на `127.0.0.1:${CROSSPOST_PORT:-8001}`
+для локальной диагностики и доступен Caddy через приватную Docker-сеть.
+Caddy **не монтирует** `runtime`, `backups` и `media`: `/public-media/{token}`
+передаётся в FastAPI без rewrite, где уже действуют HMAC/TTL/path confinement.
+Caddy access logs выключены, Uvicorn raw access logs тоже, поскольку token в URL
+является временным bearer credential. **Глобальный Caddy runtime logger** также
+удаляет `request`/URI/заголовки из proxy-error записей (включая 502), сохраняя
+статус и диагностическую трассу. CI специально останавливает тестовый app,
+проверяет 502 на фиктивном `/public-media/QA_FAKE_BEARER_DO_NOT_LOG` и отсутствие
+этого маркера и фиктивного заголовка в `docker compose logs caddy`.
+Не включать общий access log и не менять runtime log formatter без повторного
+теста отсутствия сырого URL/headers; реальный токен для такого теста не нужен.
+
+**Доверие к прокси:** у Caddy статический IP
+`${CROSSPOST_PROXY_IP:-172.30.92.2}` в отдельном bridge subnet
+`${CROSSPOST_PROXY_SUBNET:-172.30.92.0/24}`. Для app закреплён отдельный
+`${CROSSPOST_APP_IP:-172.30.92.3}`, чтобы app не занял адрес Caddy при старте.
+Uvicorn читает
+`FORWARDED_ALLOW_IPS` равный только этому IP, **не `*`**; внешний клиент не может
+подставить `X-Forwarded-For` или `X-Forwarded-Proto`. Если выбранный Docker subnet
+занят, поменять все три значения согласованно и повторить тесты/контроль сетей.
+Сторонний CDN/обратный прокси перед Caddy требует отдельного security-review,
+нельзя молча включать дополнительные `trusted_proxies`. T-409 отдельно
+включит Secure cookie, CSRF и IP rate limit — до этого платных клиентов не пускать.
+
+Проверки владельца после DNS и безопасного server deployment:
+
+```bash
+docker compose config --quiet
+docker compose run --rm --no-deps --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose up -d --build
+docker compose ps
+curl -I "http://${CROSSPOST_DOMAIN}/"           # ожидать 308 и Location: https://...
+curl -I "https://${CROSSPOST_DOMAIN}/"          # действующий сертификат; GET /client для UI
+curl -f "https://${CROSSPOST_DOMAIN}/client" -o /dev/null
+docker compose logs --tail=100 caddy
+```
+
+Дополнительно проверить извне (не с самого VPS): валидный TLS chain,
+доступность только 80/443, отказ на прямой TCP 8001, неизвестный Host/SNI,
+отсутствие отдачи `/app/runtime` и медиа-папок, доступность `/health` после
+интеграции T-304. Отдельный приватный одноразовый подписанный URL должен дать
+GET/HEAD 200 для нужного видео из внешней сети и 404 при истечении срока либо
+изменении токена; убедиться, что Instagram действительно может скачать видео.
+**Никогда не вставлять полный подписанный URL в issue, Actions, чат или логи.**
+В Caddy/приложении убедиться, что path не содержит raw `/public-media/{token}`.
+
+**Продление/откат:** cert volume должен переживать `docker compose down`/
+пересоздание контейнера. Проверить автообновление по логам/состоянию сертификата
+до истечения срока, отслеживать внешним мониторингом TLS expiry. Два Caddy-тома
+вместе с `runtime`, `backups`, media и защищённым ключевым материалом включить
+в план *независимых зашифрованных* backup/restore drill. Перед rollback сохранить
+образы и резервную копию данных, откатить T-302 только после согласования домена
+и доступа к старому приложению; остановка Caddy прекратит публичный HTTPS.
+Не выполнять `docker compose down -v` и не удалять сертификатные тома.
+
+
+## Integrated VPS pilot (draft; supersedes earlier Docker defaults)
+
+Use a new empty isolated runtime volume and owner-controlled DNS/TLS. Compose forces production auth and exact HTTPS origin. It defaults live publication, scheduler, health checks, invitations, client connections and PWA to off. Enable individual UI features only after explicit acceptance; scheduler cannot start unless live publication is explicitly true. Direct publish/retry/publish-now routes reject while disabled. This gate does not sandbox network egress or CLI; do not use CLI publication, real credentials or existing production volumes in pilot. Restrict access at the host/firewall. Do not copy real data or enable sends without owner approval and exact integration QA. Bootstrap owner via private terminal then configure MFA; never print passwords or codes in CI. Separate backups/restore, live browser provider acceptance and actual DNS/ACME are still required.
+
+
+### 6.1 Полный комплект восстановления (OPS-207 follow-up, до живого drill)
+
+Одного SQLite snapshot недостаточно: медиа, сохранённые браузерные профили и
+`runtime/settings.json` живут вне БД. Дополнительный офлайн-скрипт
+`scripts/recovery_bundle.py` создаёт **нешифрованный, но приватный** каталог с
+WAL-safe SQLite snapshot, медиа, профилями, настройками, списком SHA256 каждого
+файла, полным перечнем каталогов (включая пустые) и HMAC-манифестом,
+проверяемым исходным `VAULT_KEY`. Нечитаемый вложенный каталог останавливает
+весь процесс, а не пропускается без предупреждения. Сам ключ и `.env`
+не сохраняются; другие внешние секреты тоже должны иметь отдельное хранилище.
+
+**Операторский порядок (только на собственном VPS, без передачи файлов агентам):**
+
+1. Записать образ приложения/ревизию БД и анонимизированные счётчики; убедиться,
+   что `VAULT_KEY` доступен из защищённого escrow, но не копировать его в архив.
+2. Ввести окно обслуживания: остановить веб-приложение, планировщик, воркеры,
+   загрузки медиа и все записи браузерных профилей. `--quiesced` — явное
+   подтверждение этого шага оператором, а не автоматическая блокировка процесса.
+3. Подставив фактические значения `DB_URL`, `MEDIA_DIR`, `BROWSER_PROFILES_DIR`
+   и `RUNTIME_SETTINGS_PATH`, выполнить команду в закрытом окружении:
+
+   ```bash
+   python scripts/recovery_bundle.py backup \
+     --db runtime/db.sqlite3 --media-dir runtime/media \
+     --profiles-dir runtime/profiles --settings runtime/settings.json \
+     --dest /srv/private/crosspost-backups --quiesced
+   ```
+
+   Скрипт откажется работать, если обязательные каталоги отсутствуют, встречен
+   симлинк, неподдерживаемые поля настроек, пересечение входа/выхода или
+   неизвестный тип файла. Отсутствующий `settings.json` — допустимое состояние
+   чистой установки: это фиксируется как `settings_present=false` в подписанном
+   манифесте и сохраняется как отсутствие после восстановления. Каталог-родитель
+   настроек должен существовать.
+4. Выполнить `python scripts/recovery_bundle.py verify --bundle <КАТАЛОГ>`;
+   скопировать **весь каталог**, включая вложенные манифесты, в независимое
+   **шифрованное offsite**-хранилище. Скрипт не шифрует файлы, не отправляет их
+   по сети и не настраивает расписание. Браузерные профили содержат действующие
+   сессии и требуют той же защиты, что и секреты. Каталог не должен попадать в
+   веб-корень, git, общие логи или Issue.
+5. На отдельной машине/томе проверить получение зашифрованной offsite-копии,
+   доступность исходного ключа и восстановить в **новый пустой каталог**:
+
+   ```bash
+   python scripts/recovery_bundle.py restore --bundle <КАТАЛОГ> \
+     --target /srv/private/crosspost-recovered
+   ```
+
+   Результат: `database/crosspost-*.sqlite3`, `media/`, `profiles/`,
+   `settings.json` (если был) и аутентифицированные манифесты. Команды упаковки
+   и восстановления требуют Linux с `renameat2(RENAME_NOREPLACE)` для атомарной
+   публикации без перезаписи чужой даже пустой директории. Другие ОС отклоняются
+   без изменения цели. Восстановление не запускает
+   приложение и не заменяет рабочие тома/БД. Остановиться при любой ошибке.
+6. **Дальнейший тест запуска только в отдельном контейнере/namespace с
+   подтверждённым `--network none` или эквивалентным запретом исходящего
+   трафика**, с `SCHEDULER_ENABLED=false`, `HEALTH_CHECK_ENABLED=false`,
+   отдельными томами и тестовыми настройками. Запрещено подключать восстановленные
+   каналы к реальным площадкам: иначе отложенный пост может отправиться повторно.
+   Одного флага выключенного планировщика недостаточно для доказательства
+   сетевой изоляции. Проверять схему, связь медиа и анонимизированные счётчики
+   без отправки постов. Реальное переключение сервиса/rollback — отдельная
+   процедура владельца, не функция этого скрипта.
+
+Требуемые внешние решения до запуска: периодичность/retention/RPO/RTO, проверка
+возврата offsite-копии, хранение исходного `VAULT_KEY` и прочих необходимых ключей
+(`SESSION_SECRET`, `MEDIA_URL_SECRET`), восстановление прав uid=10001 из Docker,
+успешный drill на копии реальных данных. Бэкап группы файлов согласован по времени
+**только если оператор действительно остановил запись**; флаг не создаёт снимок
+файловой системы. До этого `DRILL_STATUS=OWNER_LOCAL_ACTION_REQUIRED`.
+
+
+---
+
+### Integrated container recovery rehearsal
+
+The Docker workflow stops the disposable app, runs the existing recovery bundle in a separate `--network none` container and verifies the migrated database and media/profile/settings markers in a new directory. Neither real data nor a production restore is involved. Keep the application stopped for a real backup; use separate encrypted offsite custody and a new isolated volume for restore. Existing runtime volumes must not be overwritten. Production RPO/RTO, key escrow and real-data drill remain owner gates.

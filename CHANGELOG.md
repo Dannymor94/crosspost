@@ -343,3 +343,28 @@
 
 - `scheduled_posts.reject_reason` column migration added (was missing, caused startup crash on existing DBs).
 - `telegram_discovery.router` included in `create_app()` (was missing).
+
+
+## 2026-11-22 — T-302: HTTPS ingress и защищённый публичный медиа URL (стековый Draft PR)
+
+- Caddy 2.11.9 в отдельном контейнере: владелец указывает DNS-имя, автоматическое TLS/redirect HTTP→HTTPS, постоянные тома сертификатов, наружу только 80/443; FastAPI по-прежнему доступен только на loopback/в контейнерной сети.
+- Instagram принимает только канонический публичный HTTPS-origin; Compose выводит URL из того же `CROSSPOST_DOMAIN`, что и Caddy. Подписанная раздача `/public-media/{token}` не менялась, статическое монтирование медиа запрещено.
+- Доверие к `X-Forwarded-*` ограничено фиксированным IP Caddy, raw access-логи Uvicorn выключены; тестируется запрет подмены клиентского IP.
+- Нет реальных DNS, сертификатов или публикаций; после мержа T-301 нужны перенос ветки на актуальный main, повторные CI/QA и операторский VPS-smoke.
+- R1 CI: устранён конфликт адресов Docker bridge при старте app перед Caddy — выделены два фиксированных непересекающихся IP и тест на контракт резервации.
+- R2 QA: глобальный runtime/error-логгер Caddy удаляет request/URI и заголовки при 502 (не только access logs). Docker smoke с фиктивным bearer-токеном проверяет отсутствие утечки в журнале ошибки при остановленном app. Instagram отклоняет HTTPS-origin даже с пустыми `?`/`#`.
+
+
+## 2026-11-22 — T-301: контейнер Docker/VPS (на ревью, не развёрнут)
+
+- Образ Python 3.13 устанавливает зависимости по `uv.lock`, Playwright Chromium и системные библиотеки.
+- Compose запускает один процесс FastAPI/SQLite на `127.0.0.1:8001`; БД/WAL, медиа, настройки, браузерные профили и резервные копии сохраняются в томах при пересоздании контейнера. Redis/Postgres удалены из Compose.
+- Секреты поступают с хоста; процесс работает без root, SIGTERM даёт до 120 секунд на остановку.
+- Отдельный GitHub Actions smoke проверяет сборку, старт и сохранность томов; живые проверки VPS, браузерного входа T-303 и TLS T-302 ещё нужны.
+- T-301-R2: запуск Docker smoke теперь охватывает изменения всех входов образа (`src`, `scripts`, `pyproject.toml`, `uv.lock`); smoke независимо проверяет сохранность обоих томов, медиа, браузерных профилей и runtime-настроек после пересоздания.
+
+
+
+## Unreleased — integrated VPS recovery rehearsal
+
+- Include original T-207 offline recovery bundle and tests, plus Docker quiesced synthetic backup/verify/restore under no network. No production recovery or deployment.
