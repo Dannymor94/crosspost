@@ -40,3 +40,8 @@ the full enrollment/login/recovery state machine is implemented and reviewed.
 ## Implementation update
 
 The next draft implements local terminal enrollment/replacement, encrypted user columns, atomic factor consumption and mandatory factor at login for enrolled owners; unenrolled production owners are rejected. Enrollment consumes the confirming step, advances the session generation and returns backup codes once. The existing `mfa_changed_at` is a last-change timestamp, not an append-only audit. Local re-enrollment requires host access, current password and explicit confirmation. Full fresh-factor step-up on sensitive routes, durable operator audit, newer UX integration and owner recovery drill are still pending. No production enrollment has occurred.
+
+
+## Step-up and audit update
+
+The next draft adds durable enrollment/replacement audit events and fresh-factor confirmation in the same transaction for invitation issue/rotation/revocation and recovery issuance. Remaining sensitive settings, other in-flight mutation fences, integrated browser acceptance and recovery drill remain open.

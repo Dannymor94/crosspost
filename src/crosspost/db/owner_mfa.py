@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crosspost.auth.passwords import verify_password
 from crosspost.auth.totp import generate_backup_codes, match_step
-from crosspost.db.models import Role, User
+from crosspost.db.models import OwnerMfaEvent, Role, User
 from crosspost.db.vault import decrypt_blob, encrypt_blob, get_vault
 
 
@@ -38,6 +38,7 @@ async def enroll_owner(
         await session.rollback()
         return None
     uid, generation, password_hash = user.id, user.session_generation, user.password_hash
+    replaced = user.mfa_secret is not None
     await session.rollback()
     if not await asyncio.to_thread(verify_password, password, password_hash):
         return None
@@ -68,6 +69,14 @@ async def enroll_owner(
     if result.scalar_one_or_none() is None:
         await session.rollback()
         return None
+    session.add(
+        OwnerMfaEvent(
+            user_id=uid,
+            action="replaced" if replaced else "enrolled",
+            generation=generation + 1,
+            occurred_at=timestamp,
+        )
+    )
     await session.commit()
     return codes
 
@@ -80,6 +89,7 @@ async def consume_owner_factor(
     code: str,
     *,
     now: int | None = None,
+    commit: bool = True,
 ) -> bool:
     # Serialize both TOTP and backup consumption. No password hashing inside lock.
     await session.execute(text("BEGIN IMMEDIATE"))
@@ -122,5 +132,6 @@ async def consume_owner_factor(
     except (InvalidToken, ValueError, RuntimeError, TypeError):
         await session.rollback()
         return False
-    await session.commit()
+    if commit:
+        await session.commit()
     return True

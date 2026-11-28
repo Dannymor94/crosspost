@@ -6,18 +6,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
-from crosspost.auth.passwords import verify_password
 from crosspost.auth.sessions import sign_recovery_token
 from crosspost.db.log_repo import LogRepository
-from crosspost.db.models import Role
-from crosspost.web.auth_guard import limit_auth
+from crosspost.db.models import Role, User
+from crosspost.web.auth_guard import begin_owner_step_up
 from crosspost.web.deps import AdminUser, RepoDep, SessionDep, UserRepoDep
 from crosspost.web.private_routes import PrivateRoute
 
@@ -64,6 +62,7 @@ class RecoveryTokenOut(BaseModel):
 
 class RecoveryIssueBody(BaseModel):
     admin_password: str = Field(min_length=1, max_length=256)
+    mfa_code: str = Field(default="", max_length=64)
 
 
 @router.get("", response_model=list[UserOut])
@@ -97,17 +96,15 @@ async def issue_recovery_token(
     user_id: int,
     body: RecoveryIssueBody,
     admin: AdminUser,
-    users: UserRepoDep,
     session: SessionDep,
     response: Response,
     request: Request,
 ) -> RecoveryTokenOut:
     """Только владелец выдаёт токен клиенту; пароль и сам токен не пишутся в журнал."""
-    await limit_auth(request, session, "owner_step_up", str(admin.id))
-    if not await asyncio.to_thread(verify_password, body.admin_password, admin.password_hash):
-        raise HTTPException(status_code=403, detail="Повторно подтвердите пароль администратора")
-    user = await users.get_by_id(user_id)
+    await begin_owner_step_up(request, session, admin, body.admin_password, body.mfa_code)
+    user = await session.get(User, user_id)
     if user is None or user.role != Role.CLIENT or user.profile_id is None:
+        await session.rollback()
         raise HTTPException(status_code=404, detail="Клиент не найден")
     token = sign_recovery_token(user.id, generation=user.session_generation)
     await LogRepository(session).add(

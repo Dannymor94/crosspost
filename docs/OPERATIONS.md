@@ -365,3 +365,8 @@ Logout revokes all devices for that account using the existing session generatio
 ### Owner MFA bootstrap (draft)
 
 Before enabling production mode, the owner uses a private, unrecorded interactive server terminal: `python -m crosspost user-mfa-enroll --login <owner-login>`. Never run this in GitHub Actions, a shared screen, a captured shell, or an agent log. Confirm ENROLL, enter the current password, manually add the generated TOTP key to an authenticator (SHA1, six digits, 30 seconds), and confirm its code. Save eight backup codes offline; they are shown once. Enrollment/replacement revokes all old sessions. An owner with a lost device may use a backup code; authorized host access plus the current password permits re-enrollment, replacing all codes. Production will not allow an unenrolled owner normal login or access using an older cookie. This is a draft operator path, not approval to enable production. Fresh MFA step-up, durable replacement event history, recovery drill, integrated UI and independent QA remain mandatory.
+
+
+### Fresh owner MFA confirmation (draft)
+
+Issuing/replacing/revoking invitations and issuing recovery links requires the owner password plus a new TOTP or unused backup code once enrolled. Wait for the next authenticator code after login or use a backup code. Factor consumption and the business operation share the SQLite writer transaction; a failed action does not consume the factor. Local enrollment/replacement writes a persistent `owner_mfa_events` entry without secrets. Other privileged mutations still require a separately defined step-up/audit policy before release.

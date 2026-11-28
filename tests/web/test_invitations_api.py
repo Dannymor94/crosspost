@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from crosspost.auth.totp import generate_secret, hotp
 from crosspost.db.auth_attempt_repo import admit_attempt
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.models import AuthAttempt, ClientInvitation, Log, Profile, Role, User
+from crosspost.db.models import (
+    AuthAttempt,
+    ClientInvitation,
+    Log,
+    OwnerMfaEvent,
+    Profile,
+    Role,
+    User,
+)
 from crosspost.db.owner_mfa import enroll_owner
 from crosspost.db.user_repo import UserRepository
 from crosspost.web import deps
@@ -389,3 +397,47 @@ async def test_unenrolled_owner_cannot_use_production_session(registration, monk
         r = await c.post("/api/auth/login", json=body, headers={"X-CSRF-Token": proof})
         assert r.status_code == 403
         assert "set-cookie" not in r.headers
+
+
+async def test_mfa_step_up_and_enrollment_audit(registration):
+    factory, client = registration
+    secret = generate_secret()
+    timestamp = int(time.time()) - 30
+    async with factory() as session:
+        codes = await enroll_owner(
+            session, "owner", "owner-password", secret, hotp(secret, timestamp // 30), now=timestamp
+        )
+        assert codes is not None
+    async with client() as c:
+        login = {"login": "owner", "password": "owner-password", "mfa_code": codes[0]}
+        assert (await c.post("/api/auth/login", json=login)).status_code == 200
+        body = {"profile_name": "step-up-profile", "admin_password": "owner-password"}
+        path = "/api/users/invitations"
+        assert (await c.post(path, json=body)).status_code == 403
+        assert (await c.post(path, json={**body, "mfa_code": codes[0]})).status_code == 403
+        # A failed business operation must not consume the fresh factor.
+        bad = {**body, "profile_name": "existing-profile", "mfa_code": codes[1]}
+        assert (await c.post(path, json=bad)).status_code == 409
+        issued = await c.post(path, json={**body, "mfa_code": codes[1]})
+        assert issued.status_code == 201
+        repeat = {**body, "profile_name": "another-profile", "mfa_code": codes[1]}
+        assert (await c.post(path, json=repeat)).status_code == 403
+        new_secret = generate_secret()
+        async with factory() as session:
+            replacement = await enroll_owner(
+                session,
+                "owner",
+                "owner-password",
+                new_secret,
+                hotp(new_secret, timestamp // 30),
+                now=timestamp,
+            )
+            assert replacement is not None
+        assert (await c.get("/api/auth/me")).status_code == 401
+        assert (
+            await c.post("/api/auth/login", json={**login, "mfa_code": codes[2]})
+        ).status_code == 401
+    async with factory() as session:
+        events = list(await session.scalars(select(OwnerMfaEvent).order_by(OwnerMfaEvent.id)))
+        assert [event.action for event in events] == ["enrolled", "replaced"]
+        assert [event.generation for event in events] == [1, 2]

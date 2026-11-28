@@ -32,7 +32,7 @@
     const r = await window.CrosspostRequest.fetch(path, opts);
     if (!r.ok) {
       const messages = {400:"Ссылка недействительна или устарела.",401:"Требуется вход.",
-        403:"Доступ запрещён или неверный пароль.",409:"Логин или название недоступны.",
+        403:"Доступ запрещён. Проверьте пароль и новый код владельца.",409:"Логин или название недоступны.",
         422:"Проверьте поля.",503:"Регистрация пока недоступна."};
       throw Error(messages[r.status] || "Запрос не выполнен. Проверьте состояние перед повтором.");
     }
@@ -157,13 +157,14 @@
       }
       recovery.append(choice);
       const password = field(recovery,"Ваш пароль",{type:"password",required:"",autocomplete:"current-password"});
+      const recoveryCode = field(recovery,"Новый код владельца (если настроен)",{type:"password",autocomplete:"one-time-code"});
       const send = element("button","Создать ссылку восстановления",{type:"submit"});
       recovery.append(send); send.disabled = !choice.options.length;
       recovery.addEventListener("submit",async e=>{
         e.preventDefault(); if(send.disabled)return; send.disabled=true;
-        try { const r=await request("/api/users/"+Number(choice.value)+"/recovery-token",{admin_password:password.value});
+        try { const r=await request("/api/users/"+Number(choice.value)+"/recovery-token",{admin_password:password.value,mfa_code:recoveryCode.value.trim()});
           ownerLink(r.token,"recover"); }
-        catch(err){showError(err);}finally{password.value="";send.disabled=false;}
+        catch(err){showError(err);}finally{password.value="";recoveryCode.value="";send.disabled=false;}
       });
       content.append(recovery);
       let slots;
@@ -173,12 +174,13 @@
       issue.append(element("h2","Пригласить нового клиента"));
       const name=field(issue,"Название нового профиля",{required:"",maxlength:"255"});
       const admin=field(issue,"Ваш пароль",{type:"password",required:"",autocomplete:"current-password"});
+      const issueCode=field(issue,"Новый код владельца (если настроен)",{type:"password",autocomplete:"one-time-code"});
       const create=element("button","Создать приглашение",{type:"submit"}); issue.append(create);
       issue.addEventListener("submit",async e=>{
         e.preventDefault(); if(create.disabled)return; create.disabled=true;
-        try{const r=await request("/api/users/invitations",{profile_name:name.value.trim(),admin_password:admin.value});
+        try{const r=await request("/api/users/invitations",{profile_name:name.value.trim(),admin_password:admin.value,mfa_code:issueCode.value.trim()});
           ownerLink(r.token,"invite");name.value="";await refresh();}
-        catch(err){showError(err);}finally{admin.value="";create.disabled=false;}
+        catch(err){showError(err);}finally{admin.value="";issueCode.value="";create.disabled=false;}
       });
       content.append(issue);
       const list=element("section","");content.append(list);
@@ -190,14 +192,15 @@
             element("span",labels[item.state]||"Неизвестно"));
           if(item.state!=="used"){
             const p=field(row,"Ваш пароль",{type:"password",autocomplete:"current-password"});
+            const factor=field(row,"Новый код владельца (если настроен)",{type:"password",autocomplete:"one-time-code"});
             let busy=false;
             for(const [action,label] of [["renew","Перевыпустить"],["revoke","Отозвать"]]){
               button(row,label,async()=>{
                 if(busy||!p.value)return;busy=true;
-                try{const r=await request("/api/users/invitations/"+Number(item.id)+"/"+action,{admin_password:p.value});
+                try{const r=await request("/api/users/invitations/"+Number(item.id)+"/"+action,{admin_password:p.value,mfa_code:factor.value.trim()});
                   if(action==="renew")ownerLink(r.token,"invite");
                   await refresh();
-                }catch(err){showError(err);}finally{p.value="";busy=false;}
+                }catch(err){showError(err);}finally{p.value="";factor.value="";busy=false;}
               });
             }
           }

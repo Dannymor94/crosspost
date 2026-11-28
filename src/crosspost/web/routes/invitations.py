@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import time
@@ -11,10 +10,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
-from crosspost.auth.passwords import verify_password
 from crosspost.db.invitation_repo import InvitationRepository
-from crosspost.db.models import ClientInvitation, User
-from crosspost.web.auth_guard import limit_auth
+from crosspost.db.models import ClientInvitation
+from crosspost.web.auth_guard import begin_owner_step_up, limit_auth
 from crosspost.web.deps import AdminUser, SessionDep
 from crosspost.web.private_routes import PrivateRoute
 
@@ -37,6 +35,7 @@ class StrictBody(BaseModel):
 
 class OwnerPassword(StrictBody):
     admin_password: str = Field(min_length=1, max_length=256)
+    mfa_code: str = Field(default="", max_length=64)
 
 
 class IssueBody(OwnerPassword):
@@ -74,11 +73,6 @@ def _slot(invite: ClientInvitation) -> SlotOut:
     )
 
 
-async def _step_up(admin: User, password: str) -> None:
-    if not await asyncio.to_thread(verify_password, password, admin.password_hash):
-        raise HTTPException(403, "Подтвердите пароль администратора", headers=_PRIVATE)
-
-
 @router.get("/api/users/invitations", response_model=list[SlotOut])
 async def list_invitations(_: AdminUser, session: SessionDep) -> list[SlotOut]:
     _enabled()
@@ -90,8 +84,7 @@ async def issue(
     body: IssueBody, admin: AdminUser, session: SessionDep, request: Request
 ) -> TokenOut:
     _enabled()
-    await limit_auth(request, session, "owner_step_up", str(admin.id))
-    await _step_up(admin, body.admin_password)
+    await begin_owner_step_up(request, session, admin, body.admin_password, body.mfa_code)
     name = body.profile_name.strip()
     if not name:
         raise HTTPException(422, "Укажите название нового профиля", headers=_PRIVATE)
@@ -108,8 +101,7 @@ async def renew(
     invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep, request: Request
 ) -> TokenOut:
     _enabled()
-    await limit_auth(request, session, "owner_step_up", str(admin.id))
-    await _step_up(admin, body.admin_password)
+    await begin_owner_step_up(request, session, admin, body.admin_password, body.mfa_code)
     result = await InvitationRepository(session).rotate(invite_id, admin.id)
     if result is None:
         raise _invalid()
@@ -122,8 +114,7 @@ async def revoke(
     invite_id: int, body: OwnerPassword, admin: AdminUser, session: SessionDep, request: Request
 ) -> dict[str, bool]:
     _enabled()
-    await limit_auth(request, session, "owner_step_up", str(admin.id))
-    await _step_up(admin, body.admin_password)
+    await begin_owner_step_up(request, session, admin, body.admin_password, body.mfa_code)
     if await InvitationRepository(session).rotate(invite_id, admin.id, revoke=True) is None:
         raise _invalid()
     return {"ok": True}
