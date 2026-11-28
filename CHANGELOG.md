@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — T-517 installable Web app (draft)
+
+- Manifest and install controls for admin/client; network-first app navigation with public offline page only. No private API caching, background replay, push or real device acceptance. Feature off by default.
+
 ## Unreleased — T-515 initial client API connections (draft)
 
 - Client-owned Telegraph/Instagram token entry, validation before atomic encrypted save, actor generation fence and no existing connection overwrite. Default off; other platforms remain assisted.

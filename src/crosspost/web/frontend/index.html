@@ -1236,6 +1236,9 @@ body {
 </style>
 <link rel="stylesheet" href="/static/styles/ux-system.css">
 <link rel="stylesheet" href="/static/styles/ux-live.css">
+<meta name="theme-color" content="#111418">
+<link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
+<script src="/static/pwa.js"></script>
 <script src="/static/csrf.js"></script>
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
@@ -4588,6 +4591,7 @@ function ViewTabs({ view, onChange }) {
 
 // ── Авторизация: вход, шапка пользователя, создание клиентского аккаунта ─────
 
+const InstallButton = window.CrosspostPwa.create(h,{useState,useEffect});
 function LoginView({ onSuccess }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
@@ -4613,6 +4617,7 @@ function LoginView({ onSuccess }) {
       h("div", { className: "login-logo" }, "⊹ CROSSPOST"),
       h("p", { className: "login-sub" }, "Вход в панель"),
       h("a", { href: "/account" }, "Приглашение или восстановление доступа"),
+      h(InstallButton),
       h("div", { className: "form-group" },
         h("label", { className: "form-label", htmlFor: "l-login" }, "Логин"),
         h("input", { id: "l-login", ref, className: "form-input", value: login,
@@ -4782,6 +4787,7 @@ function TopBar({ me, onLogout, profiles, activeProfileId, onSelectProfile, isAd
     h("select", { className: "cp-theme-select", "aria-label": "Тема оформления", "data-cp-theme-select": "",
       defaultValue: window.CrosspostPageTheme.preference, onChange: e => window.CrosspostPageTheme.set(e.target.value) },
       h("option", { value: "system" }, "Системная"), h("option", { value: "light" }, "Светлая"), h("option", { value: "dark" }, "Тёмная")),
+    h(InstallButton),
     h("button", { className: "btn btn-ghost btn-sm", onClick: onLogout }, "Выйти"),
   );
 }

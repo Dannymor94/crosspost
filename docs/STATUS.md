@@ -295,3 +295,8 @@ Combined draft preserves UX and security chains. CI pending, no merge or deploym
 ## T-515 client API onboarding (draft)
 
 Opt-in first connection for Telegraph/Instagram in the client panel. Existing API validators check credentials before atomic encrypted insertion, with actor generation/profile fence and no overwrite. No automatic retries. Telegram interactive and browser login, replacement/recovery, target selection and real provider acceptance remain open. Flag off by default.
+
+
+## T-517 PWA first slice (draft)
+
+Root-scoped manifest, PNG icons, browser-native install and manual iOS/Android instructions. Worker only caches a public offline document; app navigation is network-first/no-store, APIs, media, account links, static JS and mutations are not intercepted. No offline publication queue. Disabled by default; real-device installation, offline browser acceptance and HTTPS rollout remain gates.

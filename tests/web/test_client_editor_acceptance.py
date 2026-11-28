@@ -74,6 +74,10 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
             route.fulfill(path=asset, content_type=mime)
         elif path.endswith("/client-connection/capabilities"):
             route.fulfill(json={"channels": []})
+        elif path == "/pwa/config":
+            route.fulfill(json={"enabled": False})
+        elif path == "/static/pwa/icon-192.png":
+            route.fulfill(path=FRONTEND / "pwa/icon-192.png", content_type="image/png")
         elif path == "/api/auth/csrf":
             route.fulfill(json={"enabled": True, "token": "a" * 64})
         elif path == "/api/auth/me":

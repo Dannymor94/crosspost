@@ -510,3 +510,6 @@ ID задачи: `T-<фаза><NN>`. Шаблон и статусы — [`WORKFL
 
 
 T-515 next slice: opt-in initial Telegraph/Instagram API connection implemented in draft; other channels and real acceptance remain pending.
+
+
+T-517 first slice: install manifest, native prompt/manual instructions, safe public offline shell; device acceptance and release flag pending.
