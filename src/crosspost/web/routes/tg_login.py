@@ -17,11 +17,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from crosspost.channels import telegram_login as tl
-from crosspost.db.models import ConnectionState, CredentialKind
+from crosspost.db.models import ConnectionState, CredentialKind, Role, User
+from crosspost.web.auth_guard import production_mode
 from crosspost.web.deps import RepoDep, require_profile_access
 
 # Все роуты под /api/profiles/{profile_id}/… → гейт изоляции на весь роутер.
-router = APIRouter(tags=["telegram-login"], dependencies=[Depends(require_profile_access)])
+async def _legacy_operator(
+    actor: User = Depends(require_profile_access),
+) -> None:
+    if production_mode() and actor.role != Role.ADMIN:
+        raise HTTPException(403, "Используйте клиентский мастер подключения")
+
+
+router = APIRouter(tags=["telegram-login"], dependencies=[Depends(_legacy_operator)])
 
 _CHANNEL = "telegram"
 

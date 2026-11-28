@@ -89,6 +89,7 @@ def _path(template: str, profile_id: int) -> str:
     path = re.sub(r"\{target_value:path\}", "-100123456", path)
     for name, value in {
         "channel": "vk_wall",
+        "action": "phone",
         "target_id": "999999",
         "scheduled_id": "999999",
         "publication_id": "missing-publication",

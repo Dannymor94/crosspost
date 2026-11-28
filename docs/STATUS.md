@@ -300,3 +300,8 @@ Opt-in first connection for Telegraph/Instagram in the client panel. Existing AP
 ## T-517 PWA first slice (draft)
 
 Root-scoped manifest, PNG icons, browser-native install and manual iOS/Android instructions. Worker only caches a public offline document; app navigation is network-first/no-store, APIs, media, account links, static JS and mutations are not intercepted. No offline publication queue. Disabled by default; real-device installation, offline browser acceptance and HTTPS rollout remain gates.
+
+
+## T-515 initial client Telegram login (draft)
+
+Opt-in initial login with short-lived opaque flow, one per profile, bounded global slots, per-step admission limits and actor/cookie/generation binding. Existing legacy Telegram UI remains operator-only in production. Encrypted final session stored only through initial-connection fence; no overwrite. Target publishing rights, actual Telegram acceptance, independent review and replacement flow remain gates. No real account used.

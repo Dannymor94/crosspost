@@ -56,6 +56,46 @@
       return {...(!pid?{kind:"no-profile"}:current||{kind:"loading"}),retry:()=>setAttempt(x=>x+1)};
   }
   function create(h,hooks) {
+    function TelegramConnection({pid,onDone}) {
+      const [flow,setFlow]=hooks.useState(""),[step,setStep]=hooks.useState("begin");
+      const [apiId,setApiId]=hooks.useState(""),[hash,setHash]=hooks.useState(""),[target,setTarget]=hooks.useState("");
+      const [value,setValue]=hooks.useState(""),[busy,setBusy]=hooks.useState(false),[error,setError]=hooks.useState("");
+      async function send(action,body) {
+        const r=await window.CrosspostRequest.fetch("/api/profiles/"+pid+"/client-telegram/"+action,{
+          method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        if(!r.ok)throw Error(r.status===429?"Слишком много попыток. Попробуйте позже.":"Вход не подтверждён. Обновите состояние и начните заново позже.");
+        return r.json();
+      }
+      async function submit(event) {
+        event.preventDefault();if(busy)return;setBusy(true);setError("");
+        try {
+          const result=step==="begin"?await send("begin",{api_id:Number(apiId),api_hash:hash.trim(),target:target.trim()}):
+            await send(step,{flow,[step]:value});
+          if(result.step==="done"&&result.state==="live"){onDone();return;}
+          if(!["phone","code","password"].includes(result.step))throw Error("Неизвестный шаг");
+          if(step==="begin"){if(!/^[A-Za-z0-9_-]{43}$/.test(result.flow))throw Error("Не удалось начать вход");setFlow(result.flow);}
+          setStep(result.step);
+        }catch(e){setError(e.message||"Нет связи. Проверьте подключения перед повтором.");setStep("failed");}
+        finally{setHash("");setValue("");setBusy(false);}
+      }
+      async function cancel() {
+        if(busy)return;setBusy(true);
+        try{if(flow)await send("cancel",{flow});}catch(_){}
+        finally{setFlow("");setValue("");setHash("");setStep("begin");setError("");setBusy(false);}
+      }
+      return h("form",{className:"cp-stack",onSubmit:submit,autoComplete:"off"},
+        h("p",{className:"cp-muted"},"Подключайте только свой Telegram. Вход действует 5 минут. Не пересылайте коды и пароль в переписке."),
+        step==="begin"?h("div",{className:"cp-stack"},
+          h("a",{href:"https://my.telegram.org/apps",target:"_blank",rel:"noopener noreferrer"},"Получить api_id и api_hash"),
+          h("label",null,"api_id",h("input",{className:"cp-input",required:true,inputMode:"numeric",value:apiId,onInput:e=>setApiId(e.target.value)})),
+          h("label",null,"api_hash",h("input",{className:"cp-input",type:"password",required:true,maxLength:32,value:hash,onInput:e=>setHash(e.target.value)})),
+          h("label",null,"Канал назначения",h("input",{className:"cp-input",required:true,placeholder:"@mychannel",value:target,onInput:e=>setTarget(e.target.value)}))):null,
+        ["phone","code","password"].includes(step)?h("label",null,step==="phone"?"Номер телефона (+…)":step==="code"?"Код из Telegram":"Облачный пароль Telegram",
+          h("input",{key:step,className:"cp-input",type:step==="phone"?"tel":"password",required:true,autoComplete:step==="code"?"one-time-code":"off",value,onInput:e=>setValue(e.target.value)})):null,
+        error?h("p",{role:"alert"},error):null,
+        step!=="failed"?h("button",{className:"cp-button cp-button--primary",type:"submit",disabled:busy},busy?"Выполняем…":step==="phone"?"Получить код":"Продолжить"):null,
+        flow||step==="failed"?h("button",{className:"cp-button",type:"button",disabled:busy,onClick:cancel},"Отменить / начать заново"):null);
+    }
     function InitialConnection({pid,channel,onDone}) {
       const [token,setToken]=hooks.useState(""),[ig,setIg]=hooks.useState("");
       const [busy,setBusy]=hooks.useState(false),[message,setMessage]=hooks.useState("");
@@ -121,7 +161,7 @@
             r.expiresSoon&&r.state!=="banned"?h("p",{className:"cp-status--warning"},"Срок действия подключения скоро истечёт."):null,
             r.state==="not_connected"&&allowed.includes(r.channel)?h("div",{className:"cp-stack"},
               h("button",{className:"cp-button",onClick:()=>setOpen(open===r.channel?null:r.channel)},open===r.channel?"Свернуть":"Подключить самостоятельно"),
-              open===r.channel?h(InitialConnection,{key:pid+":"+r.channel,pid,channel:r.channel,onDone:()=>{setOpen(null);current.retry();}}):null):null,
+              open===r.channel?h(r.channel==="telegram"?TelegramConnection:InitialConnection,{key:pid+":"+r.channel,pid,channel:r.channel,onDone:()=>{setOpen(null);current.retry();}}):null):null,
             r.preparation.length&&canManage(r.state)?h("details",null,
               h("summary",null,"Этапы подключения"),
               h("p",{className:"cp-muted"},"Это инструкция, а не форма входа. Вводите секреты только в защищённом мастере. Не передавайте их администратору в переписке."),

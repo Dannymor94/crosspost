@@ -482,3 +482,63 @@ async def test_initial_client_connection_validates_before_save(registration, mon
         assert credential is not None and "synthetic-ok" not in credential.blob
         conn = await session.scalar(select(Connection))
         assert conn is not None and conn.state == "live"
+
+
+async def test_client_telegram_flow_isolated_and_fenced(registration, monkeypatch):
+    from crosspost.channels import telegram_login as tl
+    from crosspost.db.models import Credential
+    from crosspost.web.routes import client_telegram
+
+    factory, client = registration
+    monkeypatch.setenv("CLIENT_TELEGRAM_CONNECTION_ENABLED", "true")
+    calls = []
+
+    async def begin(key, api_id, api_hash, target):
+        calls.append(("begin", key))
+        return "phone"
+
+    async def phone(key, value):
+        calls.append(("phone", key))
+        return "code"
+
+    async def code(key, **kwargs):
+        calls.append(("code", key))
+        return tl.SignInResult(
+            step="done",
+            api_id=123,
+            api_hash="a" * 32,
+            target_channel="@synthetic",
+            session_string="synthetic-session",
+        )
+
+    monkeypatch.setattr(tl, "begin", begin)
+    monkeypatch.setattr(tl, "request_code", phone)
+    monkeypatch.setattr(tl, "submit_code", code)
+    try:
+        async with client() as c, client() as other:
+            account = await _login(c, "existing", "existing-password")
+            pid = account["profile_id"]
+            base = f"/api/profiles/{pid}/client-telegram"
+            payload = {"api_id": 123, "api_hash": "a" * 32, "target": "@synthetic"}
+            r = await c.post(base + "/begin", json=payload)
+            assert r.status_code == 200
+            key = r.json()["flow"]
+            assert (await c.post(base + "/begin", json=payload)).status_code == 409
+            assert (
+                await other.post(base + "/phone", json={"flow": key, "phone": "+1234567890"})
+            ).status_code == 401
+            assert (
+                await c.post(base + "/phone", json={"flow": key, "phone": "+1234567890"})
+            ).json() == {"step": "code"}
+            r = await c.post(base + "/code", json={"flow": key, "code": "12345"})
+            assert r.json() == {"step": "done", "state": "live"}
+            assert "synthetic-session" not in r.text
+            assert (
+                await c.post(base + "/code", json={"flow": key, "code": "12345"})
+            ).status_code == 409
+            assert calls == [("begin", key), ("phone", key), ("code", key)]
+        async with factory() as session:
+            credential = await session.scalar(select(Credential))
+            assert credential is not None and "synthetic-session" not in credential.blob
+    finally:
+        await client_telegram.close_all()
