@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — T-515 initial client API connections (draft)
+
+- Client-owned Telegraph/Instagram token entry, validation before atomic encrypted save, actor generation fence and no existing connection overwrite. Default off; other platforms remain assisted.
+
 ## 2026-11-28 — T-409 fresh MFA step-up and enrollment audit (draft)
 
 - Invitation issue/renew/revoke and recovery issuance recheck password and consume a fresh factor in the business writer transaction; failures roll back factor consumption. Owner enrollment/replacement persists a secret-free event atomically with the generation change.

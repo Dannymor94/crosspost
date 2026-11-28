@@ -507,3 +507,6 @@ ID задачи: `T-<фаза><NN>`. Шаблон и статусы — [`WORKFL
 - **Зачем / что сделать:** Отложено до принятого Web и отдельного разрешения владельца; 13a binding, 13b status/notifications, 13c compose, 13d admin, 13e optional Mini App. См. [UX_ROADMAP.md](UX_ROADMAP.md).
 - **Готово, когда:** Согласованный отдельный план и последующая реализация проходит parity, RBAC, dedup; не входит в текущий release; см. [UX_ACCEPTANCE.md](UX_ACCEPTANCE.md).
 - **Затрагивает горячие точки:** не определено
+
+
+T-515 next slice: opt-in initial Telegraph/Instagram API connection implemented in draft; other channels and real acceptance remain pending.
