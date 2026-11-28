@@ -10,8 +10,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -181,9 +181,36 @@ def create_app() -> FastAPI:
     if _FRONTEND_DIR.exists():
         app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
+        @app.get("/pwa/config", include_in_schema=False)
+        async def pwa_config() -> JSONResponse:
+            return JSONResponse(
+                {"enabled": os.environ.get("CROSSPOST_PWA_ENABLED", "") == "true"},
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @app.get("/pwa/manifest.webmanifest", include_in_schema=False)
+        async def pwa_manifest() -> FileResponse:
+            if os.environ.get("CROSSPOST_PWA_ENABLED", "") != "true":
+                raise HTTPException(404)
+            return FileResponse(
+                _FRONTEND_DIR / "pwa/manifest.webmanifest",
+                media_type="application/manifest+json",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @app.get("/pwa/sw.js", include_in_schema=False)
+        async def pwa_worker() -> FileResponse:
+            if os.environ.get("CROSSPOST_PWA_ENABLED", "") != "true":
+                raise HTTPException(404)
+            return FileResponse(
+                _FRONTEND_DIR / "pwa/sw.js",
+                media_type="application/javascript",
+                headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
+            )
+
         @app.get("/", include_in_schema=False)
         async def serve_spa() -> FileResponse:
-            return FileResponse(_FRONTEND_DIR / "index.html")
+            return FileResponse(_FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
         @app.get("/account", include_in_schema=False)
         async def serve_account() -> FileResponse:
@@ -205,7 +232,7 @@ def create_app() -> FastAPI:
 
             @app.get("/client", include_in_schema=False)
             async def serve_client_spa() -> FileResponse:
-                return FileResponse(client_html)
+                return FileResponse(client_html, headers={"Cache-Control": "no-store"})
 
     return app
 

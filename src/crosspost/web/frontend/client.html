@@ -329,6 +329,9 @@ textarea { resize: vertical; min-height: 110px; }
 </style>
 <link rel="stylesheet" href="/static/styles/ux-system.css">
 <link rel="stylesheet" href="/static/styles/ux-live.css">
+<meta name="theme-color" content="#111418">
+<link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
+<script src="/static/pwa.js"></script>
 <script src="/static/csrf.js"></script>
 <script src="/static/shared/ux-theme.js"></script>
 <script src="/static/shared/ux-theme-page.js"></script>
@@ -378,6 +381,7 @@ function fmtDate(iso) {
 }
 
 // ── Login ──────────────────────────────────────────────────────────────────────
+const InstallButton = window.CrosspostPwa.create(preact.h,{useState,useEffect});
 function LoginView({ onLogin }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
@@ -424,6 +428,7 @@ function LoginView({ onLogin }) {
           </button>
         </form>
         <p><a href="/account">Приглашение или восстановление доступа</a></p>
+        <${InstallButton} />
         <p class="cp-muted">Аккаунт создаёт администратор. Если не можете войти, обратитесь к нему по согласованному контакту. Не передавайте пароль.</p>
       </div>
     </div>
@@ -1082,6 +1087,7 @@ function App() {
           <select class="cp-theme-select" aria-label="Тема оформления" data-cp-theme-select="" value=${window.CrosspostPageTheme.preference} onChange=${e => window.CrosspostPageTheme.set(e.target.value)}>
             <option value="system">Системная</option><option value="light">Светлая</option><option value="dark">Тёмная</option>
           </select>
+          <${InstallButton} />
           <button class="logout-btn" onClick=${logout}>Выйти</button>
         </div>
       </div>

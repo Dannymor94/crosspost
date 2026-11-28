@@ -87,6 +87,10 @@ def test_admin_draft_reload_and_unknown_utc_schedule(scenario):
             asset = FRONTEND / path.removeprefix("/static/")
             mime = "text/css" if asset.suffix == ".css" else "application/javascript"
             route.fulfill(path=asset, content_type=mime)
+        elif path == "/pwa/config":
+            route.fulfill(json={"enabled": False})
+        elif path == "/static/pwa/icon-192.png":
+            route.fulfill(path=FRONTEND / "pwa/icon-192.png", content_type="image/png")
         elif path == "/api/auth/csrf":
             route.fulfill(json={"enabled": True, "token": "a" * 64})
         elif path == "/api/auth/me":

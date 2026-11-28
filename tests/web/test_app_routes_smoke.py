@@ -35,6 +35,9 @@ def _route_keys():
 _EXPECTED: list[tuple[str, str]] = [
     ("GET", "/health"),
     ("GET", "/health/live"),
+    ("GET", "/pwa/config"),
+    ("GET", "/pwa/manifest.webmanifest"),
+    ("GET", "/pwa/sw.js"),
     # auth
     ("GET", "/account"),
     ("POST", "/api/auth/register"),
