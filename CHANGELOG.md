@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — T-515 browser and legacy connection boundary (draft)
+
+- Production legacy credential and browser mutation routes restricted to operators. Exact HTTPS probe host and cookie-domain boundary checks. Real mobile browser login remains a separate provider-evidence gate.
+
 ## Unreleased — T-515 client Telegram login (draft)
 
 - Isolated five-minute Telegram initial login wizard, scoped flow and final encrypted save, no blind retries. Legacy production client login denied. Flag off by default; live provider acceptance pending.

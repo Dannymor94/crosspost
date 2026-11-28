@@ -12,18 +12,30 @@ from pydantic import BaseModel, model_validator
 from crosspost.channels.connection_validator import is_expires_soon, validate_connection
 from crosspost.channels.guide import target_value_field
 from crosspost.channels.validators import VALIDATORS, ValidatorResult, normalize_target
-from crosspost.db.models import ConnectionState, CredentialKind
+from crosspost.db.models import ConnectionState, CredentialKind, Role, User
 from crosspost.db.target_repo import ChannelTargetRepository
 from crosspost.db.vault import get_vault
+from crosspost.web.auth_guard import production_mode
 from crosspost.web.deps import RepoDep, SessionDep, require_profile_access
+from crosspost.web.private_routes import PrivateRoute
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["channels"])
+router = APIRouter(tags=["channels"], route_class=PrivateRoute)
 
 # Гейт изоляции для profile-scoped роутов (client — только свой profile_id → иначе 403).
 # Реестр каналов и поля формы (/api/channels/*) — НЕ per-profile, остаются открытыми
 # для любого вошедшего (метаданные каналов, без данных клиента).
 _PROFILE_GUARD = [Depends(require_profile_access)]
+
+
+async def _legacy_connection_operator(
+    actor: User = Depends(require_profile_access),
+) -> None:
+    if production_mode() and actor.role != Role.ADMIN:
+        raise HTTPException(403, "Обратитесь к администратору или используйте клиентский мастер")
+
+
+_OPERATOR_GUARD = [Depends(_legacy_connection_operator)]
 
 # ── Channel field definitions (for frontend dynamic forms) ────────────────────
 
@@ -588,7 +600,7 @@ async def delete_target(profile_id: int, channel: str, target_id: int, session: 
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/connect",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def connect_channel(
     profile_id: int,
@@ -670,7 +682,7 @@ async def connect_channel(
 @router.post(
     "/api/profiles/{profile_id}/channels/telegraph/create-account",
     response_model=TelegraphCreateOut,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def telegraph_create_account(
     profile_id: int,
@@ -724,7 +736,7 @@ async def telegraph_create_account(
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/validate",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def validate_channel(
     profile_id: int,
@@ -768,7 +780,7 @@ def _channels_sharing_session(session_key: str) -> set[str]:
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/disconnect",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def disconnect_channel(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Сбросить вход: удалить учётку канала у профиля и вернуть его в «не подключён».
@@ -804,7 +816,7 @@ async def disconnect_channel(profile_id: int, channel: str, repo: RepoDep) -> Va
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/begin",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def browser_login_begin(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Открыть браузер со СВЕЖИМ пустым контекстом на странице входа канала."""
@@ -831,7 +843,7 @@ async def browser_login_begin(profile_id: int, channel: str, repo: RepoDep) -> V
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/confirm",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def browser_login_confirm(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Пользователь подтвердил вход — ПОЗИТИВНО проверяем и сохраняем сессию профиля."""
@@ -865,7 +877,7 @@ async def browser_login_confirm(profile_id: int, channel: str, repo: RepoDep) ->
 @router.post(
     "/api/profiles/{profile_id}/channels/{channel}/browser-login/cancel",
     response_model=ValidationResult,
-    dependencies=_PROFILE_GUARD,
+    dependencies=_OPERATOR_GUARD,
 )
 async def browser_login_cancel(profile_id: int, channel: str, repo: RepoDep) -> ValidationResult:
     """Закрыть окно входа, ничего не сохранять."""
