@@ -256,3 +256,19 @@ def test_login_failure_reason_diagnoses():
     assert r2 is not None and "сессия пустая" in r2
     # Залогинен (feed + куки vk.com) → None.
     assert bl._login_failure_reason("https://vk.com/feed", _VK_STATE, v) is None
+
+
+def test_browser_login_rejects_lookalike_cookie_and_foreign_probe():
+    from crosspost.channels.validators import VALIDATORS
+
+    v = VALIDATORS["vk_wall"]
+    for domain in ("evilvk.com", "vk.com.evil.example", "evil.example"):
+        assert not bl._has_session_cookies({"cookies": [{"domain": domain}]}, ("vk.com",))
+    for url in (
+        "https://vk.com.evil.example/feed",
+        "https://evilvk.com/feed",
+        "http://vk.com/feed",
+        "https://vk.com:444/feed",
+        "https://user@vk.com/feed",
+    ):
+        assert bl._login_failure_reason(url, _VK_STATE, v) is not None

@@ -27,6 +27,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from crosspost.adapters.browser.base_browser import _WEBRTC_DISABLE_ARGS, _get_proxy, _parse_proxy
 from crosspost.channels.validators import VALIDATORS
@@ -83,7 +84,7 @@ async def _close(sess: _LiveLogin) -> None:
         try:
             await closer()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("browser login close failed: %s", exc)
+            logger.debug("browser login close failed: %s", type(exc).__name__)
 
 
 def _validator(channel: str):
@@ -176,7 +177,7 @@ async def confirm(profile_id: int, channel: str) -> dict | None:
                 require_selector=v.require_selector,
             )
     except Exception as exc:
-        raise BrowserLoginError(f"Не удалось проверить вход: {exc}") from exc
+        raise BrowserLoginError("Не удалось проверить вход") from exc
 
     reason = _login_failure_reason(url, state, v, selector_ok=selector_ok)
     if reason is not None:
@@ -217,17 +218,30 @@ def _has_session_cookies(state: dict, domains: tuple[str, ...]) -> bool:
         return True
     cookies = state.get("cookies", []) if isinstance(state, dict) else []
     for c in cookies:
-        dom = str(c.get("domain", "")).lstrip(".")
-        if any(d in dom for d in domains):
+        dom = str(c.get("domain", "")).lstrip(".").lower().rstrip(".")
+        if any(dom == d or dom.endswith("." + d) for d in domains):
             return True
     return False
 
 
 def _login_failure_reason(url: str, state: dict, v, *, selector_ok: bool = True) -> str | None:
     """None если залогинен; иначе человекочитаемая причина (для лога/диагностики)."""
+    try:
+        actual = urlsplit(url)
+        expected = urlsplit(v.probe_url)
+        if (
+            actual.scheme != "https"
+            or actual.hostname != expected.hostname
+            or actual.username is not None
+            or actual.password is not None
+            or actual.port not in (None, 443)
+        ):
+            return "не подтверждён защищённый домен кабинета"
+    except ValueError:
+        return "не подтверждён защищённый домен кабинета"
     for frag in v.reject_fragments:
         if frag in url:
-            return f"открыта страница входа (URL {url!r} содержит {frag!r})"
+            return f"открыта страница входа (маркер {frag!r})"
     if not _has_session_cookies(state, v.session_cookie_domains):
         present = ", ".join(_cookie_names(state)) or "нет"
         return (

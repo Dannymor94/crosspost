@@ -305,3 +305,8 @@ Root-scoped manifest, PNG icons, browser-native install and manual iOS/Android i
 ## T-515 initial client Telegram login (draft)
 
 Opt-in initial login with short-lived opaque flow, one per profile, bounded global slots, per-step admission limits and actor/cookie/generation binding. Existing legacy Telegram UI remains operator-only in production. Encrypted final session stored only through initial-connection fence; no overwrite. Target publishing rights, actual Telegram acceptance, independent review and replacement flow remain gates. No real account used.
+
+
+## T-515 browser operator boundary (draft)
+
+Production legacy connection mutations are operator-only, including direct token save, Telegraph creation, validation/disconnect and browser login. Browser confirmation rejects foreign probe origins and lookalike cookie domains. Mobile self-service VK/Yandex remains blocked on provider/device evidence; see `docs/T-515-BROWSER-ONBOARDING.md`. No shared remote desktop exposed.

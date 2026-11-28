@@ -542,3 +542,33 @@ async def test_client_telegram_flow_isolated_and_fenced(registration, monkeypatc
             assert credential is not None and "synthetic-session" not in credential.blob
     finally:
         await client_telegram.close_all()
+
+
+async def test_production_client_cannot_bypass_initial_connection_gate(registration, monkeypatch):
+    _, client = registration
+    async with client() as c:
+        account = await _login(c, "existing", "existing-password")
+        cookie = c.cookies.get("session")
+        assert cookie is not None
+    monkeypatch.setenv("CROSSPOST_AUTH_MODE", "production")
+    monkeypatch.setenv("CROSSPOST_AUTH_ORIGIN", "https://test")
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test") as c:
+        c.cookies.set("session", cookie)
+        proof = (await c.get("/api/auth/csrf")).json()["token"]
+        headers = {"X-CSRF-Token": proof}
+        base = f"/api/profiles/{account['profile_id']}/channels"
+        for path, body in (
+            ("telegraph/connect", {"fields": {"token": "synthetic"}}),
+            ("telegraph/create-account", {"short_name": "demo", "author_name": "Demo"}),
+            ("telegraph/validate", {}),
+            ("telegraph/disconnect", {}),
+            ("vk_wall/browser-login/begin", {}),
+            ("vk_wall/browser-login/confirm", {}),
+            ("vk_wall/browser-login/cancel", {}),
+            (
+                "telegram/login/begin",
+                {"api_id": 123, "api_hash": "a" * 32, "target_channel": "@demo"},
+            ),
+        ):
+            response = await c.post(base + "/" + path, json=body, headers=headers)
+            assert response.status_code == 403, (path, response.text)
