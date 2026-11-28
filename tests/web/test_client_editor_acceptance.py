@@ -72,6 +72,8 @@ def test_client_draft_reload_media_loss_and_unknown_send(scenario):
             asset = FRONTEND / path.removeprefix("/static/")
             mime = "text/css" if asset.suffix == ".css" else "application/javascript"
             route.fulfill(path=asset, content_type=mime)
+        elif path.endswith("/client-connection/capabilities"):
+            route.fulfill(json={"channels": []})
         elif path == "/api/auth/csrf":
             route.fulfill(json={"enabled": True, "token": "a" * 64})
         elif path == "/api/auth/me":

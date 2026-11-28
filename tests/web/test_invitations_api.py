@@ -441,3 +441,44 @@ async def test_mfa_step_up_and_enrollment_audit(registration):
         events = list(await session.scalars(select(OwnerMfaEvent).order_by(OwnerMfaEvent.id)))
         assert [event.action for event in events] == ["enrolled", "replaced"]
         assert [event.generation for event in events] == [1, 2]
+
+
+async def test_initial_client_connection_validates_before_save(registration, monkeypatch):
+    from dataclasses import replace
+
+    from crosspost.channels.validators import VALIDATORS, ValidatorResult
+    from crosspost.db.models import Connection, Credential
+
+    factory, client = registration
+    monkeypatch.setenv("CLIENT_API_CONNECTION_ENABLED", "true")
+    calls = []
+
+    async def validate(token):
+        calls.append(token)
+        return ValidatorResult(alive=token == "synthetic-ok")
+
+    monkeypatch.setitem(VALIDATORS, "telegraph", replace(VALIDATORS["telegraph"], fn=validate))
+    async with client() as c:
+        account = await _login(c, "existing", "existing-password")
+        pid = account["profile_id"]
+        base = f"/api/profiles/{pid}/client-connection"
+        assert (await c.get(base + "/capabilities")).json()["channels"] == [
+            "telegraph",
+            "instagram",
+        ]
+        assert (
+            await c.post(base + "/telegraph", json={"token": "synthetic-bad"})
+        ).status_code == 422
+        async with factory() as session:
+            assert await session.scalar(select(Credential.id)) is None
+            assert await session.scalar(select(Connection.id)) is None
+        response = await c.post(base + "/telegraph", json={"token": "synthetic-ok"})
+        assert response.json() == {"state": "live"}
+        assert "synthetic-ok" not in response.text
+        assert (await c.post(base + "/telegraph", json={"token": "other"})).status_code == 409
+        assert calls == ["synthetic-bad", "synthetic-ok"]
+    async with factory() as session:
+        credential = await session.scalar(select(Credential))
+        assert credential is not None and "synthetic-ok" not in credential.blob
+        conn = await session.scalar(select(Connection))
+        assert conn is not None and conn.state == "live"

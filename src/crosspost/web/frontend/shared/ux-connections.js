@@ -56,14 +56,53 @@
       return {...(!pid?{kind:"no-profile"}:current||{kind:"loading"}),retry:()=>setAttempt(x=>x+1)};
   }
   function create(h,hooks) {
+    function InitialConnection({pid,channel,onDone}) {
+      const [token,setToken]=hooks.useState(""),[ig,setIg]=hooks.useState("");
+      const [busy,setBusy]=hooks.useState(false),[message,setMessage]=hooks.useState("");
+      async function submit(event) {
+        event.preventDefault();
+        if(busy||!token.trim())return;
+        setBusy(true);setMessage("");
+        try {
+          const r=await window.CrosspostRequest.fetch("/api/profiles/"+pid+"/client-connection/"+channel,{
+            method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({token:token.trim(),ig_user_id:ig.trim()})});
+          if(!r.ok) {
+            setMessage(r.status===409?"Состояние изменилось. Обновите данные.":r.status===429?"Слишком много попыток. Попробуйте позже.":"Подключение не подтверждено. Проверьте данные или обратитесь к администратору.");
+            return;
+          }
+          if((await r.json()).state!=="live")throw Error("Unconfirmed");
+          onDone();
+        } catch(_) {setMessage("Результат неизвестен. Обновите состояния перед повтором.");}
+        finally {setToken("");setIg("");setBusy(false);}
+      }
+      return h("form",{className:"cp-stack",onSubmit:submit,autoComplete:"off"},
+        h("p",{className:"cp-muted"},"Вставьте токен из официального кабинета. Он проверяется до сохранения и не отображается повторно."),
+        channel==="instagram"?h("label",null,"Instagram user ID",h("input",{className:"cp-input",required:true,maxLength:32,inputMode:"numeric",value:ig,onInput:e=>setIg(e.target.value)})):null,
+        h("label",null,"Токен доступа",h("input",{className:"cp-input",type:"password",required:true,maxLength:8192,autoComplete:"off",value:token,onInput:e=>setToken(e.target.value)})),
+        h("button",{className:"cp-button cp-button--primary",type:"submit",disabled:busy||!token.trim()},busy?"Проверяем…":"Проверить и подключить"),
+        message?h("p",{role:"alert"},message):null);
+    }
     return function ConnectionPanel({pid}) {
       const current=useConnections(hooks,pid);
       const [filter,setFilter]=hooks.useState("all");
+      const [caps,setCaps]=hooks.useState(null),[open,setOpen]=hooks.useState(null);
+      hooks.useEffect(()=>{
+        if(!pid)return;
+        const controller=new AbortController();
+        setCaps(null);setOpen(null);
+        fetch("/api/profiles/"+pid+"/client-connection/capabilities",{credentials:"same-origin",cache:"no-store",signal:controller.signal})
+          .then(r=>r.ok?r.json():null).then(value=>{
+            if(!controller.signal.aborted)setCaps({pid,channels:Array.isArray(value?.channels)?value.channels:[]});
+          }).catch(()=>{});
+        return ()=>controller.abort();
+      },[pid]);
+      const allowed=caps?.pid===pid?caps.channels:[];
       const list=current.rows||[];
       const visible=filter==="attention"?list.filter(needsAttention):filter==="setup"?list.filter(r=>r.state==="not_connected"):list;
       return h("section",{className:"cp-stack"},
         h("h1",{className:"cp-title"},"Подключения"),
-        h("p",{className:"cp-muted"},"Здесь видно состояние площадок вашего профиля. Подключение выполняется в защищённом мастере с администратором. Не пересылайте пароли, коды и токены в сообщениях."),
+        h("p",{className:"cp-muted"},"Здесь видно состояние площадок вашего профиля. Если доступно самостоятельное подключение, воспользуйтесь формой. Для остальных площадок обратитесь к администратору. Не пересылайте пароли, коды и токены в сообщениях."),
         h("div",{className:"cp-panel cp-stack"},
           h("button",{className:"cp-button",onClick:current.retry},"Обновить состояния"),
           h("label",null,"Показать площадки",
@@ -80,6 +119,9 @@
             h("div",{className:"cp-row"},h("strong",null,r.title),h("span",{className:"cp-status--"+info.tone},info.label)),
             h("p",{className:"cp-muted"},info.advice),
             r.expiresSoon&&r.state!=="banned"?h("p",{className:"cp-status--warning"},"Срок действия подключения скоро истечёт."):null,
+            r.state==="not_connected"&&allowed.includes(r.channel)?h("div",{className:"cp-stack"},
+              h("button",{className:"cp-button",onClick:()=>setOpen(open===r.channel?null:r.channel)},open===r.channel?"Свернуть":"Подключить самостоятельно"),
+              open===r.channel?h(InitialConnection,{key:pid+":"+r.channel,pid,channel:r.channel,onDone:()=>{setOpen(null);current.retry();}}):null):null,
             r.preparation.length&&canManage(r.state)?h("details",null,
               h("summary",null,"Этапы подключения"),
               h("p",{className:"cp-muted"},"Это инструкция, а не форма входа. Вводите секреты только в защищённом мастере. Не передавайте их администратору в переписке."),

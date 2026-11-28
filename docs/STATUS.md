@@ -290,3 +290,8 @@ Client-facing complement to the operator runbook #49: in-app step-by-step help w
 - **T-407 (draft).** Владелец создаёт новый профиль с одноразовым приглашением; клиент задаёт логин и пароль. Ветка поверх T-304, включение только в изолированных тестах. Не допущено к production; существующие профили не переиспользуются.
 
 Combined draft preserves UX and security chains. CI pending, no merge or deployment. Main remains 29fcc94 (T-406 merged). New migration merge marker is validation-only. Live browser, real device, external platforms, independent QA and owner approval remain gates.
+
+
+## T-515 client API onboarding (draft)
+
+Opt-in first connection for Telegraph/Instagram in the client panel. Existing API validators check credentials before atomic encrypted insertion, with actor generation/profile fence and no overwrite. No automatic retries. Telegram interactive and browser login, replacement/recovery, target selection and real provider acceptance remain open. Flag off by default.

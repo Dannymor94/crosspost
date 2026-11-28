@@ -59,6 +59,8 @@ _EXPECTED: list[tuple[str, str]] = [
     ("POST", "/api/users"),
     ("POST", "/api/users/{*}/recovery-token"),  # T-406: admin-only issuance
     # channels (per-profile)
+    ("GET", "/api/profiles/{*}/client-connection/capabilities"),
+    ("POST", "/api/profiles/{*}/client-connection/{*}"),
     ("GET", "/api/profiles/{*}/channels"),
     ("POST", "/api/profiles/{*}/channels/{*}/validate"),
     ("POST", "/api/profiles/{*}/channels/{*}/disconnect"),
