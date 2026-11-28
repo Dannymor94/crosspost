@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from crosspost.auth.totp import generate_secret, hotp
 from crosspost.db.auth_attempt_repo import admit_attempt
 from crosspost.db.engine import create_engine_and_tables
-from crosspost.db.models import AuthAttempt, ClientInvitation, Log, OwnerMfaEvent, Profile, Role, User
+from crosspost.db.models import (
+    AuthAttempt,
+    ClientInvitation,
+    Log,
+    OwnerMfaEvent,
+    Profile,
+    Role,
+    User,
+)
 from crosspost.db.owner_mfa import enroll_owner
 from crosspost.db.user_repo import UserRepository
 from crosspost.web import deps
@@ -426,7 +434,9 @@ async def test_mfa_step_up_and_enrollment_audit(registration):
             )
             assert replacement is not None
         assert (await c.get("/api/auth/me")).status_code == 401
-        assert (await c.post("/api/auth/login", json={**login, "mfa_code": codes[2]})).status_code == 401
+        assert (
+            await c.post("/api/auth/login", json={**login, "mfa_code": codes[2]})
+        ).status_code == 401
     async with factory() as session:
         events = list(await session.scalars(select(OwnerMfaEvent).order_by(OwnerMfaEvent.id)))
         assert [event.action for event in events] == ["enrolled", "replaced"]
